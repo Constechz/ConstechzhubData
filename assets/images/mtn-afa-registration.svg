@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 225 145" role="img" aria-labelledby="title desc">
+  <title id="title">MTN AFA Registration</title>
+  <desc id="desc">Yellow MTN AFA Registration card artwork.</desc>
+  <rect width="225" height="145" rx="12" fill="#f7c600"/>
+  <text x="112.5" y="44" text-anchor="middle" font-family="Arial Black, Arial, Helvetica, sans-serif" font-size="28" font-weight="900" fill="#111111">MTN</text>
+  <text x="112.5" y="82" text-anchor="middle" font-family="Arial Black, Arial, Helvetica, sans-serif" font-size="28" font-weight="900" fill="#111111">AFA</text>
+  <text x="112.5" y="118" text-anchor="middle" font-family="Arial Black, Arial, Helvetica, sans-serif" font-size="18" font-weight="800" fill="#111111">REGISTRATION</text>
+</svg>

@@ -1,0 +1,60 @@
+/* Modern icon helpers */
+/* Ensure icons use current text color so they work in light & dark modes */
+i[class*="fa-"],
+span[class*="fa-"] {
+    color: inherit;
+    line-height: 1;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Sidebar spacing consistency */
+.nav-link i[class*="fa-"] {
+    width: 1rem;
+    height: 1rem;
+    font-size: 1rem;
+}
+
+/* Loading / fallback states controlled by JS */
+body.fa-loading i[class*="fa-"]::before {
+    opacity: 0;
+}
+
+body.fa-ready i[class*="fa-"]::before {
+    opacity: 1;
+}
+
+body.fa-fallback i[class*="fa-"]::before {
+    opacity: 0;
+}
+
+body.fa-fallback i[class*="fa-"]::after {
+    content: '';
+    display: inline-block;
+    width: 1rem;
+    height: 1rem;
+    border-radius: 4px;
+    background-color: currentColor;
+    opacity: 0.55;
+}
+
+/* Optional indicator when fonts are loading */
+body.fa-loading::after {
+    content: '';
+    position: fixed;
+    bottom: 1rem;
+    right: 1rem;
+    width: 0.75rem;
+    height: 0.75rem;
+    border: 2px solid rgba(0,0,0,0.1);
+    border-top-color: var(--brand-primary, #6b46ff);
+    border-radius: 50%;
+    animation: icon-spin 1s linear infinite;
+    pointer-events: none;
+    z-index: 999;
+}
+
+@keyframes icon-spin {
+    to { transform: rotate(360deg); }
+}

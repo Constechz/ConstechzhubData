@@ -1,0 +1,705 @@
+<?php
+require_once '../config/config.php';
+
+ensureTopupSettingsTable();
+
+// Require admin role
+requireRole('admin');
+$current_user = getCurrentUser();
+
+$success_message = '';
+$error_message = '';
+
+// Handle form submission
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+        $error_message = 'Invalid CSRF token';
+    } else {
+        try {
+            $db->getConnection()->begin_transaction();
+            
+            // Update admin topup settings
+            $settings = [
+                'admin_topup_account_network' => $_POST['account_network'] ?? '',
+                'admin_topup_account_name' => $_POST['account_name'] ?? '',
+                'admin_topup_account_number' => $_POST['account_number'] ?? '',
+                'admin_topup_instructions' => $_POST['instructions'] ?? ''
+            ];
+            
+            foreach ($settings as $key => $value) {
+                $stmt = $db->prepare("INSERT INTO topup_settings (user_id, setting_key, setting_value) VALUES (NULL, ?, ?) ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value), updated_at = CURRENT_TIMESTAMP");
+                $stmt->bind_param('ss', $key, $value);
+                $stmt->execute();
+            }
+            
+            $db->getConnection()->commit();
+            $success_message = 'Topup settings updated successfully!';
+        } catch (Exception $e) {
+            $db->getConnection()->rollback();
+            $error_message = 'Error updating settings: ' . $e->getMessage();
+        }
+    }
+}
+
+// Get current settings
+$currentSettings = [];
+$stmt = $db->prepare("SELECT setting_key, setting_value FROM topup_settings WHERE user_id IS NULL");
+$stmt->execute();
+$result = $stmt->get_result();
+while ($row = $result->fetch_assoc()) {
+    $currentSettings[$row['setting_key']] = $row['setting_value'];
+}
+
+// Generate CSRF token
+$csrf_token = generateCSRF();
+?>
+
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Topup Settings - <?php echo SITE_NAME; ?></title>
+    
+    <!-- PWA Meta Tags -->
+    <link rel="manifest" href="../manifest.php">
+    <link rel="icon" type="image/png" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-192.png')); ?>">
+    <meta name="theme-color" content="#6366f1">
+    
+    <!-- Stylesheets -->
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>"">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>"">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/icon-fixes.css')); ?>"">
+    
+    <!-- Enhanced Font Awesome Loading with Multiple CDN Fallbacks -->
+    <link rel="preload" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>" as="style" onload="this.onload=null;this.rel='stylesheet'">
+    <noscript><link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>"></noscript>
+    
+    <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/font-awesome-loader.js')); ?>""></script>
+</head>
+<body>
+    <div class="dashboard-wrapper">
+        <!-- Sidebar -->
+        <nav class="sidebar">
+            <div class="sidebar-brand">
+                <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
+            </div>
+            
+                        <?php renderAdminSidebar(); ?>
+                <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
+        </nav>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Header -->
+            <header class="dashboard-header">
+                <div class="header-left">
+                    <button class="mobile-menu-toggle">
+                        <i class="fas fa-bars"></i>
+                    </button>
+                    <nav class="breadcrumb">
+                        <div class="breadcrumb-item">
+                            <i class="fas fa-university"></i>
+                        </div>
+                        <div class="breadcrumb-item">Settings</div>
+                        <div class="breadcrumb-item active">Topup Settings</div>
+                    </nav>
+                </div>
+                
+                <div class="header-actions">
+                    <button class="theme-toggle" onclick="toggleTheme()">
+                        <i class="fas fa-sun" id="theme-icon"></i>
+                    </button>
+                    
+                    <div class="user-dropdown">
+                        <button class="user-dropdown-toggle" onclick="toggleUserDropdown()">
+                            <div class="user-avatar">
+                                <i class="fas fa-user"></i>
+                            </div>
+                            <div>
+                                <div style="font-weight: 500;"><?php echo htmlspecialchars($current_user['full_name']); ?></div>
+                                <div style="font-size: 0.75rem; color: var(--text-muted);">Administrator</div>
+                            </div>
+                            <i class="fas fa-chevron-down" style="margin-left: 0.5rem;"></i>
+                        </button>
+                        
+                        <div class="user-dropdown-menu" id="userDropdown">
+                            <a href="profile.php" class="dropdown-item">
+                                <i class="fas fa-user"></i> Profile
+                            </a>
+                            <a href="settings.php" class="dropdown-item">
+                                <i class="fas fa-cog"></i> Settings
+                            </a>
+                            <hr style="margin: 0.5rem 0; border: none; border-top: 1px solid var(--border-color);">
+                            <a href="../logout.php" class="dropdown-item">
+                                <i class="fas fa-sign-out-alt"></i> Logout
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <div class="dashboard-content">
+                <div class="page-title">
+                    <h1>Topup Payment Settings</h1>
+                    <p class="page-subtitle">Manage payment account details for customer topup requests</p>
+                </div>
+
+                <?php if ($success_message): ?>
+                    <div class="alert alert-success">
+                        <i class="fas fa-check-circle"></i>
+                        <?php echo htmlspecialchars($success_message); ?>
+                    </div>
+                <?php endif; ?>
+
+                <?php if ($error_message): ?>
+                    <div class="alert alert-danger">
+                        <i class="fas fa-exclamation-circle"></i>
+                        <?php echo htmlspecialchars($error_message); ?>
+                    </div>
+                <?php endif; ?>
+
+                <div class="widget">
+                    <div class="widget-header">
+                        <h3 class="widget-title">
+                            <i class="fas fa-university"></i>
+                            Admin Payment Account Details
+                        </h3>
+                        <p class="widget-subtitle">Configure the payment account where customers should send topup payments</p>
+                    </div>
+                    <div class="widget-body">
+                        <form method="POST" class="settings-form">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrf_token); ?>">
+                            
+                            <div class="form-grid">
+                                <div class="form-group">
+                                    <label for="account_network">
+                                        <i class="fas fa-network-wired"></i>
+                                        Payment Network *
+                                    </label>
+                                    <select id="account_network" name="account_network" class="form-control" required>
+                                        <option value="">Select Network</option>
+                                        <option value="MTN MOMO" <?php echo (($currentSettings['admin_topup_account_network'] ?? '') === 'MTN MOMO') ? 'selected' : ''; ?>>MTN Mobile Money</option>
+                                        <option value="VODAFONE CASH" <?php echo (($currentSettings['admin_topup_account_network'] ?? '') === 'VODAFONE CASH') ? 'selected' : ''; ?>>Vodafone Cash</option>
+                                        <option value="AIRTELTIGO MONEY" <?php echo (($currentSettings['admin_topup_account_network'] ?? '') === 'AIRTELTIGO MONEY') ? 'selected' : ''; ?>>AirtelTigo Money</option>
+                                        <option value="BANK TRANSFER" <?php echo (($currentSettings['admin_topup_account_network'] ?? '') === 'BANK TRANSFER') ? 'selected' : ''; ?>>Bank Transfer</option>
+                                        <option value="OTHER" <?php echo (($currentSettings['admin_topup_account_network'] ?? '') === 'OTHER') ? 'selected' : ''; ?>>Other</option>
+                                    </select>
+                                    <small class="form-help">Choose the payment method customers should use</small>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="account_name">
+                                        <i class="fas fa-user"></i>
+                                        Account Name *
+                                    </label>
+                                    <input type="text" id="account_name" name="account_name" class="form-control" 
+                                           value="<?php echo htmlspecialchars($currentSettings['admin_topup_account_name'] ?? ''); ?>" 
+                                           placeholder="e.g., Constechzhub Admin" required>
+                                    <small class="form-help">Name on the payment account</small>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="account_number">
+                                        <i class="fas fa-phone"></i>
+                                        Account Number/Phone *
+                                    </label>
+                                    <input type="text" id="account_number" name="account_number" class="form-control" 
+                                           value="<?php echo htmlspecialchars($currentSettings['admin_topup_account_number'] ?? ''); ?>" 
+                                           placeholder="e.g., 0245152060" required>
+                                    <small class="form-help">Phone number or account number for payments</small>
+                                </div>
+                            </div>
+
+                            <div class="form-group">
+                                <label for="instructions">
+                                    <i class="fas fa-info-circle"></i>
+                                    Payment Instructions
+                                </label>
+                                <textarea id="instructions" name="instructions" class="form-control" rows="4" 
+                                          placeholder="Enter additional instructions for customers..."><?php echo htmlspecialchars($currentSettings['admin_topup_instructions'] ?? ''); ?></textarea>
+                                <small class="form-help">Additional instructions displayed to customers during topup request</small>
+                            </div>
+
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fas fa-save"></i>
+                                    Update Settings
+                                </button>
+                                <button type="button" class="btn btn-secondary" onclick="window.location.href='settings.php'">
+                                    <i class="fas fa-arrow-left"></i>
+                                    Back to Settings
+                                </button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Preview Section -->
+                <div class="widget">
+                    <div class="widget-header">
+                        <h3 class="widget-title">
+                            <i class="fas fa-eye"></i>
+                            Customer View Preview
+                        </h3>
+                        <p class="widget-subtitle">This is how customers will see your payment details</p>
+                    </div>
+                    <div class="widget-body">
+                        <div class="payment-details-preview">
+                            <h5 style="margin-bottom: 1rem;">Payment Details</h5>
+                            <div class="payment-detail-item">
+                                <span class="detail-label">Network:</span>
+                                <span class="detail-value" id="preview-network"><?php echo htmlspecialchars($currentSettings['admin_topup_account_network'] ?? 'MTN MOMO'); ?></span>
+                            </div>
+                            <div class="payment-detail-item">
+                                <span class="detail-label">Wallet Name:</span>
+                                <span class="detail-value" id="preview-name"><?php echo htmlspecialchars($currentSettings['admin_topup_account_name'] ?? 'Constechzhub Admin'); ?></span>
+                            </div>
+                            <div class="payment-detail-item">
+                                <span class="detail-label">Wallet Number:</span>
+                                <span class="detail-value" id="preview-number"><?php echo htmlspecialchars($currentSettings['admin_topup_account_number'] ?? '0245152060'); ?></span>
+                            </div>
+                            <?php if (!empty($currentSettings['admin_topup_instructions'])): ?>
+                            <div class="payment-instructions">
+                                <p><strong>Instructions:</strong></p>
+                                <p id="preview-instructions"><?php echo nl2br(htmlspecialchars($currentSettings['admin_topup_instructions'])); ?></p>
+                            </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <style>
+        .settings-form .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+            margin-bottom: 2rem;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group label {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: var(--text-color);
+        }
+
+        .form-group label i {
+            color: var(--primary-color);
+            width: 16px;
+        }
+
+        .form-help {
+            color: var(--text-muted);
+            font-size: 0.875rem;
+            margin-top: 0.25rem;
+            display: block;
+        }
+
+        .form-actions {
+            border-top: 1px solid var(--border-color);
+            padding-top: 2rem;
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .payment-details-preview {
+            background: var(--widget-bg, #f8f9fa);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.5rem;
+        }
+
+        .payment-detail-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.75rem 0;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .payment-detail-item:last-child {
+            border-bottom: none;
+        }
+
+        .detail-label {
+            font-weight: 600;
+            color: var(--text-muted);
+        }
+
+        .detail-value {
+            font-weight: 500;
+            color: var(--text-color);
+        }
+
+        .payment-instructions {
+            margin-top: 1rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .payment-instructions strong {
+            color: var(--text-color);
+        }
+
+        .payment-instructions p {
+            color: var(--text-muted);
+            margin: 0.5rem 0;
+        }
+
+        /* Dark mode enhancements */
+        [data-theme="dark"] .payment-details-preview {
+            background: var(--widget-bg, #2a2a2a);
+            border: 1px solid var(--border-color, #444);
+            color: var(--text-color, #f0f0f0);
+        }
+
+        [data-theme="dark"] .detail-label {
+            color: var(--text-muted, #bbb);
+        }
+
+        [data-theme="dark"] .detail-value {
+            color: var(--text-color, #f0f0f0);
+        }
+
+        [data-theme="dark"] .payment-detail-item {
+            border-bottom: 1px solid var(--border-color, #444);
+        }
+
+        [data-theme="dark"] .payment-instructions {
+            border-top: 1px solid var(--border-color, #444);
+        }
+
+        [data-theme="dark"] .payment-instructions strong {
+            color: var(--text-color, #f0f0f0);
+        }
+
+        [data-theme="dark"] .payment-instructions p {
+            color: var(--text-muted, #bbb);
+        }
+
+        [data-theme="dark"] .form-actions {
+            border-top: 1px solid var(--border-color, #444);
+        }
+
+        /* Form styling improvements */
+        .form-control {
+            background: var(--input-bg, #fff);
+            border: 1px solid var(--border-color, #ddd);
+            color: var(--text-color, #333);
+            border-radius: 4px;
+            padding: 0.75rem;
+            font-size: 1rem;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-control:focus {
+            border-color: var(--primary-color, #6366f1);
+            outline: none;
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+        }
+
+        [data-theme="dark"] .form-control {
+            background: var(--input-bg, #333);
+            border: 1px solid var(--border-color, #555);
+            color: var(--text-color, #f0f0f0);
+        }
+
+        [data-theme="dark"] .form-control:focus {
+            border-color: var(--primary-color, #6366f1);
+            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+        }
+
+        /* Widget styling */
+        .widget {
+            background: var(--widget-bg, #fff);
+            border: 1px solid var(--border-color, #e5e7eb);
+            border-radius: 8px;
+            margin-bottom: 2rem;
+        }
+
+        [data-theme="dark"] .widget {
+            background: var(--widget-bg, #1f1f1f);
+            border: 1px solid var(--border-color, #333);
+        }
+
+        .widget-header {
+            padding: 1.5rem;
+            border-bottom: 1px solid var(--border-color, #e5e7eb);
+        }
+
+        [data-theme="dark"] .widget-header {
+            border-bottom: 1px solid var(--border-color, #333);
+        }
+
+        .widget-title {
+            margin: 0;
+            font-size: 1.25rem;
+            font-weight: 600;
+            color: var(--text-color, #111827);
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        [data-theme="dark"] .widget-title {
+            color: var(--text-color, #f9fafb);
+        }
+
+        .widget-subtitle {
+            margin: 0.5rem 0 0 0;
+            color: var(--text-muted, #6b7280);
+            font-size: 0.875rem;
+        }
+
+        [data-theme="dark"] .widget-subtitle {
+            color: var(--text-muted, #9ca3af);
+        }
+
+        .widget-body {
+            padding: 1.5rem;
+        }
+
+        /* Button styling */
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            text-decoration: none;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .btn-primary {
+            background: var(--primary-color, #6366f1);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--primary-hover, #5855eb);
+        }
+
+        .btn-secondary {
+            background: var(--secondary-bg, #f3f4f6);
+            color: var(--text-color, #374151);
+            border: 1px solid var(--border-color, #d1d5db);
+        }
+
+        .btn-secondary:hover {
+            background: var(--secondary-hover, #e5e7eb);
+        }
+
+        [data-theme="dark"] .btn-secondary {
+            background: var(--secondary-bg, #374151);
+            color: var(--text-color, #f9fafb);
+            border: 1px solid var(--border-color, #4b5563);
+        }
+
+        [data-theme="dark"] .btn-secondary:hover {
+            background: var(--secondary-hover, #4b5563);
+        }
+
+        /* Alert styling */
+        .alert {
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .alert-success {
+            background: #f0f9ff;
+            color: #0369a1;
+            border: 1px solid #7dd3fc;
+        }
+
+        .alert-danger {
+            background: #fef2f2;
+            color: #dc2626;
+            border: 1px solid #fca5a5;
+        }
+
+        [data-theme="dark"] .alert-success {
+            background: #1e3a8a;
+            color: #93c5fd;
+            border: 1px solid #3b82f6;
+        }
+
+        [data-theme="dark"] .alert-danger {
+            background: #7f1d1d;
+            color: #fca5a5;
+            border: 1px solid #ef4444;
+        }
+
+        /* Page title styling */
+        .page-title h1 {
+            margin: 0 0 0.5rem 0;
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--text-color, #111827);
+        }
+
+        [data-theme="dark"] .page-title h1 {
+            color: var(--text-color, #f9fafb);
+        }
+
+        .page-subtitle {
+            margin: 0;
+            color: var(--text-muted, #6b7280);
+            font-size: 1rem;
+        }
+
+        [data-theme="dark"] .page-subtitle {
+            color: var(--text-muted, #9ca3af);
+        }
+
+        /* Responsive design */
+        @media (max-width: 768px) {
+            .form-grid {
+                grid-template-columns: 1fr;
+                gap: 1rem;
+            }
+            
+            .form-actions {
+                flex-direction: column;
+            }
+            
+            .btn {
+                width: 100%;
+                justify-content: center;
+            }
+        }
+    </style>
+
+    <script>
+        // Theme toggle functionality
+        function toggleTheme() {
+            const html = document.documentElement;
+            const currentTheme = html.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            
+            html.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            
+            // Update theme icon
+            const themeIcon = document.getElementById('theme-icon');
+            if (themeIcon) {
+                themeIcon.className = newTheme === 'dark' ? 'fas fa-moon' : 'fas fa-sun';
+            }
+        }
+
+        // Load saved theme on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            const savedTheme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', savedTheme);
+            
+            const themeIcon = document.getElementById('theme-icon');
+            if (themeIcon) {
+                themeIcon.className = savedTheme === 'dark' ? 'fas fa-moon' : 'fas fa-sun';
+            }
+            
+            // Real-time preview updates
+            setupPreviewUpdates();
+        });
+
+        // User dropdown toggle
+        function toggleUserDropdown() {
+            const dropdown = document.getElementById('userDropdown');
+            if (dropdown) {
+                dropdown.style.display = dropdown.style.display === 'block' ? 'none' : 'block';
+            }
+        }
+
+        // Close dropdown when clicking outside
+        document.addEventListener('click', function(event) {
+            const dropdown = document.getElementById('userDropdown');
+            const toggle = document.querySelector('.user-dropdown-toggle');
+            
+            if (dropdown && toggle && !toggle.contains(event.target)) {
+                dropdown.style.display = 'none';
+            }
+        });
+
+        // Real-time preview updates
+        function setupPreviewUpdates() {
+            const accountNetwork = document.getElementById('account_network');
+            const accountName = document.getElementById('account_name');
+            const accountNumber = document.getElementById('account_number');
+            const instructions = document.getElementById('instructions');
+            
+            const previewNetwork = document.getElementById('preview-network');
+            const previewName = document.getElementById('preview-name');
+            const previewNumber = document.getElementById('preview-number');
+            const previewInstructions = document.getElementById('preview-instructions');
+            
+            function updatePreview() {
+                if (previewNetwork) {
+                    previewNetwork.textContent = accountNetwork.value || 'MTN MOMO';
+                }
+                if (previewName) {
+                    previewName.textContent = accountName.value || 'Constechzhub Admin';
+                }
+                if (previewNumber) {
+                    previewNumber.textContent = accountNumber.value || '0245152060';
+                }
+                
+                // Handle instructions preview
+                const instructionsContainer = previewInstructions ? previewInstructions.closest('.payment-instructions') : null;
+                if (instructionsContainer) {
+                    if (instructions.value.trim()) {
+                        instructionsContainer.style.display = 'block';
+                        if (previewInstructions) {
+                            previewInstructions.innerHTML = instructions.value.replace(/\n/g, '<br>');
+                        }
+                    } else {
+                        instructionsContainer.style.display = 'none';
+                    }
+                }
+            }
+            
+            // Add event listeners
+            if (accountNetwork) accountNetwork.addEventListener('change', updatePreview);
+            if (accountName) accountName.addEventListener('input', updatePreview);
+            if (accountNumber) accountNumber.addEventListener('input', updatePreview);
+            if (instructions) instructions.addEventListener('input', updatePreview);
+            
+            // Initial update
+            updatePreview();
+        }
+
+        // Mobile menu toggle
+        document.addEventListener('DOMContentLoaded', function() {
+            const mobileToggle = document.querySelector('.mobile-menu-toggle');
+            const sidebar = document.querySelector('.sidebar');
+            
+            if (mobileToggle && sidebar) {
+                mobileToggle.addEventListener('click', function() {
+                    sidebar.classList.toggle('sidebar-open');
+                });
+            }
+        });
+    </script>
+    <!-- IMMEDIATE Icon Fix for square placeholder issues -->
+    <script src="../immediate_icon_fix.js"></script>
+</body>
+</html>
+
+
+

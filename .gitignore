@@ -1,0 +1,22 @@
+# Environment files
+.env
+
+# Backups and SQL files
+*.sql
+!database/constechzhub.sql
+!database/schema_fixes_2026_02_09.sql
+
+# Local/Temp Files
+New Text Document.txt
+debug_paystack.log
+logs/
+*.log
+
+# Uploads directory
+uploads/
+
+# IDE and tool configuration folders
+.antigravitycli/
+.idea/
+.vscode/
+.gitattributes
