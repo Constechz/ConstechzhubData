@@ -898,3 +898,82 @@ try {
     if (!defined('MOOLRE_CALLBACK_URL')) define('MOOLRE_CALLBACK_URL', SITE_URL . '/api/moolre_webhook.php');
     if (!defined('PAYMENT_GATEWAY_ACTIVE')) define('PAYMENT_GATEWAY_ACTIVE', $__DEFAULT_PAYMENT_GATEWAY);
 }
+
+// Dynamic Page Loader via Output Buffering
+if (!function_exists('injectPageLoaderCallback') && !headers_sent() && php_sapi_name() !== 'cli') {
+    function injectPageLoaderCallback($buffer) {
+        // Skip JSON responses (starts with { or [)
+        $trimmed = ltrim($buffer);
+        if (strpos($trimmed, '{') === 0 || strpos($trimmed, '[') === 0) {
+            return $buffer;
+        }
+
+        // Check content type headers
+        $headers = headers_list();
+        foreach ($headers as $header) {
+            if (stripos($header, 'Content-Type:') !== false) {
+                if (stripos($header, 'application/json') !== false || 
+                    stripos($header, 'text/xml') !== false || 
+                    stripos($header, 'application/xml') !== false ||
+                    stripos($header, 'text/plain') !== false) {
+                    return $buffer;
+                }
+            }
+        }
+
+        // Skip specific request paths (API calls and cron jobs)
+        $uri = $_SERVER['REQUEST_URI'] ?? '';
+        if (stripos($uri, '/api/') !== false || stripos($uri, '/cron/') !== false || (isset($_SERVER['HTTP_X_REQUESTED_WITH']) && $_SERVER['HTTP_X_REQUESTED_WITH'] === 'XMLHttpRequest')) {
+            return $buffer;
+        }
+
+        // Inject loader element right after the body tag
+        if (preg_match('/<body[^>]*>/i', $buffer, $matches, PREG_OFFSET_CAPTURE)) {
+            $pos = $matches[0][1] + strlen($matches[0][0]);
+            
+            $loader_html = '
+<!-- Page Loader -->
+<div id="global-page-loader" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 999999; display: flex; justify-content: center; align-items: center; transition: opacity 0.3s ease, visibility 0.3s ease;">
+    <div style="display: flex; flex-direction: column; align-items: center; gap: 1.2rem;">
+        <div style="width: 50px; height: 50px; border: 4px solid rgba(99, 102, 241, 0.15); border-radius: 50%; border-top-color: #6366f1; animation: spinLoader 0.8s linear infinite; box-shadow: 0 0 15px rgba(99, 102, 241, 0.1);"></div>
+        <div style="font-size: 1.05rem; font-weight: 600; color: #1e293b; letter-spacing: -0.01em; animation: pulseLogo 1.5s ease-in-out infinite; font-family: system-ui, -apple-system, sans-serif;">Loading...</div>
+    </div>
+</div>
+<style>
+@keyframes spinLoader { to { transform: rotate(360deg); } }
+@keyframes pulseLogo { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+[data-theme="dark"] #global-page-loader { background: rgba(15, 23, 42, 0.96) !important; }
+[data-theme="dark"] #global-page-loader div { color: #f8fafc !important; }
+body.loading-active { overflow: hidden !important; }
+</style>
+<script>
+    document.body.classList.add(\'loading-active\');
+    (function() {
+        const hideLoader = function() {
+            const loader = document.getElementById(\'global-page-loader\');
+            if (loader) {
+                loader.style.opacity = \'0\';
+                loader.style.visibility = \'hidden\';
+                setTimeout(function() { loader.remove(); }, 300);
+            }
+            document.body.classList.remove(\'loading-active\');
+        };
+        if (document.readyState === \'complete\') {
+            hideLoader();
+        } else {
+            window.addEventListener(\'load\', hideLoader);
+            setTimeout(hideLoader, 3000); // 3 seconds timeout safeguard
+        }
+    })();
+</script>';
+            
+            return substr_replace($buffer, $loader_html, $pos, 0);
+        }
+
+        return $buffer;
+    }
+    
+    // Register output buffer callback
+    ob_start('injectPageLoaderCallback');
+}
+
