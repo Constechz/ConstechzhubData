@@ -66,18 +66,18 @@ if ($stmt) {
     <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/font-awesome-loader.js')); ?>""></script>
     <style>
         .rc-table { width: 100%; border-collapse: collapse; }
-        .rc-table th, .rc-table td { text-align:left; padding:0.75rem; border-bottom:1px solid #e5e7eb; font-size:0.95rem; }
-        .rc-table th { color:#6b7280; font-weight:600; }
+        .rc-table th, .rc-table td { text-align:left; padding:0.75rem; border-bottom:1px solid #F1E9DA; font-size:0.95rem; }
+        .rc-table th { color:#541388; font-weight:600; }
         .badge { padding:0.2rem 0.6rem; border-radius:999px; font-size:0.8rem; }
-        .badge.success { background:#dcfce7; color:#166534; }
-        .badge.failed { background:#fee2e2; color:#991b1b; }
-        .badge.pending { background:#fef3c7; color:#92400e; }
+        .badge.success { background:#F1E9DA; color:#2E294E; }
+        .badge.failed { background:#F1E9DA; color:#D90368; }
+        .badge.pending { background:#F1E9DA; color:#2E294E; }
         .history-actions { display:flex; align-items:center; gap:0.5rem; }
         .copy-cell { display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap; }
         .copy-btn {
-            border: 1px solid #e5e7eb;
-            background: #ffffff;
-            color: #4b5563;
+            border: 1px solid #F1E9DA;
+            background: #F1E9DA;
+            color: #2E294E;
             border-radius: 999px;
             padding: 0.2rem 0.6rem;
             font-size: 0.75rem;
@@ -88,110 +88,35 @@ if ($stmt) {
             cursor: not-allowed;
         }
         [data-theme="dark"] .copy-btn {
-            color: #000000 !important;
-            background: #ffffff;
+            color: #2E294E !important;
+            background: #F1E9DA;
             font-weight: 500;
         }
         [data-theme="dark"] .widget,
         [data-theme="dark"] .widget * {
-            color: #ffffff;
+            color: #F1E9DA;
         }
         [data-theme="dark"] .rc-table th {
-            color: #e5e7eb;
+            color: #F1E9DA;
         }
         [data-theme="dark"] .rc-table td::before {
-            color: #e5e7eb;
+            color: #F1E9DA;
         }
         [data-theme="dark"] .badge.success {
-            color: #22c55e;
+            color: #2E294E;
         }
         @media (max-width: 780px) {
             .rc-table, .rc-table thead, .rc-table tbody, .rc-table th, .rc-table td, .rc-table tr { display:block; }
             .rc-table thead { display:none; }
-            .rc-table tr { margin-bottom:1rem; border:1px solid #e5e7eb; border-radius:12px; padding:0.5rem; }
+            .rc-table tr { margin-bottom:1rem; border:1px solid #F1E9DA; border-radius:12px; padding:0.5rem; }
             .rc-table td { border:none; display:flex; justify-content:space-between; }
-            .rc-table td::before { content: attr(data-label); font-weight:600; color:#6b7280; }
+            .rc-table td::before { content: attr(data-label); font-weight:600; color:#541388; }
         }
     </style>
 </head>
 <body>
     <div class="dashboard-wrapper">
-        <nav class="sidebar">
-            <div class="sidebar-brand">
-                <h3><?php echo $agent_store ? htmlspecialchars($store_name) : htmlspecialchars(getSiteName()); ?></h3>
-                <?php if ($agent_store): ?>
-                    <small style="opacity: 0.7; font-size: 0.8rem;">by <?php echo htmlspecialchars($agent_name); ?></small>
-                <?php endif; ?>
-            </div>
-
-            <ul class="sidebar-nav">
-                <li class="nav-section">
-                    <div class="nav-section-title">Dashboard</div>
-                    <div class="nav-item">
-                        <a href="dashboard.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                            <i class="fas fa-home"></i>
-                            Dashboard
-                        </a>
-                    </div>
-                </li>
-
-                <li class="nav-section">
-                    <div class="nav-section-title">Services</div>
-                    <div class="nav-item">
-                        <a href="buy-data.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                            <i class="fas fa-mobile-alt"></i>
-                            Buy Data
-                        </a>
-                    </div>
-                    <div class="nav-item">
-                        <a href="bulk-mtn.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                            <i class="fas fa-layer-group"></i>
-                            Bulk MTN
-                        </a>
-                    </div>
-                    <div class="nav-item">
-                        <a href="result-checker.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link active">
-                            <i class="fas fa-award"></i>
-                            Result Checker
-                        </a>
-                    </div>
-                    <div class="nav-item">
-                        <a href="order-history.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                            <i class="fas fa-history"></i>
-                            Order History
-                        </a>
-                    </div>
-                    <div class="nav-item">
-                        <a href="reference.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                            <i class="fas fa-search"></i>
-                            Reference
-                        </a>
-                    </div>
-                </li>
-
-                <li class="nav-section">
-                    <div class="nav-section-title">Account</div>
-                    <div class="nav-item">
-                        <a href="wallet.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                            <i class="fas fa-wallet"></i>
-                            Wallet
-                        </a>
-                    </div>
-                    <div class="nav-item">
-                        <a href="profile.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                            <i class="fas fa-user"></i>
-                            Profile
-                        </a>
-                    </div>
-                    <div class="nav-item">
-                        <a href="support.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                            <i class="fas fa-life-ring"></i>
-                            Support
-                        </a>
-                    </div>
-                </li>
-            </ul>
-        </nav>
+        <?php require_once '../includes/customer_sidebar.php'; ?>
 
         <main class="main-content">
             <header class="dashboard-header">
@@ -240,6 +165,9 @@ if ($stmt) {
                     </div>
                 </div>
             </header>
+
+<?php echo renderNotificationSlides('customers'); ?>
+
 
             <div class="dashboard-content">
                 <div class="page-title">
@@ -438,5 +366,7 @@ if ($stmt) {
             initTheme();
         });
     </script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>

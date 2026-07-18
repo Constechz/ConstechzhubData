@@ -22,10 +22,10 @@ function buildBroadcastEmailBody($template, array $recipient, $allow_html) {
 
     $body_text = trim(strip_tags($content));
 
-    $wrapped_html = '<div style="font-family: Arial, sans-serif; line-height:1.6; color:#111827;">'
+    $wrapped_html = '<div style="font-family: Arial, sans-serif; line-height:1.6; color:#2E294E;">'
         . $body_html
-        . '<hr style="margin:24px 0;border:none;border-top:1px solid #e5e7eb;">'
-        . '<p style="font-size:12px;color:#6b7280;">'
+        . '<hr style="margin:24px 0;border:none;border-top:1px solid #F1E9DA;">'
+        . '<p style="font-size:12px;color:#541388;">'
         . htmlspecialchars(SITE_NAME, ENT_QUOTES, 'UTF-8')
         . '</p></div>';
 

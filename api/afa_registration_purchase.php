@@ -173,7 +173,7 @@ if ($agent_base_price <= 0) {
 
 $current_role = normalizeUserRole($current_user['role'] ?? '');
 $is_agent = ($current_role === 'agent' || $current_role === 'vip');
-$is_customer = isCustomerAccountRole($current_role);
+$is_customer = ($current_role === 'customer');
 if (!$is_agent && !$is_customer) {
     afa_json_error('Only agents, VIPs, and customers can perform this operation.', 403);
 }
@@ -316,8 +316,15 @@ if ($payment_method === 'gateway') {
             afa_json_error('Payment gateway is unavailable because cURL is not enabled on this server.', 500);
         }
 
-        $paystack_secret_key = dbh_env('PAYSTACK_SECRET_KEY', PAYSTACK_SECRET_KEY);
-        if (!$paystack_secret_key || stripos($paystack_secret_key, 'your_secret_key_here') !== false) {
+        $paystack_secret_key = dbh_env('PAYSTACK_SECRET_KEY');
+        $isInvalidPaystackKey = function ($key) {
+            $key = trim((string) $key);
+            return $key === '' || stripos($key, 'your_secret_key_here') !== false;
+        };
+        if ($isInvalidPaystackKey($paystack_secret_key)) {
+            $paystack_secret_key = PAYSTACK_SECRET_KEY;
+        }
+        if ($isInvalidPaystackKey($paystack_secret_key)) {
             afa_json_error('Paystack keys are not configured.', 400);
         }
 
@@ -331,7 +338,7 @@ if ($payment_method === 'gateway') {
         ]);
 
         $curl = curl_init();
-        curl_setopt_array($curl, [
+        $options = [
             CURLOPT_URL => 'https://api.paystack.co/transaction/initialize',
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_TIMEOUT => 30,
@@ -343,7 +350,8 @@ if ($payment_method === 'gateway') {
                 'Authorization: Bearer ' . $paystack_secret_key,
                 'Content-Type: application/json',
             ],
-        ]);
+        ];
+        curl_setopt_array($curl, $options);
 
         $response = curl_exec($curl);
         $err = curl_error($curl);
@@ -464,7 +472,7 @@ if ($is_agent_self_order) {
 $agent_sql = $agent_id > 0 ? (string) ((int) $agent_id) : 'NULL';
 $insert_sql = "INSERT INTO afa_registrations (user_id, agent_id, beneficiary_name, email, phone, ghana_card_number, ghana_card_front_image, ghana_card_back_image, location, occupation, region, date_of_birth, amount, admin_price, profit_amount, payment_gateway, reference, status, processing_at) VALUES (?, {$agent_sql}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'wallet', ?, 'processing', NOW())";
 $stmt = $db->prepare($insert_sql);
-    if (!$stmt) {
+if (!$stmt) {
     if ($is_agent_self_order) {
         updateWalletBalance($current_user['id'], $amount, 'credit', $reference . '_REFUND', 'Refund: registration save failed');
     } elseif ($agent_id > 0) {

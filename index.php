@@ -1,18 +1,5 @@
 <?php
 require_once __DIR__ . '/config/config.php';
-
-$requestPath = trim((string) parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH), '/');
-if ($requestPath === 's') {
-    header('Location: ' . rtrim((string) SITE_URL, '/') . '/store/index.php');
-    exit();
-}
-
-if (preg_match('/^s\/([A-Za-z0-9_-]+)$/', $requestPath, $storeMatches)) {
-    $_GET['store'] = $storeMatches[1];
-    require __DIR__ . '/store/index.php';
-    exit();
-}
-
 require_once __DIR__ . '/includes/seo.php';
 
 preventBrowserCaching();
@@ -20,7 +7,7 @@ preventBrowserCaching();
 $isLoggedIn = isLoggedIn();
 $role = $_SESSION['user_role'] ?? null;
 $primaryCta = [
-    'label' => $isLoggedIn ? 'Open Dashboard' : 'Create Account',
+    'label' => $isLoggedIn ? 'Open Dashboard' : 'Create account for free',
     'link'  => $isLoggedIn
         ? ($role === 'admin'
             ? SITE_URL . '/admin/dashboard.php'
@@ -30,7 +17,7 @@ $primaryCta = [
         : SITE_URL . '/register.php'
 ];
 $secondaryCta = [
-    'label' => $isLoggedIn ? 'Support Center' : 'Sign In',
+    'label' => $isLoggedIn ? 'Support' : 'Login',
     'link'  => $isLoggedIn ? SITE_URL . '/support.php' : SITE_URL . '/login.php'
 ];
 $siteName = htmlspecialchars(getSiteName(), ENT_QUOTES, 'UTF-8');
@@ -50,842 +37,544 @@ if (strpos($whatsappDigits, '233') === 0) {
 $whatsappLink = 'https://wa.me/' . $whatsappInternational . '?text=' . urlencode('Hi ' . strip_tags($siteName) . ' team, I need assistance.');
 $whatsappChannelRaw = trim((string) getSetting('whatsapp_channel_url', ''));
 $whatsappChannelLink = filter_var($whatsappChannelRaw, FILTER_VALIDATE_URL) ? $whatsappChannelRaw : '';
-$communityLink = $whatsappChannelLink !== '' ? $whatsappChannelLink : $whatsappLink;
-$communityLabel = $whatsappChannelLink !== '' ? 'Join Community' : 'Contact Admin';
-$heroPrimary = $secondaryCta;
-$heroSecondary = $primaryCta;
 
-$featureList = [
-    ['icon' => 'fa-bolt', 'title' => 'Lightning Fast Delivery', 'body' => 'Automated fulfilment pushes data orders through immediately so customers are not left waiting.'],
-    ['icon' => 'fa-upload', 'title' => 'Bulk Order Processing', 'body' => 'Upload spreadsheets or paste structured text to process large order batches in one flow.'],
-    ['icon' => 'fa-wallet', 'title' => 'Smart Wallet System', 'body' => 'Fund wallets, track balances, and move from payment to delivery without manual reconciliation.'],
-    ['icon' => 'fa-shield-halved', 'title' => 'Secure and Reliable', 'body' => 'Role-based access and controlled workflows keep customer transactions protected end to end.'],
-    ['icon' => 'fa-headset', 'title' => 'Always-On Support', 'body' => 'WhatsApp and in-app support keep your team connected when customers need a quick resolution.'],
-    ['icon' => 'fa-chart-line', 'title' => 'Analytics and Reports', 'body' => 'Monitor transactions, wallet movement, and platform health from a single operational view.'],
-];
-
-$stats = [
-    ['value' => '10K+', 'label' => 'Happy Customers'],
-    ['value' => '50K+', 'label' => 'Orders Processed'],
-    ['value' => '99.9%', 'label' => 'Platform Uptime'],
-    ['value' => '24/7', 'label' => 'Support Access'],
+$plans = [
+    'MTN' => [['1GB', '4.15'], ['2GB', '8.30'], ['3GB', '12.49'], ['4GB', '16.60'], ['5GB', '20.29'], ['6GB', '24.49']],
+    'Telecel' => [['5GB', '19.49'], ['10GB', '37.99'], ['15GB', '55.99'], ['20GB', '72.99'], ['25GB', '89.99'], ['30GB', '106']],
+    'AirtelTigo' => [['20GB', '56'], ['25GB', '71'], ['30GB', '70'], ['40GB', '87'], ['50GB', '98'], ['60GB', '120']]
 ];
 ?>
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
-    <?php echo generateSeoMeta($siteName, 'Affordable data services for everyone with fast fulfilment, flexible ordering and dependable support.'); ?>
+    <?php echo generateSeoMeta($siteName, 'Buy data bundles, airtime, and utility services in Ghana with fast delivery.'); ?>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
     <link rel="preload" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>" as="style" onload="this.onload=null;this.rel='stylesheet'">
     <noscript><link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>"></noscript>
     <style>
         :root {
-            --primary-color: #2f63d9;
-            --secondary-color: #1f4fb8;
-            --accent-color: #f59e0b;
-            --dark-color: #1f2937;
-            --dark-surface: #111827;
-            --light-color: #f8fafc;
-            --surface: #ffffff;
-            --text-color: #374151;
-            --heading-color: #111827;
-            --border-color: #e5e7eb;
-            --shadow-soft: 0 18px 50px rgba(15, 23, 42, 0.08);
-            --shadow-strong: 0 24px 60px rgba(37, 99, 235, 0.18);
-            --container: min(1140px, calc(100% - 2rem));
+            --bg: #f7f2e8;
+            --surface: #fffaf0;
+            --surface-2: #efe2ca;
+            --ink: #19142f;
+            --muted: #675d7c;
+            --primary: #541388;
+            --accent: #d90368;
+            --yellow: #ffd400;
+            --border: rgba(25, 20, 47, 0.14);
+            --shadow: 0 24px 70px rgba(25, 20, 47, 0.16);
         }
-
-        * {
-            box-sizing: border-box;
+        [data-theme="dark"] {
+            --bg: #19142f;
+            --surface: #241d43;
+            --surface-2: #302653;
+            --ink: #fff7e8;
+            --muted: rgba(255, 247, 232, 0.76);
+            --border: rgba(255, 247, 232, 0.16);
+            --shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
         }
-
-        html {
-            scroll-behavior: smooth;
-        }
-
+        * { box-sizing: border-box; }
+        html { scroll-behavior: smooth; font-size: 15px; }
         body {
             margin: 0;
-            font-family: 'Inter', system-ui, sans-serif;
-            color: var(--text-color);
-            background: var(--light-color);
-            line-height: 1.6;
+            font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            background: var(--bg);
+            color: var(--ink);
+            font-size: 1rem;
         }
-
-        a {
-            color: inherit;
-            text-decoration: none;
+        a { color: inherit; text-decoration: none; }
+        .promo {
+            background: var(--ink);
+            color: var(--surface);
+            min-height: 44px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.75rem;
+            padding: 0.65rem 1rem;
+            text-align: center;
+            font-size: 0.85rem;
         }
-
-        img {
-            max-width: 100%;
-            display: block;
-        }
-
-        .container {
-            width: var(--container);
+        .promo b { color: var(--yellow); }
+        .promo a { text-decoration: underline; text-underline-offset: 3px; }
+        .nav {
+            width: min(1180px, calc(100% - 32px));
             margin: 0 auto;
-        }
-
-        .site-header {
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            z-index: 1000;
-            background: rgba(255, 255, 255, 0.94);
-            border-bottom: 1px solid rgba(229, 231, 235, 0.9);
-            backdrop-filter: blur(12px);
-            transition: box-shadow 0.25s ease, background 0.25s ease;
-        }
-
-        .site-header.is-scrolled {
-            background: rgba(255, 255, 255, 0.98);
-            box-shadow: 0 12px 40px rgba(15, 23, 42, 0.08);
-        }
-
-        .site-header .container {
+            min-height: 86px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            gap: 1.5rem;
-            min-height: 84px;
+            gap: 1rem;
         }
-
         .brand {
-            font-size: 1.7rem;
+            font-size: 1.15rem;
             font-weight: 800;
-            color: var(--primary-color);
-            letter-spacing: -0.03em;
-            white-space: nowrap;
+            color: var(--primary);
         }
-
-        .nav-toggle {
-            display: none;
-            align-items: center;
-            justify-content: center;
-            width: 46px;
-            height: 46px;
-            border: 1px solid var(--border-color);
-            border-radius: 14px;
-            background: #fff;
-            color: var(--heading-color);
-            cursor: pointer;
-        }
-
-        .nav-shell {
-            display: flex;
-            align-items: center;
-            gap: 1.5rem;
-            flex: 1;
-            justify-content: flex-end;
-        }
-
-        .nav-links {
-            display: flex;
-            align-items: center;
-            gap: 1.4rem;
-        }
-
+        .nav-links, .nav-actions { display: flex; align-items: center; gap: 1rem; }
         .nav-links a {
-            font-size: 0.98rem;
-            font-weight: 500;
-            position: relative;
-            color: var(--text-color);
+            color: var(--muted);
+            font-size: 0.9rem;
+            font-weight: 600;
         }
-
-        .nav-links a::after {
-            content: '';
-            position: absolute;
-            left: 50%;
-            bottom: -0.45rem;
-            width: 0;
-            height: 2px;
-            border-radius: 999px;
-            background: var(--primary-color);
-            transform: translateX(-50%);
-            transition: width 0.25s ease;
-        }
-
-        .nav-links a:hover::after,
-        .nav-links a:focus-visible::after {
-            width: 100%;
-        }
-
-        .nav-cta {
+        .btn {
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            gap: 0.65rem;
-            padding: 0.85rem 1.5rem;
-            border: none;
+            gap: 0.5rem;
+            min-height: 44px;
+            padding: 0 1.2rem;
             border-radius: 999px;
-            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
-            color: #fff;
-            font-weight: 600;
-            box-shadow: 0 10px 24px rgba(37, 99, 235, 0.28);
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            border: 1px solid var(--border);
+            background: rgba(255, 250, 240, 0.58);
+            color: var(--ink);
+            font-weight: 700;
+            white-space: nowrap;
+            font-size: 0.95rem;
         }
-
-        .nav-cta:hover,
-        .btn-primary:hover,
-        .btn-secondary:hover,
-        .btn-contact:hover,
-        .scroll-top:hover {
-            transform: translateY(-2px);
+        [data-theme="dark"] .btn { background: rgba(255, 247, 232, 0.06); }
+        .btn-primary {
+            border-color: transparent;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            color: #fffaf0;
+            box-shadow: 0 16px 34px rgba(84, 19, 136, 0.25);
         }
-
-        .nav-cta:hover,
-        .btn-primary:hover,
-        .scroll-top:hover {
-            box-shadow: 0 16px 34px rgba(37, 99, 235, 0.28);
+        .theme-toggle {
+            width: 44px;
+            padding: 0;
+            border-radius: 50%;
+            cursor: pointer;
         }
-
         .hero {
-            position: relative;
-            min-height: 100vh;
-            padding: 8.5rem 0 5.5rem;
-            display: flex;
-            align-items: center;
-            overflow: hidden;
-            background: linear-gradient(135deg, #4f7cf0 0%, #2f63d9 52%, #1f4fb8 100%);
-        }
-
-        .hero::before {
-            content: '';
-            position: absolute;
-            inset: 0;
-            background:
-                radial-gradient(circle at top right, rgba(255, 255, 255, 0.22), transparent 28%),
-                linear-gradient(135deg, rgba(255, 255, 255, 0.08) 0%, transparent 58%),
-                url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 800 800'%3E%3Cpolygon fill='rgba(255,255,255,0.08)' points='0,800 800,0 800,800'/%3E%3C/svg%3E");
-            background-size: auto, auto, cover;
-            pointer-events: none;
-        }
-
-        .hero .container {
-            position: relative;
-            z-index: 1;
-        }
-
-        .hero-panel {
-            max-width: 860px;
+            width: min(1180px, calc(100% - 32px));
             margin: 0 auto;
-            text-align: center;
-            color: #fff;
+            padding: 3.2rem 0 5rem;
+            display: grid;
+            grid-template-columns: minmax(0, 1.02fr) minmax(330px, 0.78fr);
+            gap: 3rem;
+            align-items: center;
         }
-
         .eyebrow {
             display: inline-flex;
             align-items: center;
-            gap: 0.55rem;
-            padding: 0.55rem 1rem;
-            border-radius: 999px;
-            background: rgba(255, 255, 255, 0.14);
-            border: 1px solid rgba(255, 255, 255, 0.18);
-            font-size: 0.92rem;
-            font-weight: 600;
-            margin-bottom: 1.5rem;
-        }
-
-        .hero h1 {
-            margin: 0 0 1.25rem;
-            font-size: clamp(2.7rem, 6vw, 4.3rem);
-            line-height: 1.08;
+            gap: 0.45rem;
+            color: var(--primary);
             font-weight: 800;
-            letter-spacing: -0.045em;
-        }
-
-        .hero h1 .accent {
-            color: var(--accent-color);
-            text-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-        }
-
-        .hero p {
-            margin: 0 auto;
-            max-width: 720px;
-            font-size: clamp(1.05rem, 2vw, 1.22rem);
-            color: rgba(255, 255, 255, 0.92);
-        }
-
-        .hero-actions {
-            margin-top: 2rem;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-wrap: wrap;
-            gap: 1rem;
-        }
-
-        .btn-primary,
-        .btn-secondary,
-        .btn-contact {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            gap: 0.7rem;
-            min-height: 56px;
-            padding: 0.95rem 1.9rem;
-            border-radius: 999px;
-            font-weight: 600;
-            transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease, color 0.2s ease;
-        }
-
-        .btn-primary {
-            background: var(--accent-color);
-            color: #fff;
-            box-shadow: 0 14px 28px rgba(245, 158, 11, 0.28);
-        }
-
-        .btn-primary:hover {
-            background: #d97706;
-        }
-
-        .btn-secondary {
-            background: transparent;
-            color: #fff;
-            border: 2px solid rgba(255, 255, 255, 0.78);
-        }
-
-        .btn-secondary:hover {
-            background: #fff;
-            color: var(--primary-color);
-        }
-
-        .hero-highlights {
-            margin-top: 2.75rem;
-            display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 1rem;
-        }
-
-        .hero-highlight {
-            padding: 1.15rem 1.2rem;
-            border-radius: 22px;
-            background: rgba(255, 255, 255, 0.12);
-            border: 1px solid rgba(255, 255, 255, 0.16);
-            text-align: left;
-        }
-
-        .hero-highlight strong {
-            display: block;
-            margin-bottom: 0.2rem;
-            font-size: 1.05rem;
-            color: #fff;
-        }
-
-        .hero-highlight span {
-            display: block;
+            margin-bottom: 1.2rem;
             font-size: 0.95rem;
-            color: rgba(255, 255, 255, 0.82);
         }
-
-        .section {
-            padding: 6rem 0;
+        .hero h1 {
+            margin: 0;
+            font-size: clamp(2.5rem, 6vw, 4.8rem);
+            line-height: 1.05;
+            letter-spacing: -0.01em;
         }
-
-        .section--white {
-            background: #fff;
+        .hero h1 span { color: var(--accent); display: block; }
+        .hero p {
+            max-width: 620px;
+            color: var(--muted);
+            font-size: 1.05rem;
+            line-height: 1.7;
+            margin: 1.35rem 0 0;
         }
-
-        .section-title {
-            max-width: 680px;
-            margin: 0 auto 3.75rem;
-            text-align: center;
+        .hero-actions { display: flex; flex-wrap: wrap; gap: 0.9rem; margin-top: 1.8rem; }
+        .phone-stage {
+            position: relative;
+            min-height: 530px;
+            display: grid;
+            place-items: center;
         }
-
-        .section-title .label {
-            display: inline-block;
-            margin-bottom: 0.8rem;
-            color: var(--primary-color);
-            font-size: 0.92rem;
-            font-weight: 700;
-            letter-spacing: 0.12em;
+        .shape {
+            position: absolute;
+            width: min(420px, 92%);
+            aspect-ratio: 1;
+            border-radius: 46% 54% 48% 52%;
+            background: linear-gradient(145deg, var(--yellow), #ffec86 48%, #f6c96f);
+            transform: rotate(-10deg);
+            box-shadow: var(--shadow);
+        }
+        .phone {
+            position: relative;
+            width: min(305px, 82vw);
+            min-height: 510px;
+            border: 10px solid #18122d;
+            border-radius: 38px;
+            background: var(--surface);
+            box-shadow: 0 28px 60px rgba(25, 20, 47, 0.25);
+            padding: 1rem;
+            overflow: hidden;
+        }
+        .phone-top {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            color: var(--muted);
+            font-size: 0.75rem;
+            font-weight: 800;
+            margin-bottom: 1rem;
+        }
+        .balance {
+            border-radius: 22px;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            color: #fffaf0;
+            padding: 1rem;
+        }
+        .balance small { opacity: 0.78; font-size: 0.85rem; }
+        .balance strong { display: block; font-size: 1.8rem; margin-top: 0.25rem; }
+        .quick-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 0.75rem;
+            margin: 1rem 0;
+        }
+        .quick-tile {
+            min-height: 86px;
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            display: grid;
+            align-content: center;
+            justify-items: center;
+            gap: 0.35rem;
+            color: var(--muted);
+            font-size: 0.75rem;
+            font-weight: 800;
+            background: rgba(255, 255, 255, 0.36);
+        }
+        .quick-tile i { color: var(--primary); font-size: 1.15rem; }
+        .mini-plan {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-radius: 16px;
+            padding: 0.8rem;
+            background: var(--surface-2);
+            margin-top: 0.65rem;
+            font-weight: 800;
+            font-size: 0.9rem;
+        }
+        .float-card {
+            position: absolute;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            border-radius: 18px;
+            box-shadow: var(--shadow);
+            padding: 0.9rem 1rem;
+            font-weight: 800;
+            font-size: 0.85rem;
+        }
+        .float-card.one { top: 70px; left: 0; }
+        .float-card.two { right: 0; bottom: 76px; }
+        section {
+            padding: 5rem max(16px, calc((100% - 1180px) / 2));
+        }
+        .section-head {
+            max-width: 760px;
+            margin-bottom: 2rem;
+        }
+        .section-head small {
+            color: var(--primary);
+            font-weight: 800;
             text-transform: uppercase;
+            font-size: 0.85rem;
         }
-
-        .section-title h2 {
-            margin: 0 0 1rem;
-            color: var(--heading-color);
-            font-size: clamp(2rem, 4vw, 2.9rem);
-            line-height: 1.12;
-            letter-spacing: -0.035em;
+        .section-head h2 {
+            margin: 0.45rem 0 0;
+            font-size: clamp(1.8rem, 3.5vw, 3.2rem);
+            line-height: 1.05;
         }
-
-        .section-title p {
-            margin: 0;
-            font-size: 1.05rem;
-            color: #6b7280;
+        .why {
+            background: var(--surface);
+            border-top: 1px solid var(--border);
+            border-bottom: 1px solid var(--border);
         }
-
-        .features-grid {
+        .compare {
             display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-            gap: 1.5rem;
-        }
-
-        .feature-card {
-            height: 100%;
-            padding: 2.2rem 1.8rem;
+            grid-template-columns: 0.95fr repeat(2, minmax(140px, 1fr));
+            border: 1px solid var(--border);
             border-radius: 24px;
-            background: #fff;
-            border: 1px solid var(--border-color);
-            box-shadow: var(--shadow-soft);
-            text-align: center;
-            transition: transform 0.25s ease, box-shadow 0.25s ease;
+            overflow: hidden;
+            background: var(--bg);
+            font-size: 0.95rem;
         }
-
-        .feature-card:hover {
-            transform: translateY(-8px);
-            box-shadow: 0 26px 54px rgba(15, 23, 42, 0.12);
+        .compare > div {
+            padding: 1.1rem;
+            border-bottom: 1px solid var(--border);
+            font-weight: 800;
         }
-
-        .feature-icon {
-            width: 82px;
-            height: 82px;
-            margin: 0 auto 1.5rem;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 50%;
-            color: #fff;
-            font-size: 1.9rem;
-            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
-            box-shadow: var(--shadow-strong);
+        .compare > div:nth-last-child(-n+3) { border-bottom: 0; }
+        .compare .head {
+            background: var(--primary);
+            color: #fffaf0;
         }
-
-        .feature-card h3 {
-            margin: 0 0 0.8rem;
-            color: var(--heading-color);
-            font-size: 1.35rem;
-        }
-
-        .feature-card p {
-            margin: 0;
-            color: #6b7280;
-        }
-
-        .stats {
-            padding: 5.5rem 0;
-            color: #fff;
-            background: linear-gradient(135deg, var(--dark-color), #374151);
-        }
-
-        .stats-grid {
+        .compare i.fa-check { color: #139b58; }
+        .compare i.fa-minus { color: var(--muted); }
+        .feature-strip {
             display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
+            grid-template-columns: repeat(4, 1fr);
+            gap: 1rem;
+            margin-top: 1.4rem;
+        }
+        .feature {
+            background: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 18px;
+            padding: 1.25rem;
+            min-height: 132px;
+        }
+        .feature i { color: var(--accent); font-size: 1.35rem; margin-bottom: 0.75rem; }
+        .feature h3 { margin: 0; font-size: 1.05rem; }
+        .feature p { font-size: 0.95rem; line-height: 1.6; }
+        .plans-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
             gap: 1rem;
         }
-
-        .stat-card {
-            padding: 1.4rem 1rem;
-            text-align: center;
+        .plan-card {
+            border: 1px solid var(--border);
+            background: var(--surface);
+            border-radius: 22px;
+            padding: 1.3rem;
+            box-shadow: 0 18px 42px rgba(25, 20, 47, 0.08);
         }
-
-        .stat-card strong {
-            display: block;
-            margin-bottom: 0.4rem;
-            font-size: clamp(2.2rem, 4vw, 3rem);
-            line-height: 1;
-            color: var(--accent-color);
-            letter-spacing: -0.05em;
-        }
-
-        .stat-card span {
-            display: block;
-            font-size: 1.05rem;
-            color: rgba(255, 255, 255, 0.86);
-            font-weight: 500;
-        }
-
-        .contact {
-            padding: 6rem 0;
-            background: #fff;
-        }
-
-        .contact-card {
-            padding: 3.5rem;
-            border-radius: 30px;
-            text-align: center;
-            color: #fff;
-            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
-            box-shadow: 0 24px 60px rgba(37, 99, 235, 0.28);
-        }
-
-        .contact-card h2 {
-            margin: 0 0 1rem;
-            font-size: clamp(2rem, 4vw, 3rem);
-            line-height: 1.1;
-            letter-spacing: -0.04em;
-        }
-
-        .contact-card p {
-            max-width: 700px;
-            margin: 0 auto;
-            font-size: 1.08rem;
-            color: rgba(255, 255, 255, 0.92);
-        }
-
-        .contact-actions {
-            margin-top: 2rem;
+        .plan-card h3 { margin: 0 0 1rem; font-size: 1.35rem; }
+        .plan-row {
             display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-wrap: wrap;
+            justify-content: space-between;
+            padding: 0.72rem 0;
+            border-top: 1px solid var(--border);
+            font-weight: 800;
+            font-size: 0.95rem;
+        }
+        .plan-card .btn { width: 100%; margin-top: 1rem; }
+        .process {
+            background: var(--ink);
+            color: var(--surface);
+        }
+        .process .section-head small, .process .section-head h2 { color: var(--surface); }
+        .steps {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
             gap: 1rem;
         }
-
-        .btn-contact {
-            padding-inline: 1.7rem;
+        .step {
+            border: 1px solid rgba(255, 250, 240, 0.18);
+            border-radius: 20px;
+            padding: 1.2rem;
+            min-height: 165px;
+            background: rgba(255, 250, 240, 0.06);
         }
-
-        .btn-contact.primary {
-            background: var(--accent-color);
-            color: #fff;
-        }
-
-        .btn-contact.primary:hover {
-            background: #d97706;
-        }
-
-        .btn-contact.secondary {
-            color: #fff;
-            border: 2px solid rgba(255, 255, 255, 0.82);
-        }
-
-        .btn-contact.secondary:hover {
-            background: #fff;
-            color: var(--primary-color);
-        }
-
-        .footer {
-            padding: 2rem 0 2.4rem;
-            text-align: center;
-            background: var(--dark-color);
-            color: rgba(255, 255, 255, 0.84);
-            font-size: 0.98rem;
-        }
-
-        .scroll-top {
-            position: fixed;
-            right: 1.4rem;
-            bottom: 1.4rem;
-            width: 52px;
-            height: 52px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
+        .step span {
+            width: 42px;
+            height: 42px;
             border-radius: 50%;
-            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
-            color: #fff;
-            box-shadow: 0 14px 30px rgba(37, 99, 235, 0.28);
-            opacity: 0;
-            visibility: hidden;
-            transition: opacity 0.25s ease, visibility 0.25s ease, transform 0.2s ease;
-            z-index: 950;
+            display: grid;
+            place-items: center;
+            background: var(--yellow);
+            color: #19142f;
+            font-weight: 800;
+            margin-bottom: 1rem;
+            font-size: 1rem;
         }
-
-        .scroll-top.is-visible {
-            opacity: 1;
-            visibility: visible;
+        .step h3 { font-size: 1.15rem; margin-bottom: 0.5rem; }
+        .step p { font-size: 0.95rem; opacity: 0.9; }
+        .cta {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 1.5rem;
+            align-items: center;
+            border-radius: 28px;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            color: #fffaf0;
+            padding: clamp(1.5rem, 4vw, 3rem);
         }
-
-        @media (max-width: 1024px) {
-            .features-grid {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-            }
-
-            .stats-grid {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
-            }
-
-            .hero-highlights {
-                grid-template-columns: 1fr;
-            }
+        .cta h2 { margin: 0; font-size: clamp(1.8rem, 3.5vw, 3.2rem); line-height: 1.1; }
+        .cta p { margin: 0.8rem 0 0; opacity: 0.86; font-size: 1rem; }
+        footer {
+            padding: 2rem 1rem;
+            text-align: center;
+            color: var(--muted);
+            border-top: 1px solid var(--border);
+            font-size: 0.9rem;
         }
-
-        @media (max-width: 820px) {
-            .site-header .container {
-                min-height: 76px;
-            }
-
-            .nav-toggle {
-                display: inline-flex;
-            }
-
-            .nav-shell {
-                position: absolute;
-                top: calc(100% + 0.85rem);
-                left: 1rem;
-                right: 1rem;
-                display: none;
-                flex-direction: column;
-                align-items: stretch;
-                padding: 1rem;
-                background: rgba(255, 255, 255, 0.98);
-                border: 1px solid var(--border-color);
-                border-radius: 24px;
-                box-shadow: 0 24px 50px rgba(15, 23, 42, 0.14);
-            }
-
-            .nav-shell.is-open {
-                display: flex;
-            }
-
-            .nav-links {
-                flex-direction: column;
-                align-items: stretch;
-                gap: 0.35rem;
-            }
-
-            .nav-links a {
-                padding: 0.8rem 0.9rem;
-                border-radius: 14px;
-            }
-
-            .nav-links a:hover {
-                background: #eff6ff;
-            }
-
-            .nav-links a::after {
-                display: none;
-            }
-
-            .nav-cta {
-                width: 100%;
-                margin-top: 0.35rem;
-            }
+        footer a { color: var(--primary); font-weight: 800; }
+        @media (max-width: 920px) {
+            .nav { flex-wrap: wrap; padding: 1rem 0; }
+            .nav-links { order: 3; width: 100%; justify-content: center; flex-wrap: wrap; }
+            .hero { grid-template-columns: 1fr; padding-top: 2rem; }
+            .phone-stage { min-height: 460px; }
+            .feature-strip, .plans-grid, .steps { grid-template-columns: repeat(2, 1fr); }
+            .cta { grid-template-columns: 1fr; }
         }
-
-        @media (max-width: 680px) {
-            .hero {
-                padding: 7.5rem 0 4.5rem;
-            }
-
-            .hero h1 {
-                font-size: clamp(2rem, 10vw, 2.45rem);
-                line-height: 1.12;
-            }
-
-            .hero-actions,
-            .contact-actions {
-                flex-direction: column;
-            }
-
-            .btn-primary,
-            .btn-secondary,
-            .btn-contact {
-                width: 100%;
-            }
-
-            .features-grid,
-            .stats-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .section,
-            .contact {
-                padding: 4.5rem 0;
-            }
-
-            .contact-card {
-                padding: 2.5rem 1.4rem;
-            }
+        @media (max-width: 620px) {
+            .promo { align-items: flex-start; flex-direction: column; gap: 0.25rem; text-align: left; }
+            .nav, .nav-actions { align-items: stretch; }
+            .nav { width: min(100% - 24px, 1180px); }
+            .nav-actions, .hero-actions { width: 100%; flex-direction: column; }
+            .nav-actions .btn, .hero-actions .btn { width: 100%; }
+            .nav-actions .btn.theme-toggle { width: 44px; height: 44px; padding: 0; border-radius: 50%; aspect-ratio: 1; flex-shrink: 0; }
+            .theme-toggle { align-self: center; }
+            .hero { width: min(100% - 24px, 1180px); padding-bottom: 3rem; }
+            .hero h1 { font-size: clamp(2.2rem, 14vw, 3.8rem); }
+            .phone-stage { min-height: 390px; }
+            .phone { min-height: 430px; border-radius: 30px; }
+            .float-card { display: none; }
+            .compare { grid-template-columns: 1fr; }
+            .compare > div { border-bottom: 1px solid var(--border) !important; }
+            .feature-strip, .plans-grid, .steps { grid-template-columns: 1fr; }
+            section { padding-top: 3.4rem; padding-bottom: 3.4rem; }
         }
     </style>
 </head>
 <body>
-<header id="siteHeader" class="site-header">
-    <div class="container">
-        <a class="brand" href="<?php echo SITE_URL; ?>/"><?php echo $siteName; ?></a>
+<div class="promo">
+    <span><b>New!</b> Fast data bundles, airtime, and utility payments for Ghana.</span>
+    <a href="<?php echo htmlspecialchars($primaryCta['link']); ?>">Learn more</a>
+</div>
 
-        <button id="navToggle" class="nav-toggle" type="button" aria-expanded="false" aria-controls="navShell" aria-label="Open navigation">
-            <i class="fas fa-bars"></i>
-        </button>
-
-        <div id="navShell" class="nav-shell">
-            <nav class="nav-links" aria-label="Primary navigation">
-                <a href="#hero">Home</a>
-                <a href="<?php echo SITE_URL; ?>/register.php"><?php echo $isLoggedIn ? 'Dashboard' : 'Register'; ?></a>
-                <a href="<?php echo htmlspecialchars($whatsappLink); ?>" target="_blank" rel="noopener">
-                    <i class="fab fa-whatsapp"></i> Contact Admin
-                </a>
-                <a href="<?php echo htmlspecialchars($communityLink); ?>" target="_blank" rel="noopener">
-                    <i class="fab fa-whatsapp"></i> <?php echo htmlspecialchars($communityLabel); ?>
-                </a>
-            </nav>
-
-            <a class="nav-cta" href="<?php echo htmlspecialchars($secondaryCta['link']); ?>">
-                <i class="fas fa-right-to-bracket"></i>
-                <?php echo htmlspecialchars($secondaryCta['label']); ?>
-            </a>
-        </div>
+<nav class="nav">
+    <a class="brand" href="<?php echo SITE_URL; ?>/"><?php echo $siteName; ?></a>
+    <div class="nav-links">
+        <a href="#services">Utility Bills</a>
+        <a href="#plans">Our Plans</a>
+        <a href="<?php echo htmlspecialchars($secondaryCta['link']); ?>"><?php echo htmlspecialchars($secondaryCta['label']); ?></a>
     </div>
-</header>
+    <div class="nav-actions">
+        <button class="btn theme-toggle" id="globalThemeToggle" aria-label="Toggle theme"><i class="fas fa-moon"></i></button>
+        <a class="btn btn-primary" href="<?php echo htmlspecialchars($primaryCta['link']); ?>"><?php echo htmlspecialchars($primaryCta['label']); ?></a>
+    </div>
+</nav>
 
 <main>
-    <section id="hero" class="hero">
-        <div class="container">
-            <div class="hero-panel">
-                <h1>Simple and Affordable Data <span class="accent">For Everyone</span></h1>
-                <p>
-                    <?php echo $siteName; ?> gives customers, agents and resellers fast data fulfilment, wallet-powered checkout,
-                    bulk order support and reliable assistance from one clean platform.
-                </p>
-
-                <div class="hero-actions">
-                    <a class="btn-primary" href="<?php echo htmlspecialchars($heroPrimary['link']); ?>">
-                        <i class="fas fa-right-to-bracket"></i>
-                        <?php echo htmlspecialchars($heroPrimary['label']); ?>
-                    </a>
-                    <a class="btn-secondary" href="<?php echo htmlspecialchars($heroSecondary['link']); ?>">
-                        <i class="fas fa-user-plus"></i>
-                        <?php echo htmlspecialchars($heroSecondary['label']); ?>
-                    </a>
-                </div>
-
-                <div class="hero-highlights">
-                    <div class="hero-highlight">
-                        <strong>Automated Delivery</strong>
-                        <span>Orders are routed quickly so customers receive value without unnecessary delay.</span>
-                    </div>
-                    <div class="hero-highlight">
-                        <strong>Reseller Ready</strong>
-                        <span>Agent workflows, wallet funding and bulk processing are built in from the start.</span>
-                    </div>
-                    <div class="hero-highlight">
-                        <strong>Direct Support</strong>
-                        <span>WhatsApp contact and community access stay visible wherever users land.</span>
-                    </div>
-                </div>
+    <header class="hero">
+        <div>
+            <div class="eyebrow"><i class="fas fa-bolt"></i> Try <?php echo $siteName; ?> now</div>
+            <h1>One-stop-shop <span>data bundles airtime pay utility bills</span></h1>
+            <p>Mobile top-ups and bill payments made simple in Ghana. Buy for yourself, serve customers, or run a data business from one clean platform.</p>
+            <div class="hero-actions">
+                <a class="btn btn-primary" href="<?php echo htmlspecialchars($primaryCta['link']); ?>"><?php echo htmlspecialchars($primaryCta['label']); ?></a>
+                <a class="btn" href="<?php echo htmlspecialchars($secondaryCta['link']); ?>"><?php echo htmlspecialchars($secondaryCta['label']); ?> — Here!</a>
+                <a class="btn" href="<?php echo htmlspecialchars($whatsappLink); ?>" target="_blank" rel="noopener"><i class="fab fa-whatsapp"></i> Chat <?php echo htmlspecialchars($whatsappDisplay); ?></a>
+                <?php if ($whatsappChannelLink): ?>
+                    <a class="btn" href="<?php echo htmlspecialchars($whatsappChannelLink); ?>" target="_blank" rel="noopener">Join WhatsApp Channel</a>
+                <?php endif; ?>
             </div>
+        </div>
+        <div class="phone-stage" aria-hidden="true">
+            <div class="shape"></div>
+            <div class="phone">
+                <div class="phone-top"><span>9:41</span><span><?php echo $siteName; ?></span></div>
+                <div class="balance">
+                    <small>Wallet balance</small>
+                    <strong>GHS 248.50</strong>
+                </div>
+                <div class="quick-grid">
+                    <div class="quick-tile"><i class="fas fa-wifi"></i>Data</div>
+                    <div class="quick-tile"><i class="fas fa-phone"></i>Airtime</div>
+                    <div class="quick-tile"><i class="fas fa-lightbulb"></i>ECG</div>
+                    <div class="quick-tile"><i class="fas fa-droplet"></i>Water</div>
+                </div>
+                <div class="mini-plan"><span>MTN 5GB</span><span>GHS 20.29</span></div>
+                <div class="mini-plan"><span>Telecel 10GB</span><span>GHS 37.99</span></div>
+                <div class="mini-plan"><span>AT 30GB</span><span>GHS 70</span></div>
+            </div>
+            <div class="float-card one"><i class="fas fa-check-circle"></i> Delivered in seconds</div>
+            <div class="float-card two"><i class="fas fa-shield-halved"></i> Secure checkout</div>
+        </div>
+    </header>
+
+    <section class="why" id="services">
+        <div class="section-head">
+            <small>Why Us?</small>
+            <h2>Fast, simple, and built for everyday payments.</h2>
+        </div>
+        <div class="compare">
+            <div class="head">Featuring</div><div class="head"><?php echo $siteName; ?></div><div class="head">Others</div>
+            <div>First class support</div><div><i class="fas fa-check"></i></div><div><i class="fas fa-minus"></i></div>
+            <div>Fast and reliable delivery</div><div><i class="fas fa-check"></i></div><div><i class="fas fa-minus"></i></div>
+            <div>Easy payments</div><div><i class="fas fa-check"></i></div><div><i class="fas fa-minus"></i></div>
+            <div>Private and secured</div><div><i class="fas fa-check"></i></div><div><i class="fas fa-minus"></i></div>
+            <div>Detailed transaction history</div><div><i class="fas fa-check"></i></div><div><i class="fas fa-minus"></i></div>
+        </div>
+        <div class="feature-strip">
+            <div class="feature"><i class="fas fa-gauge-high"></i><h3>Fast and reliable</h3><p>Most mobile top-ups through our online services complete in seconds.</p></div>
+            <div class="feature"><i class="fas fa-wallet"></i><h3>Convenient payments</h3><p>Use straightforward payment options that make checkout easy.</p></div>
+            <div class="feature"><i class="fas fa-lock"></i><h3>Private and secured</h3><p>Your personal and financial details stay protected.</p></div>
+            <div class="feature"><i class="fas fa-clock-rotate-left"></i><h3>Transaction history</h3><p>Track every order clearly from your dashboard.</p></div>
         </div>
     </section>
 
-    <section id="features" class="section section--white">
-        <div class="container">
-            <div class="section-title">
-                <span class="label">Why Choose Us</span>
-                <h2>Comprehensive data solutions with speed, control and reliability.</h2>
-                <p>
-                    The homepage now follows the reference style, but the content still reflects the real value of your platform:
-                    faster fulfilment, wallet-based payments, bulk operations and responsive support.
-                </p>
-            </div>
-
-            <div class="features-grid">
-                <?php foreach ($featureList as $feature): ?>
-                    <article class="feature-card">
-                        <div class="feature-icon">
-                            <i class="fas <?php echo htmlspecialchars($feature['icon']); ?>"></i>
-                        </div>
-                        <h3><?php echo htmlspecialchars($feature['title']); ?></h3>
-                        <p><?php echo htmlspecialchars($feature['body']); ?></p>
-                    </article>
-                <?php endforeach; ?>
-            </div>
+    <section id="plans">
+        <div class="section-head">
+            <small>Our popular plans</small>
+            <h2>Choose a bundle and get connected.</h2>
+        </div>
+        <div class="plans-grid">
+            <?php foreach ($plans as $network => $items): ?>
+                <article class="plan-card">
+                    <h3><?php echo htmlspecialchars($network); ?></h3>
+                    <?php foreach ($items as $item): ?>
+                        <div class="plan-row"><span><?php echo htmlspecialchars($item[0]); ?></span><span>GHS <?php echo htmlspecialchars($item[1]); ?></span></div>
+                    <?php endforeach; ?>
+                    <a class="btn btn-primary" href="<?php echo SITE_URL; ?>/login.php">Buy <?php echo htmlspecialchars($network); ?> Pack</a>
+                </article>
+            <?php endforeach; ?>
         </div>
     </section>
 
-    <section class="stats">
-        <div class="container">
-            <div class="stats-grid">
-                <?php foreach ($stats as $stat): ?>
-                    <div class="stat-card">
-                        <strong><?php echo htmlspecialchars($stat['value']); ?></strong>
-                        <span><?php echo htmlspecialchars($stat['label']); ?></span>
-                    </div>
-                <?php endforeach; ?>
-            </div>
+    <section class="process">
+        <div class="section-head">
+            <small>The process</small>
+            <h2>How things work.</h2>
+        </div>
+        <div class="steps">
+            <div class="step"><span>1</span><h3>Get numbers ready</h3><p>Enter the recipient numbers for every bundle or bill.</p></div>
+            <div class="step"><span>2</span><h3>Add to cart</h3><p>Select as many packages as you need before checkout.</p></div>
+            <div class="step"><span>3</span><h3>Pay smoothly</h3><p>Complete payment through the available secure channels.</p></div>
+            <div class="step"><span>4</span><h3>Receive in seconds</h3><p>Track delivery and transaction status from your account.</p></div>
         </div>
     </section>
 
-    <section class="contact">
-        <div class="container">
-            <div class="contact-card">
-                <h2>Get In Touch</h2>
-                <p>
-                    Ready to onboard customers or grow your reseller operation? Reach the admin directly or move into the
-                    community channel for updates, announcements and support.
-                </p>
-
-                <div class="contact-actions">
-                    <a class="btn-contact primary" href="<?php echo htmlspecialchars($whatsappLink); ?>" target="_blank" rel="noopener">
-                        <i class="fab fa-whatsapp"></i>
-                        Contact Admin
-                    </a>
-                    <a class="btn-contact secondary" href="<?php echo htmlspecialchars($communityLink); ?>" target="_blank" rel="noopener">
-                        <i class="fab fa-whatsapp"></i>
-                        <?php echo htmlspecialchars($communityLabel); ?>
-                    </a>
-                </div>
+    <section id="cta">
+        <div class="cta">
+            <div>
+                <h2>Join us. Make gifting data easy for friends and family.</h2>
+                <p>Start with a free account or chat with support on WhatsApp.</p>
+            </div>
+            <div class="hero-actions">
+                <a class="btn btn-primary" href="<?php echo htmlspecialchars($primaryCta['link']); ?>">Sign up free</a>
+                <a class="btn" href="<?php echo htmlspecialchars($whatsappLink); ?>" target="_blank" rel="noopener">Support</a>
             </div>
         </div>
     </section>
 </main>
 
-<footer class="footer">
-    <div class="container">
-        <p>&copy; <?php echo htmlspecialchars($year); ?> <strong><?php echo $siteName; ?></strong> | All Rights Reserved</p>
-    </div>
+<footer>
+    COPYRIGHT &copy; <?php echo $year; ?> <?php echo $siteName; ?>. All Rights Reserved. Developed by
+    <a href="https://moses.constechz.com" target="_blank" rel="noopener">Constechz Technologies</a>.
 </footer>
 
-<a id="scrollTop" class="scroll-top" href="#hero" aria-label="Scroll to top">
-    <i class="fas fa-arrow-up"></i>
-</a>
-
 <script>
-    (function () {
-        const header = document.getElementById('siteHeader');
-        const navToggle = document.getElementById('navToggle');
-        const navShell = document.getElementById('navShell');
-        const scrollTop = document.getElementById('scrollTop');
-
-        function syncHeader() {
-            if (window.scrollY > 40) {
-                header.classList.add('is-scrolled');
-            } else {
-                header.classList.remove('is-scrolled');
-            }
-
-            if (window.scrollY > 320) {
-                scrollTop.classList.add('is-visible');
-            } else {
-                scrollTop.classList.remove('is-visible');
-            }
+    function applyTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        const icon = document.querySelector('#globalThemeToggle i');
+        if (icon) {
+            icon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
         }
-
-        function closeMobileNav() {
-            navShell.classList.remove('is-open');
-            navToggle.setAttribute('aria-expanded', 'false');
-            navToggle.innerHTML = '<i class="fas fa-bars"></i>';
-        }
-
-        navToggle.addEventListener('click', function () {
-            const isOpen = navShell.classList.toggle('is-open');
-            navToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-            navToggle.innerHTML = isOpen ? '<i class="fas fa-xmark"></i>' : '<i class="fas fa-bars"></i>';
-        });
-
-        navShell.querySelectorAll('a').forEach(function (link) {
-            link.addEventListener('click', function () {
-                if (window.innerWidth <= 820) {
-                    closeMobileNav();
-                }
-            });
-        });
-
-        window.addEventListener('resize', function () {
-            if (window.innerWidth > 820) {
-                closeMobileNav();
-            }
-        });
-
-        window.addEventListener('scroll', syncHeader, { passive: true });
-        syncHeader();
+    }
+    (function initTheme() {
+        const saved = localStorage.getItem('theme');
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+        applyTheme(saved || (prefersDark ? 'dark' : 'light'));
     })();
+    document.getElementById('globalThemeToggle').addEventListener('click', function() {
+        const current = document.documentElement.getAttribute('data-theme');
+        const next = current === 'dark' ? 'light' : 'dark';
+        localStorage.setItem('theme', next);
+        applyTheme(next);
+    });
 </script>
 </body>
 </html>

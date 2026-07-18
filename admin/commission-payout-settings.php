@@ -5,10 +5,6 @@ require_once '../includes/commission.php';
 // Require admin role
 requireRole('admin');
 
-if (function_exists('ensureCommissionPayoutTables')) {
-    ensureCommissionPayoutTables();
-}
-
 $error = '';
 $success = '';
 
@@ -119,7 +115,43 @@ if (!isset($_SESSION['csrf_token'])) {
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-                    <?php renderAdminSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Management</div>
+                <div class="nav-item"><a href="packages.php" class="nav-link"><i class="fas fa-box"></i> Data Packages</a></div>
+                <div class="nav-item"><a href="afa-registration.php" class="nav-link"><i class="fas fa-user-check"></i> AFA Registration</a></div>
+                <div class="nav-item"><a href="users.php" class="nav-link"><i class="fas fa-users"></i> Users</a></div>
+                <div class="nav-item"><a href="agents.php" class="nav-link"><i class="fas fa-user-tie"></i> Agents</a></div>
+            
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Commission</div>
+                <div class="nav-item"><a href="commission-settings.php" class="nav-link"><i class="fas fa-percentage"></i> Commission Settings</a></div>
+                <div class="nav-item"><a href="commission-payout-settings.php" class="nav-link active"><i class="fas fa-calendar-alt"></i> Payout Settings</a></div>
+                <div class="nav-item"><a href="commission-liquidations.php" class="nav-link"><i class="fas fa-money-check-alt"></i> Liquidations</a></div>
+                <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
+                <div class="nav-item"><a href="commission-payouts.php" class="nav-link"><i class="fas fa-wallet"></i> Manual Payouts</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Analytics</div>
+                <div class="nav-item"><a href="transactions.php" class="nav-link"><i class="fas fa-history"></i> Transactions</a></div>
+                <div class="nav-item"><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></div>
+                <div class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item"><a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> System Settings</a></div>
+                <div class="nav-item"><a href="email-broadcast.php" class="nav-link"><i class="fas fa-paper-plane"></i> Email Broadcasts</a></div>
+                <div class="nav-item"><a href="system-reset.php" class="nav-link"><i class="fas fa-broom"></i> System Reset</a></div>
+                <div class="nav-item"><a href="pwa-settings.php" class="nav-link"><i class="fas fa-mobile-alt"></i> PWA Settings</a></div>
+                <div class="nav-item"><a href="sms-settings.php" class="nav-link"><i class="fas fa-sms"></i> SMS Settings</a></div>
+            </li>
+        </ul>
     </nav>
 
     <!-- Main Content -->
@@ -201,7 +233,7 @@ if (!isset($_SESSION['csrf_token'])) {
                         <i class="fas fa-clock"></i>
                     </div>
                     <div class="stat-content">
-                        <h3><?php echo CURRENCY . number_format($commission_stats['total_pending'] ?? 0, 2); ?></h3>
+                        <h3>???<?php echo number_format($commission_stats['total_pending'] ?? 0, 2); ?></h3>
                         <p>Pending Commission</p>
                     </div>
                 </div>
@@ -211,7 +243,7 @@ if (!isset($_SESSION['csrf_token'])) {
                         <i class="fas fa-check-circle"></i>
                     </div>
                     <div class="stat-content">
-                        <h3><?php echo CURRENCY . number_format($commission_stats['total_liquidated'] ?? 0, 2); ?></h3>
+                        <h3>???<?php echo number_format($commission_stats['total_liquidated'] ?? 0, 2); ?></h3>
                         <p>Total Paid Out</p>
                     </div>
                 </div>
@@ -240,11 +272,11 @@ if (!isset($_SESSION['csrf_token'])) {
                             </div>
                             
                             <div class="form-group">
-                                <label for="minimum_payout" class="form-label">Minimum Payout Amount (<?php echo CURRENCY; ?>)</label>
+                                <label for="minimum_payout" class="form-label">Minimum Payout Amount (???)</label>
                                 <input type="number" id="minimum_payout" name="minimum_payout" class="form-control" 
                                        value="<?php echo htmlspecialchars($current_minimum); ?>" 
                                        min="0" max="1000" step="0.01" required>
-                                <small class="form-text">Minimum commission amount required before an agent is eligible for automatic payout.</small>
+                                <small class="form-text">Minimum commission amount required before payout is triggered.</small>
                             </div>
                         </div>
                         
@@ -283,7 +315,7 @@ if (!isset($_SESSION['csrf_token'])) {
                                     <span class="checkbox-custom"></span>
                                     Enable Automatic Payouts
                                 </label>
-                                <small class="form-text">When enabled, the configured schedule and minimum amount can be used for automatic commission payout runs. Agents still need valid MoMo payment details saved in their payment settings.</small>
+                                <small class="form-text">When enabled, commissions will be automatically credited to agent wallets based on the schedule above.</small>
                             </div>
                         </div>
                         

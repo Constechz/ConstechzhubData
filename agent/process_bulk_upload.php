@@ -25,7 +25,6 @@ if (!$current_user) {
     echo json_encode(['success' => false, 'message' => 'User not authenticated']);
     exit;
 }
-ensureDataPackageStockStatusColumn();
 
 // Get agent wallet balance using the correct wallets table
 $wallet_balance = getWalletBalance($current_user['id']);
@@ -67,14 +66,12 @@ try {
     
     $stmt = $db->prepare("
         SELECT dp.id, dp.name, dp.data_size, dp.price,
-               COALESCE(dp.stock_status, 'in_stock') AS stock_status,
                COALESCE(pp_agent.price, pp_customer.price, dp.price) as effective_price
         FROM data_packages dp
         LEFT JOIN networks n ON dp.network_id = n.id
         LEFT JOIN package_pricing pp_agent ON pp_agent.package_id = dp.id AND pp_agent.user_type = 'agent'
         LEFT JOIN package_pricing pp_customer ON pp_customer.package_id = dp.id AND pp_customer.user_type = 'customer'
         WHERE n.name = ? AND dp.status = 'active'
-          AND COALESCE(dp.stock_status, 'in_stock') = 'in_stock'
         ORDER BY dp.data_size
     ");
     $stmt->bind_param("s", $network_name);
@@ -135,15 +132,13 @@ try {
             LEFT JOIN package_pricing pp_customer ON pp_customer.package_id = dp.id AND pp_customer.user_type = 'customer'
             LEFT JOIN agent_custom_pricing acp ON acp.package_id = dp.id AND acp.agent_id = ? AND acp.is_active = 1
             WHERE dp.id = ?
-              AND dp.status = 'active'
-              AND COALESCE(dp.stock_status, 'in_stock') = 'in_stock'
         ");
         $stmt->bind_param("ii", $current_user['id'], $package['id']);
         $stmt->execute();
         $pricing_result = $stmt->get_result();
         $pricing_data = $pricing_result->fetch_assoc();
         
-        $price_to_use = $pricing_data['effective_price'] ?? $package['price'];
+        $price_to_use = $pricing_data['custom_price'] ?? $pricing_data['effective_price'] ?? $package['price'];
         $total_cost += $price_to_use;
         
         // Check if we have enough balance
@@ -206,35 +201,15 @@ try {
             
             if ($api_result['success']) {
                 // Update order status to delivered
-                $stmt_update = $db->prepare("UPDATE bundle_orders SET status = 'processing', api_response = ?, provider_reference = ? WHERE id = ?");
+                $stmt_update = $db->prepare("UPDATE bundle_orders SET status = 'delivered', api_response = ?, provider_reference = ?, delivered_at = NOW() WHERE id = ?");
                 $api_response_json = json_encode($api_result);
                 $provider_ref = $api_result['reference'] ?? '';
                 $stmt_update->bind_param("ssi", $api_response_json, $provider_ref, $order_id);
                 $stmt_update->execute();
 
-                if (function_exists('applyMtnStatusPolicy')) {
-                    applyMtnStatusPolicy($order_id, 'processing');
+                if (isset($network_name) && strtolower($network_name) === 'mtn' && function_exists('applyMtnStatusPolicy')) {
+                    applyMtnStatusPolicy($order_id, 'delivered');
                 }
-
-                if (function_exists('recordAgentCommission')) {
-                    $commission_amount = function_exists('calculateAgentDataCommissionAmount')
-                        ? calculateAgentDataCommissionAmount($package['data_size'] ?? '', 1)
-                        : 0.0;
-
-                    if ($commission_amount > 0) {
-                        recordAgentCommission([
-                            'agent_id' => (int) $current_user['id'],
-                            'source_type' => 'data',
-                            'source_id' => (int) $order_id,
-                            'source_reference' => (string) $order_reference,
-                            'amount' => $commission_amount,
-                            'quantity' => 1,
-                            'rate_snapshot' => function_exists('getAgentCommissionSettings') ? (float) (getAgentCommissionSettings()['data_rate_per_gb'] ?? 0) : null,
-                            'notes' => ($package['network_name'] ?? 'Data') . ' ' . ($package['data_size'] ?? 'bundle') . ' for ' . $formatted_phone,
-                        ]);
-                    }
-                }
-
             } else {
                 // Update order status to failed
                 $stmt_update = $db->prepare("UPDATE bundle_orders SET status = 'failed', api_response = ? WHERE id = ?");
@@ -280,22 +255,6 @@ try {
             'payment_method' => 'wallet',
             'status' => 'processed',
             'agent_id' => (int) $current_user['id'],
-            'source' => 'agent_bulk_upload'
-        ]);
-
-        sendUserOrderNotification([
-            'order_type' => 'data',
-            'order_reference' => generateReference('AGBULKUP'),
-            'order_id' => 0,
-            'user_id' => (int) $current_user['id'],
-            'customer_name' => $current_user['full_name'] ?? '',
-            'customer_email' => $current_user['email'] ?? '',
-            'beneficiary_number' => 'Multiple numbers',
-            'network_name' => $network_name,
-            'package_name' => "Agent Bulk Upload ({$processed} successful orders)",
-            'amount' => (float) $total_cost,
-            'payment_method' => 'wallet',
-            'status' => 'processed',
             'source' => 'agent_bulk_upload'
         ]);
     }

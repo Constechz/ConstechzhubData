@@ -99,10 +99,10 @@ if ($flash) {
 <head>
     <?php echo generateSeoMeta('Reset Password', 'Set a new password for your Constechzhub account.'); ?>
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>"">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/public-polish.css')); ?>">
     <link rel="manifest" href="manifest.php">
-    <meta name="theme-color" content="#6366f1">
+    <meta name="theme-color" content="#541388">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <link rel="apple-touch-icon" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-192.png')); ?>"">
 </head>
@@ -192,7 +192,7 @@ if ($flash) {
                 
                 <?php else: ?>
                 <div class="text-center">
-                    <div class="error-icon" style="font-size: 3rem; color: #dc3545; margin-bottom: 1rem;">
+                    <div class="error-icon" style="font-size: 3rem; color: #D90368; margin-bottom: 1rem;">
                         <i class="fas fa-exclamation-triangle"></i>
                     </div>
                     <p class="text-muted">The password reset link is invalid or has expired.</p>
@@ -237,7 +237,7 @@ if ($flash) {
         
         .strength-bar {
             height: 4px;
-            background: #e9ecef;
+            background: #F1E9DA;
             border-radius: 2px;
             overflow: hidden;
         }
@@ -253,10 +253,10 @@ if ($flash) {
             margin-top: 0.25rem;
         }
         
-        .strength-weak { background-color: #dc3545; }
-        .strength-fair { background-color: #fd7e14; }
-        .strength-good { background-color: #ffc107; }
-        .strength-strong { background-color: #28a745; }
+        .strength-weak { background-color: #D90368; }
+        .strength-fair { background-color: #FFD400; }
+        .strength-good { background-color: #FFD400; }
+        .strength-strong { background-color: #2E294E; }
     </style>
     
     <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/password-toggle.js')); ?>""></script>
@@ -315,19 +315,19 @@ if ($flash) {
             if (score <= 1) {
                 fillElement.className = 'strength-fill strength-weak';
                 textElement.textContent = 'Weak - Add ' + feedback.slice(0, 2).join(', ');
-                textElement.style.color = '#dc3545';
+                textElement.style.color = '#D90368';
             } else if (score <= 2) {
                 fillElement.className = 'strength-fill strength-fair';
                 textElement.textContent = 'Fair - Add ' + feedback.slice(0, 2).join(', ');
-                textElement.style.color = '#fd7e14';
+                textElement.style.color = '#FFD400';
             } else if (score <= 3) {
                 fillElement.className = 'strength-fill strength-good';
                 textElement.textContent = 'Good - Add ' + feedback.join(', ');
-                textElement.style.color = '#ffc107';
+                textElement.style.color = '#FFD400';
             } else {
                 fillElement.className = 'strength-fill strength-strong';
                 textElement.textContent = 'Strong password';
-                textElement.style.color = '#28a745';
+                textElement.style.color = '#2E294E';
             }
         }
         
@@ -392,7 +392,7 @@ if ($flash) {
         // PWA service worker registration
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', function() {
-                navigator.serviceWorker.register('<?php echo htmlspecialchars(dbh_asset('sw.js'), ENT_QUOTES, 'UTF-8'); ?>')
+                navigator.serviceWorker.register('/sw.js')
                     .then(function(registration) {
                         console.log('ServiceWorker registration successful');
                     })
@@ -404,3 +404,4 @@ if ($flash) {
     </script>
 </body>
 </html>
+

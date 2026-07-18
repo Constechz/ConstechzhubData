@@ -52,7 +52,7 @@ include '../includes/admin_header.php';
             <div class="widget-body">
                 <div class="stats-grid" style="margin-bottom:1.5rem;">
                     <div class="stat-card">
-                        <div class="stat-icon" style="background:rgba(16,185,129,0.12);color:#10b981;">
+                        <div class="stat-icon" style="background:rgba(46, 41, 78, 0.12);color:#2E294E;">
                             <i class="fas fa-database"></i>
                         </div>
                         <div class="stat-content">
@@ -61,7 +61,7 @@ include '../includes/admin_header.php';
                         </div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-icon" style="background:rgba(59,130,246,0.12);color:#3b82f6;">
+                        <div class="stat-icon" style="background:rgba(84, 19, 136, 0.12);color:#541388;">
                             <i class="fas fa-columns"></i>
                         </div>
                         <div class="stat-content">
@@ -70,7 +70,7 @@ include '../includes/admin_header.php';
                         </div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-icon" style="background:rgba(245,158,11,0.15);color:#f59e0b;">
+                        <div class="stat-icon" style="background:rgba(255, 212, 0, 0.15);color:#FFD400;">
                             <i class="fas fa-sync"></i>
                         </div>
                         <div class="stat-content">
@@ -79,7 +79,7 @@ include '../includes/admin_header.php';
                         </div>
                     </div>
                     <div class="stat-card">
-                        <div class="stat-icon" style="background:rgba(139,92,246,0.15);color:#8b5cf6;">
+                        <div class="stat-icon" style="background:rgba(84, 19, 136, 0.15);color:#541388;">
                             <i class="fas fa-seedling"></i>
                         </div>
                         <div class="stat-content">
@@ -258,7 +258,7 @@ function runSeoRepair()
             $modernValue = rawSeoSetting($conn, $modern);
             if ($modernValue === null || $modernValue === '') {
                 if (updateSeoSetting($modern, $legacyValue, 'Migrated from ' . $legacy)) {
-                    $report['migrated'][] = "{$legacy} ⇒ {$modern}";
+                    $report['migrated'][] = "{$legacy} Ã¢â€¡â€™ {$modern}";
                 } else {
                     $report['errors'][] = "Failed migrating {$legacy} to {$modern}";
                 }
@@ -338,3 +338,4 @@ function deleteSeoSetting(mysqli $conn, $name)
     $stmt->execute();
     $stmt->close();
 }
+

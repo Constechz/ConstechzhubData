@@ -43,8 +43,6 @@ if (!$current_user) {
     echo json_encode(['success' => false, 'message' => 'User not authenticated']);
     exit;
 }
-ensureDataPackageStockStatusColumn();
-$customer_pricing_type = getCustomerPricingUserType($current_user);
 
 $agent_id = (int)($payload['agent_id'] ?? 0);
 $store_slug = sanitize($payload['store_slug'] ?? '');
@@ -109,22 +107,18 @@ try {
     $stmt = $db->prepare("
         SELECT dp.id, dp.name, dp.data_size, dp.validity_days, dp.network_id,
                COALESCE(n.name, 'Unknown') AS network_name,
-               COALESCE(pp_customer.price, pp_customer_fallback.price, dp.price, 0) AS customer_price,
+               COALESCE(pp_customer.price, dp.price, 0) AS customer_price,
                COALESCE(pp_agent.price, dp.price, 0) AS agent_wholesale_price,
-               COALESCE(dp.stock_status, 'in_stock') AS stock_status,
                acp.custom_price AS agent_custom_price
         FROM data_packages dp
         JOIN networks n ON n.id = dp.network_id AND n.name = 'MTN' AND n.is_active = 1
-        LEFT JOIN package_pricing pp_customer ON pp_customer.package_id = dp.id AND pp_customer.user_type = ?
-        LEFT JOIN package_pricing pp_customer_fallback ON pp_customer_fallback.package_id = dp.id AND pp_customer_fallback.user_type = 'customer'
+        LEFT JOIN package_pricing pp_customer ON pp_customer.package_id = dp.id AND pp_customer.user_type = 'customer'
         LEFT JOIN package_pricing pp_agent ON pp_agent.package_id = dp.id AND pp_agent.user_type = 'agent'
         LEFT JOIN agent_custom_pricing acp ON acp.package_id = dp.id AND acp.agent_id = ? AND acp.is_active = 1
-        WHERE dp.status = 'active'
-          AND COALESCE(dp.stock_status, 'in_stock') = 'in_stock'
-          AND (pp_customer.price IS NOT NULL OR pp_customer_fallback.price IS NOT NULL OR dp.price > 0)
+        WHERE dp.status = 'active' AND (pp_customer.price IS NOT NULL OR dp.price > 0)
         ORDER BY dp.data_size
     ");
-    $stmt->bind_param('si', $customer_pricing_type, $agent_id);
+    $stmt->bind_param('i', $agent_id);
     $stmt->execute();
     $packages_result = $stmt->get_result();
 
@@ -135,10 +129,10 @@ try {
         if (!isset($packages[$key])) {
             $packages[$key] = $pkg;
         } else {
-            $current_price = ($customer_pricing_type !== 'vip' && $agent_id > 0 && $packages[$key]['agent_custom_price'] !== null)
+            $current_price = ($agent_id > 0 && $packages[$key]['agent_custom_price'] !== null)
                 ? (float) $packages[$key]['agent_custom_price']
                 : (float) $packages[$key]['customer_price'];
-            $candidate_price = ($customer_pricing_type !== 'vip' && $agent_id > 0 && $pkg['agent_custom_price'] !== null)
+            $candidate_price = ($agent_id > 0 && $pkg['agent_custom_price'] !== null)
                 ? (float) $pkg['agent_custom_price']
                 : (float) $pkg['customer_price'];
             if ($candidate_price > 0 && ($current_price <= 0 || $candidate_price < $current_price)) {
@@ -152,10 +146,10 @@ try {
                 if (!isset($packages_by_gb[$gb_key])) {
                     $packages_by_gb[$gb_key] = $pkg;
                 } else {
-                    $current_price = ($customer_pricing_type !== 'vip' && $agent_id > 0 && $packages_by_gb[$gb_key]['agent_custom_price'] !== null)
+                    $current_price = ($agent_id > 0 && $packages_by_gb[$gb_key]['agent_custom_price'] !== null)
                         ? (float) $packages_by_gb[$gb_key]['agent_custom_price']
                         : (float) $packages_by_gb[$gb_key]['customer_price'];
-                    $candidate_price = ($customer_pricing_type !== 'vip' && $agent_id > 0 && $pkg['agent_custom_price'] !== null)
+                    $candidate_price = ($agent_id > 0 && $pkg['agent_custom_price'] !== null)
                         ? (float) $pkg['agent_custom_price']
                         : (float) $pkg['customer_price'];
                     if ($candidate_price > 0 && ($current_price <= 0 || $candidate_price < $current_price)) {
@@ -219,7 +213,7 @@ try {
         $agent_wholesale_price = (float)$package['agent_wholesale_price'];
         $agent_custom_price = $package['agent_custom_price'];
 
-        $price_to_charge_customer = ($customer_pricing_type !== 'vip' && $agent_id > 0 && $agent_custom_price !== null)
+        $price_to_charge_customer = ($agent_id > 0 && $agent_custom_price !== null)
             ? (float)$agent_custom_price
             : $customer_price;
         $price_to_deduct_from_agent = $agent_id > 0 ? $agent_wholesale_price : 0.0;
@@ -255,6 +249,14 @@ try {
     if ($customer_balance < $total_customer_cost) {
         echo json_encode(['success' => false, 'message' => 'Insufficient wallet balance for total orders.']);
         exit;
+    }
+
+    if ($agent_id > 0) {
+        $agent_balance = getWalletBalance($agent_id);
+        if (($agent_balance + $total_customer_cost) < $total_agent_cost) {
+            echo json_encode(['success' => false, 'message' => 'Agent has insufficient balance to fulfill these orders.']);
+            exit;
+        }
     }
 
     $bundle_orders_auto_increment = true;
@@ -295,7 +297,7 @@ try {
                     VALUES (?, ?, ?, ?, ?, "processing", ?, ?)
                 ');
                 $stmt->bind_param(
-                    'iisdsid',
+                    'iisisid',
                     $current_user['id'],
                     $package['id'],
                     $formatted_phone,
@@ -313,7 +315,7 @@ try {
                     VALUES (?, ?, ?, ?, ?, ?, "processing", ?, ?)
                 ');
                 $stmt->bind_param(
-                    'iiisdsid',
+                    'iiisisid',
                     $manual_order_id,
                     $current_user['id'],
                     $package['id'],
@@ -330,23 +332,58 @@ try {
             $transaction_id = null;
             $txn_ref = $order_ref;
             $description = $package['network_name'] . ' ' . $package['data_size'] . ' bundle purchase for ' . $formatted_phone;
+            $agent_txn_ref = null;
+            $agent_description = null;
 
-            if ($transactions_auto_increment) {
-                $stmt = $db->prepare('
-                    INSERT INTO transactions (user_id, transaction_type, amount, status, reference, payment_method, description, created_at)
-                    VALUES (?, "purchase", ?, "success", ?, "wallet", ?, NOW())
-                ');
-                $stmt->bind_param('idss', $current_user['id'], $price_to_charge_customer, $txn_ref, $description);
+            if ($agent_id > 0) {
+                if ($transactions_auto_increment) {
+                    $stmt = $db->prepare('
+                        INSERT INTO transactions (user_id, transaction_type, amount, status, reference, payment_method, description, created_at)
+                        VALUES (?, "purchase", ?, "success", ?, "wallet", ?, NOW())
+                    ');
+                    $stmt->bind_param('idss', $current_user['id'], $price_to_charge_customer, $txn_ref, $description);
+                } else {
+                    $manual_transaction_id = dbh_generate_next_id('transactions');
+                    $stmt = $db->prepare('
+                        INSERT INTO transactions (id, user_id, transaction_type, amount, status, reference, payment_method, description, created_at)
+                        VALUES (?, ?, "purchase", ?, "success", ?, "wallet", ?, NOW())
+                    ');
+                    $stmt->bind_param('iidss', $manual_transaction_id, $current_user['id'], $price_to_charge_customer, $txn_ref, $description);
+                }
+                $stmt->execute();
+                $transaction_id = $transactions_auto_increment ? $db->lastInsertId() : $manual_transaction_id;
+
+                $agent_txn_ref = generateReference('TXN');
+                $agent_description = 'Order fulfillment cost for ' . $description;
+                $order_cost_type = 'purchase';
+                $success_status = 'success';
+                if ($transactions_auto_increment) {
+                    $stmt = $db->prepare('INSERT INTO transactions (user_id, amount, transaction_type, reference, status, description) VALUES (?, ?, ?, ?, ?, ?)');
+                    $stmt->bind_param('idssss', $agent_id, $price_to_deduct_from_agent, $order_cost_type, $agent_txn_ref, $success_status, $agent_description);
+                } else {
+                    $manual_agent_txn_id = dbh_generate_next_id('transactions');
+                    $stmt = $db->prepare('INSERT INTO transactions (id, user_id, amount, transaction_type, reference, status, description) VALUES (?, ?, ?, ?, ?, ?, ?)');
+                    $stmt->bind_param('iidssss', $manual_agent_txn_id, $agent_id, $price_to_deduct_from_agent, $order_cost_type, $agent_txn_ref, $success_status, $agent_description);
+                }
+                $stmt->execute();
             } else {
-                $manual_transaction_id = dbh_generate_next_id('transactions');
-                $stmt = $db->prepare('
-                    INSERT INTO transactions (id, user_id, transaction_type, amount, status, reference, payment_method, description, created_at)
-                    VALUES (?, ?, "purchase", ?, "success", ?, "wallet", ?, NOW())
-                ');
-                $stmt->bind_param('iidss', $manual_transaction_id, $current_user['id'], $price_to_charge_customer, $txn_ref, $description);
+                if ($transactions_auto_increment) {
+                    $stmt = $db->prepare('
+                        INSERT INTO transactions (user_id, transaction_type, amount, status, reference, payment_method, description, created_at)
+                        VALUES (?, "purchase", ?, "success", ?, "wallet", ?, NOW())
+                    ');
+                    $stmt->bind_param('idss', $current_user['id'], $price_to_charge_customer, $txn_ref, $description);
+                } else {
+                    $manual_transaction_id = dbh_generate_next_id('transactions');
+                    $stmt = $db->prepare('
+                        INSERT INTO transactions (id, user_id, transaction_type, amount, status, reference, payment_method, description, created_at)
+                        VALUES (?, ?, "purchase", ?, "success", ?, "wallet", ?, NOW())
+                    ');
+                    $stmt->bind_param('iidss', $manual_transaction_id, $current_user['id'], $price_to_charge_customer, $txn_ref, $description);
+                }
+                $stmt->execute();
+                $transaction_id = $transactions_auto_increment ? $db->lastInsertId() : $manual_transaction_id;
             }
-            $stmt->execute();
-            $transaction_id = $transactions_auto_increment ? $db->lastInsertId() : $manual_transaction_id;
 
             if (!empty($transaction_id)) {
                 $stmt = $db->prepare('UPDATE bundle_orders SET transaction_id = ? WHERE id = ?');
@@ -358,8 +395,20 @@ try {
             $stmt->bind_param("i", $order_id);
             $stmt->execute();
 
-            if (!updateWalletBalance($current_user['id'], $price_to_charge_customer, 'debit', $txn_ref, $description)) {
-                throw new Exception('Failed to deduct customer wallet');
+            if ($agent_id > 0) {
+                $customer_to_agent_desc = 'Payment to agent for ' . $description;
+                if (!transferWalletBalance($current_user['id'], $agent_id, $price_to_charge_customer, $txn_ref, $customer_to_agent_desc)) {
+                    throw new Exception('Failed to process customer payment to agent');
+                }
+
+                if (!updateWalletBalance($agent_id, $price_to_deduct_from_agent, 'debit', $agent_txn_ref, $agent_description)) {
+                    transferWalletBalance($agent_id, $current_user['id'], $price_to_charge_customer, $txn_ref . '_REFUND', 'Refund: Agent wholesale deduction failed');
+                    throw new Exception('Failed to deduct agent wholesale cost');
+                }
+            } else {
+                if (!updateWalletBalance($current_user['id'], $price_to_charge_customer, 'debit', $txn_ref, $description)) {
+                    throw new Exception('Failed to deduct customer wallet');
+                }
             }
 
             $volume_gb = extractVolumeGB($package['data_size']);
@@ -375,27 +424,24 @@ try {
                 $stmt->bind_param("si", $api_response_json, $order_id);
                 $stmt->execute();
 
-                updateWalletBalance($current_user['id'], $price_to_charge_customer, 'credit', $txn_ref . '_REFUND', 'Refund: ' . ($api_result['error'] ?? 'Provider error'));
+                if ($agent_id > 0) {
+                    updateWalletBalance($agent_id, $price_to_deduct_from_agent, 'credit', $agent_txn_ref . '_REFUND', 'Refund: ' . ($api_result['error'] ?? 'Provider error'));
+                    transferWalletBalance($agent_id, $current_user['id'], $price_to_charge_customer, $txn_ref . '_REFUND', 'Refund: ' . ($api_result['error'] ?? 'Provider error'));
+                } else {
+                    updateWalletBalance($current_user['id'], $price_to_charge_customer, 'credit', $txn_ref . '_REFUND', 'Refund: ' . ($api_result['error'] ?? 'Provider error'));
+                }
 
                 throw new Exception('Provider error');
             }
 
-            $stmt = $db->prepare("UPDATE bundle_orders SET status = 'processing', api_response = ?, provider_reference = ?, updated_at = NOW() WHERE id = ?");
+            $stmt = $db->prepare("UPDATE bundle_orders SET status = 'delivered', api_response = ?, provider_reference = ?, delivered_at = NOW() WHERE id = ?");
             $api_response_json = json_encode($api_result);
             $provider_ref = $api_result['reference'] ?? '';
             $stmt->bind_param("ssi", $api_response_json, $provider_ref, $order_id);
             $stmt->execute();
 
             if (function_exists('applyMtnStatusPolicy')) {
-                applyMtnStatusPolicy($order_id, 'processing');
-            }
-
-            $agent_order_profit = $agent_id > 0
-                ? max(0, round($price_to_charge_customer - $price_to_deduct_from_agent, 2))
-                : 0.0;
-
-            if ($agent_id > 0 && $agent_order_profit > 0 && (!function_exists('walletReferenceExists') || !walletReferenceExists($agent_id, $order_ref))) {
-                updateWalletBalance($agent_id, $agent_order_profit, 'credit', $order_ref, 'Store profit: bulk data bundle order');
+                applyMtnStatusPolicy($order_id, 'delivered');
             }
 
             if (function_exists('recordOrderProfit')) {
@@ -406,7 +452,6 @@ try {
                     'package_id' => $package['id'],
                     'customer_paid' => $price_to_charge_customer,
                     'agent_cost' => $price_to_deduct_from_agent,
-                    'profit_amount' => $agent_order_profit,
                     'reference' => $order_ref,
                     'status' => 'earned'
                 ]);

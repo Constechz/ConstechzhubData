@@ -13,36 +13,6 @@ $has_api_logs = $has_table_exists ? dbh_table_exists('api_transaction_logs') : f
 $has_api_providers = $has_table_exists ? dbh_table_exists('api_providers') : false;
 $has_rc_gateway = $has_result_checker && $has_column_exists ? dbh_table_has_column('result_checker_purchases', 'payment_gateway') : true;
 
-$safe_query = static function ($sql, $context) use ($db) {
-    try {
-        return $db->query($sql);
-    } catch (Throwable $e) {
-        error_log('Data histories query failed (' . $context . '): ' . $e->getMessage());
-        return false;
-    }
-};
-
-$fetch_assoc_rows = static function ($result) {
-    $rows = [];
-    if (!$result || !is_object($result) || !method_exists($result, 'fetch_assoc')) {
-        return $rows;
-    }
-
-    if (method_exists($result, 'fetch_all')) {
-        try {
-            return $result->fetch_all(MYSQLI_ASSOC);
-        } catch (Throwable $e) {
-            // Fall back to iterative fetching for environments without mysqlnd support.
-        }
-    }
-
-    while ($row = $result->fetch_assoc()) {
-        $rows[] = $row;
-    }
-
-    return $rows;
-};
-
 $data_stats = ['total_orders' => 0, 'successful_orders' => 0, 'pending_orders' => 0, 'failed_orders' => 0, 'total_amount' => 0.0];
 $checker_stats = ['total_orders' => 0, 'successful_orders' => 0, 'pending_orders' => 0, 'failed_orders' => 0, 'total_amount' => 0.0];
 $data_providers = [];
@@ -53,16 +23,18 @@ $provider_name_by_slug = [];
 
 if ($has_api_providers) {
     $provider_lookup_sql = "SELECT id, name, slug FROM api_providers";
-    $provider_lookup_result = $safe_query($provider_lookup_sql, 'provider lookup');
-    foreach ($fetch_assoc_rows($provider_lookup_result) as $provider_row) {
-        $provider_id = (int)($provider_row['id'] ?? 0);
-        $provider_name = trim((string)($provider_row['name'] ?? ''));
-        $provider_slug = strtolower(trim((string)($provider_row['slug'] ?? '')));
-        if ($provider_id > 0 && $provider_name !== '') {
-            $provider_name_by_id[$provider_id] = $provider_name;
-        }
-        if ($provider_slug !== '' && $provider_name !== '') {
-            $provider_name_by_slug[$provider_slug] = $provider_name;
+    $provider_lookup_result = $db->query($provider_lookup_sql);
+    if ($provider_lookup_result) {
+        while ($provider_row = $provider_lookup_result->fetch_assoc()) {
+            $provider_id = (int)($provider_row['id'] ?? 0);
+            $provider_name = trim((string)($provider_row['name'] ?? ''));
+            $provider_slug = strtolower(trim((string)($provider_row['slug'] ?? '')));
+            if ($provider_id > 0 && $provider_name !== '') {
+                $provider_name_by_id[$provider_id] = $provider_name;
+            }
+            if ($provider_slug !== '' && $provider_name !== '') {
+                $provider_name_by_slug[$provider_slug] = $provider_name;
+            }
         }
     }
 }
@@ -124,7 +96,7 @@ if ($has_bundle_orders) {
             SUM(CASE WHEN LOWER(status) IN ('success','completed','delivered') THEN amount ELSE 0 END) AS total_amount
         FROM bundle_orders
     ";
-    $result = $safe_query($stats_sql, 'bundle order stats');
+    $result = $db->query($stats_sql);
     if ($result && $row = $result->fetch_assoc()) {
         $data_stats = array_merge($data_stats, $row);
     }
@@ -160,7 +132,7 @@ if ($has_bundle_orders) {
         FROM bundle_orders bo
         {$provider_aggregate_join}
     ";
-    $provider_aggregate_result = $safe_query($provider_aggregate_sql, 'bundle provider aggregate');
+    $provider_aggregate_result = $db->query($provider_aggregate_sql);
     if ($provider_aggregate_result) {
         $provider_totals = [];
         $status_tokens = [
@@ -168,7 +140,7 @@ if ($has_bundle_orders) {
             'failed', 'cancelled', 'refunded', 'manual', 'queued'
         ];
 
-        foreach ($fetch_assoc_rows($provider_aggregate_result) as $provider_row) {
+        while ($provider_row = $provider_aggregate_result->fetch_assoc()) {
             $provider_name = trim((string)($provider_row['api_provider_name'] ?? ''));
 
             if ($provider_name === '') {
@@ -253,9 +225,9 @@ if ($has_bundle_orders) {
         ORDER BY bo.created_at DESC
         LIMIT 80
     ";
-    $result = $safe_query($recent_data_sql, 'recent data orders');
+    $result = $db->query($recent_data_sql);
     if ($result) {
-        $recent_rows = array_merge($recent_rows, $fetch_assoc_rows($result));
+        $recent_rows = array_merge($recent_rows, $result->fetch_all(MYSQLI_ASSOC));
     }
 }
 
@@ -269,7 +241,7 @@ if ($has_result_checker) {
             SUM(CASE WHEN LOWER(status) IN ('success','completed','delivered') THEN amount ELSE 0 END) AS total_amount
         FROM result_checker_purchases
     ";
-    $result = $safe_query($stats_sql, 'result checker stats');
+    $result = $db->query($stats_sql);
     if ($result && $row = $result->fetch_assoc()) {
         $checker_stats = array_merge($checker_stats, $row);
     }
@@ -282,9 +254,9 @@ if ($has_result_checker) {
         ORDER BY total_orders DESC, provider_name ASC
         LIMIT 8
     ";
-    $result = $safe_query($provider_sql, 'result checker channels');
+    $result = $db->query($provider_sql);
     if ($result) {
-        $checker_providers = $fetch_assoc_rows($result);
+        $checker_providers = $result->fetch_all(MYSQLI_ASSOC);
     }
 
     $recent_checker_sql = "
@@ -306,9 +278,9 @@ if ($has_result_checker) {
         ORDER BY p.created_at DESC
         LIMIT 80
     ";
-    $result = $safe_query($recent_checker_sql, 'recent result checker orders');
+    $result = $db->query($recent_checker_sql);
     if ($result) {
-        $recent_rows = array_merge($recent_rows, $fetch_assoc_rows($result));
+        $recent_rows = array_merge($recent_rows, $result->fetch_all(MYSQLI_ASSOC));
     }
 }
 
@@ -367,8 +339,8 @@ $recent_rows = array_slice($recent_rows, 0, 120);
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Data Histories - <?php echo SITE_NAME; ?></title>
-    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>">
-    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>"">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>"">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>">
     <style>
         body,
@@ -413,8 +385,8 @@ $recent_rows = array_slice($recent_rows, 0, 120);
             position: sticky;
             top: 0;
             z-index: 2;
-            background: var(--bg-primary, #ffffff);
-            box-shadow: inset 0 -1px 0 var(--border-color, #e2e8f0);
+            background: var(--bg-primary, #F1E9DA);
+            box-shadow: inset 0 -1px 0 var(--border-color, #F1E9DA);
         }
         .header-actions {
             gap: 0.5rem;
@@ -504,7 +476,62 @@ $recent_rows = array_slice($recent_rows, 0, 120);
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-                    <?php renderAdminSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item">
+                    <a href="dashboard.php" class="nav-link">
+                        <i class="fas fa-home"></i>
+                        Dashboard
+                    </a>
+                </div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Management</div>
+                <div class="nav-item">
+                    <a href="afa-registration.php" class="nav-link">
+                        <i class="fas fa-user-check"></i>
+                        AFA Registration
+                    </a>
+                </div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Analytics</div>
+                <div class="nav-item">
+                    <a href="transactions.php" class="nav-link">
+                        <i class="fas fa-history"></i>
+                        Transactions
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="data-histories.php" class="nav-link active">
+                        <i class="fas fa-database"></i>
+                        Data Histories
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="reports.php" class="nav-link">
+                        <i class="fas fa-chart-bar"></i>
+                        Reports
+                    </a>
+                </div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Quick Links</div>
+                <div class="nav-item">
+                    <a href="result-checker.php" class="nav-link">
+                        <i class="fas fa-award"></i>
+                        Result Checker
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="support.php" class="nav-link">
+                        <i class="fas fa-life-ring"></i>
+                        Support
+                    </a>
+                </div>
+            </li>
+        </ul>
     </nav>
     <main class="main-content">
         <header class="dashboard-header">

@@ -137,13 +137,13 @@ if ($flash) {
 <html lang="en">
 <head>
     <?php echo generateSeoMeta('Forgot Password', 'Reset your Constechzhub account password securely.'); ?>
-    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>"">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/public-polish.css')); ?>">
     <link rel="manifest" href="manifest.php">
-    <meta name="theme-color" content="#6366f1">
+    <meta name="theme-color" content="#541388">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
-    <link rel="apple-touch-icon" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-192.png')); ?>">
+    <link rel="apple-touch-icon" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-192.png')); ?>"">
 </head>
 <body>
     <div class="login-container">
@@ -196,7 +196,7 @@ if ($flash) {
                 </form>
                 <?php else: ?>
                 <div class="text-center">
-                    <div class="email-sent-icon" style="font-size: 3rem; color: #28a745; margin-bottom: 1rem;">
+                    <div class="email-sent-icon" style="font-size: 3rem; color: #2E294E; margin-bottom: 1rem;">
                         <i class="fas fa-envelope-circle-check"></i>
                     </div>
                     <p class="text-muted">
@@ -273,7 +273,7 @@ if ($flash) {
         // PWA service worker registration
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', function() {
-                navigator.serviceWorker.register('<?php echo htmlspecialchars(dbh_asset('sw.js'), ENT_QUOTES, 'UTF-8'); ?>')
+                navigator.serviceWorker.register('/sw.js')
                     .then(function(registration) {
                         console.log('ServiceWorker registration successful');
                     })
@@ -285,3 +285,4 @@ if ($flash) {
     </script>
 </body>
 </html>
+

@@ -198,8 +198,6 @@ if (!$current_user) {
 $payload = json_decode(file_get_contents('php://input'), true);
 $card_type = strtoupper(trim($payload['card_type'] ?? ''));
 $payment_method = strtolower(trim($payload['payment_method'] ?? 'wallet'));
-$requested_gateway = normalizePaymentGateway($payload['gateway'] ?? '');
-$quantity = isset($payload['quantity']) ? (int) $payload['quantity'] : 1;
 $store_slug = sanitize($payload['store_slug'] ?? '');
 $sms_phone = sanitize($payload['sms_phone'] ?? '');
 $notification_email = sanitize($payload['notification_email'] ?? '');
@@ -223,10 +221,6 @@ if (!in_array($payment_method, ['wallet', 'gateway'], true)) {
     dbh_json_error('Invalid payment method', 400);
 }
 
-if ($quantity < 1) {
-    dbh_json_error('Quantity must be at least 1.', 400);
-}
-
 if (empty($sms_phone) || !validatePhone($sms_phone)) {
     dbh_json_error('Please provide a valid SMS phone number.', 400);
 }
@@ -236,15 +230,13 @@ if ($notification_email !== '' && !validateEmail($notification_email)) {
 }
 
 $current_role = normalizeUserRole($current_user['role'] ?? '');
-$is_agent_buyer = $current_role === normalizeUserRole(defined('ROLE_AGENT') ? ROLE_AGENT : 'agent');
-$is_customer_buyer = isCustomerAccountRole($current_role);
 $requires_email = in_array($current_role, [
     normalizeUserRole(defined('ROLE_AGENT') ? ROLE_AGENT : 'agent'),
-], true) || isCustomerAccountRole($current_role);
+    normalizeUserRole(defined('ROLE_CUSTOMER') ? ROLE_CUSTOMER : 'customer')
+], true);
 if ($requires_email && $notification_email === '') {
     dbh_json_error('Email address is required to complete this purchase.', 400);
 }
-
 
 $sms_phone = formatPhone($sms_phone);
 
@@ -273,7 +265,7 @@ $admin_price = $card_type === 'BECE' ? (float) $settings['bece_price'] : (float)
 
 // Determine agent context for customers
 $agent_id = 0;
-if ($is_customer_buyer) {
+if (($current_user['role'] ?? '') === 'customer') {
     if ($store_slug !== '') {
         $stmt = $db->prepare("
             SELECT ast.agent_id
@@ -298,13 +290,11 @@ if ($is_customer_buyer) {
     if ($agent_id <= 0) {
         $agent_id = getLinkedAgentId($current_user['id']);
     }
-} elseif ($is_agent_buyer) {
-    $agent_id = (int) ($current_user['id'] ?? 0);
 }
 
 // Resolve agent custom price if applicable
 $agent_price = $admin_price;
-if ($agent_id > 0 && $is_customer_buyer) {
+if ($agent_id > 0) {
     if (function_exists('dbh_table_exists') && dbh_table_exists('agent_result_checker_pricing')) {
         $has_is_active = function_exists('dbh_table_has_column') && dbh_table_has_column('agent_result_checker_pricing', 'is_active');
         $has_updated_at = function_exists('dbh_table_has_column') && dbh_table_has_column('agent_result_checker_pricing', 'updated_at');
@@ -340,17 +330,11 @@ if ($agent_id > 0 && $is_customer_buyer) {
     }
 }
 
-$unit_price_to_charge = ($agent_id > 0 && $is_customer_buyer) ? $agent_price : $admin_price;
-$unit_price_to_charge = round($unit_price_to_charge, 2);
-$unit_admin_price = round($admin_price, 2);
-$unit_profit_amount = $agent_id > 0 && function_exists('calculateAgentCheckerCommissionAmount')
-    ? calculateAgentCheckerCommissionAmount(1)
-    : 0.0;
-$unit_profit_amount = round($unit_profit_amount, 2);
-
-$price_to_charge = round($unit_price_to_charge * $quantity, 2);
-$admin_price = round($unit_admin_price * $quantity, 2);
-$profit_amount = round($unit_profit_amount * $quantity, 2);
+$price_to_charge = $agent_id > 0 ? $agent_price : $admin_price;
+$price_to_charge = round($price_to_charge, 2);
+$admin_price = round($admin_price, 2);
+$profit_amount = $agent_id > 0 ? max(0, $price_to_charge - $admin_price) : 0.0;
+$profit_amount = round($profit_amount, 2);
 
 // Quick availability check
 $stmt = $db->prepare("SELECT COUNT(*) AS total_count FROM result_checker_cards WHERE card_type = ? AND status = 'available'");
@@ -364,36 +348,29 @@ if (!$stmt->execute()) {
 }
 $available_row = dbh_stmt_fetch_assoc($stmt);
 $stmt->close();
-if (!$available_row || (int) $available_row['total_count'] < $quantity) {
-    dbh_json_error('Only ' . (int) ($available_row['total_count'] ?? 0) . ' cards available for the selected type.', 400);
+if (!$available_row || (int) $available_row['total_count'] <= 0) {
+    dbh_json_error('No cards available for the selected type.', 400);
 }
 
 if ($payment_method === 'gateway') {
-    if ($requested_gateway !== '' && !isPaymentGatewayEnabled($requested_gateway)) {
-        dbh_json_error('Selected payment gateway is currently unavailable.', 400);
-    }
-
-    $gateway = $requested_gateway !== '' ? $requested_gateway : getActivePaymentGateway();
-    if (!in_array($gateway, ['paystack', 'moolre'], true) || !isPaymentGatewayEnabled($gateway)) {
+    $gateway = getActivePaymentGateway();
+    if (!in_array($gateway, ['paystack', 'moolre'], true)) {
         http_response_code(400);
         echo json_encode(['status' => 'error', 'message' => 'No active payment gateway available']);
         exit();
     }
 
     $reference = generateReference('RC');
-    $description = "{$card_type} result checker card purchase" . ($quantity > 1 ? " x{$quantity}" : '');
+    $description = "{$card_type} result checker card purchase";
     $metadata = [
         'type' => 'result_checker_purchase',
         'card_type' => $card_type,
-        'quantity' => $quantity,
         'agent_id' => $agent_id,
         'admin_price' => $admin_price,
-        'profit_amount' => $profit_amount,
         'sms_phone' => $sms_phone,
         'notification_email' => $notification_email,
         'store_slug' => $store_slug,
         'buyer_name' => $current_user['full_name'] ?? '',
-        'buyer_email' => $current_user['email'] ?? '',
         'buyer_role' => $current_user['role'] ?? 'customer',
         'return_to' => ($current_user['role'] ?? '') === 'agent' ? '/agent/result-checker.php' : '/customer/result-checker.php'
     ];
@@ -442,8 +419,15 @@ if ($payment_method === 'gateway') {
 
     if ($gateway === 'paystack') {
         ensureCurlAvailable();
-        $paystack_secret_key = dbh_env('PAYSTACK_SECRET_KEY', PAYSTACK_SECRET_KEY);
-        if (!$paystack_secret_key || stripos($paystack_secret_key, 'your_secret_key_here') !== false) {
+        $paystack_secret_key = dbh_env('PAYSTACK_SECRET_KEY');
+        $isInvalidPaystackKey = function ($key) {
+            $key = trim((string) $key);
+            return $key === '' || stripos($key, 'your_secret_key_here') !== false;
+        };
+        if ($isInvalidPaystackKey($paystack_secret_key)) {
+            $paystack_secret_key = PAYSTACK_SECRET_KEY;
+        }
+        if ($isInvalidPaystackKey($paystack_secret_key)) {
             dbh_json_error('Paystack keys are not configured.', 400);
         }
 
@@ -546,30 +530,17 @@ if ($payment_method === 'gateway') {
 
 // Wallet purchase flow
 $reference = generateReference('RC');
-$description = "{$card_type} result checker card purchase" . ($quantity > 1 ? " x{$quantity}" : '');
+$description = "{$card_type} result checker card purchase";
 $agent_reference = generateReference('RCAG');
-$is_agent_self_order = $is_agent_buyer && $agent_id === (int) ($current_user['id'] ?? 0);
 
-if ($is_agent_self_order) {
+if (($current_user['role'] ?? '') === 'agent') {
+    $agent_id = 0;
     $price_to_charge = $admin_price;
+    $profit_amount = 0.0;
 }
 
-$buyer_previous_balance = null;
-$buyer_current_balance = null;
-
-if ($is_agent_self_order) {
-    $balance = getWalletBalance($current_user['id']);
-    $buyer_previous_balance = $balance;
-    if ($balance < $price_to_charge) {
-        dbh_json_error('Insufficient wallet balance. Please top up.', 400);
-    }
-    if (!updateWalletBalance($current_user['id'], $price_to_charge, 'debit', $reference, $description)) {
-        dbh_json_error('Failed to deduct wallet balance', 500);
-    }
-    $buyer_current_balance = getWalletBalance($current_user['id']);
-} elseif ($agent_id > 0) {
+if ($agent_id > 0) {
     $customer_balance = getWalletBalance($current_user['id']);
-    $buyer_previous_balance = $customer_balance;
     if ($customer_balance < $price_to_charge) {
         dbh_json_error('Insufficient wallet balance. Please top up.', 400);
     }
@@ -582,7 +553,6 @@ if ($is_agent_self_order) {
     if (!transferWalletBalance($current_user['id'], $agent_id, $price_to_charge, $reference, $description)) {
         dbh_json_error('Failed to process payment', 500);
     }
-    $buyer_current_balance = getWalletBalance($current_user['id']);
 
     if (!updateWalletBalance($agent_id, $admin_price, 'debit', $agent_reference, 'Result checker wholesale cost')) {
         // Refund transfer if wholesale debit fails
@@ -591,118 +561,98 @@ if ($is_agent_self_order) {
     }
 } else {
     $balance = getWalletBalance($current_user['id']);
-    $buyer_previous_balance = $balance;
     if ($balance < $price_to_charge) {
         dbh_json_error('Insufficient wallet balance. Please top up.', 400);
     }
     if (!updateWalletBalance($current_user['id'], $price_to_charge, 'debit', $reference, $description)) {
         dbh_json_error('Failed to deduct wallet balance', 500);
     }
-    $buyer_current_balance = getWalletBalance($current_user['id']);
 }
 
-$cards = [];
+// Allocate a card
+$stmt = $db->prepare("
+    SELECT id, pin, serial_number
+    FROM result_checker_cards
+    WHERE card_type = ? AND status = 'available'
+    ORDER BY id ASC
+    LIMIT 1
+");
+if (!$stmt) {
+    dbh_json_error('Unable to allocate card. Please try again.', 500);
+}
+$stmt->bind_param('s', $card_type);
+if (!$stmt->execute()) {
+    $stmt->close();
+    dbh_json_error('Unable to allocate card. Please try again.', 500);
+}
+$card = dbh_stmt_fetch_assoc($stmt);
+$stmt->close();
 
-try {
-    $db->getConnection()->begin_transaction();
-
-    // Allocate and reserve cards
-    for ($i = 0; $i < $quantity; $i++) {
-        $stmt = $db->prepare("
-            SELECT id, pin, serial_number
-            FROM result_checker_cards
-            WHERE card_type = ? AND status = 'available'
-            ORDER BY id ASC
-            LIMIT 1
-            FOR UPDATE
-        ");
-        if (!$stmt) {
-            throw new Exception('Unable to allocate card. Please try again.');
-        }
-        $stmt->bind_param('s', $card_type);
-        if (!$stmt->execute()) {
-            $stmt->close();
-            throw new Exception('Unable to allocate card. Please try again.');
-        }
-        $card = dbh_stmt_fetch_assoc($stmt);
-        $stmt->close();
-
-        if (!$card) {
-            throw new Exception('No cards available. Payment reversed.');
-        }
-
-        $stmt = $db->prepare("
-            UPDATE result_checker_cards
-            SET status = 'purchased', purchased_by = ?, purchased_at = NOW()
-            WHERE id = ? AND status = 'available'
-        ");
-        if (!$stmt) {
-            throw new Exception('Card allocation failed. Payment reversed.');
-        }
-        $stmt->bind_param('ii', $current_user['id'], $card['id']);
-        if (!$stmt->execute()) {
-            $stmt->close();
-            throw new Exception('Card allocation failed. Payment reversed.');
-        }
-        $affected = (int) $stmt->affected_rows;
-        $stmt->close();
-
-        if ($affected <= 0) {
-            throw new Exception('Card allocation failed. Payment reversed.');
-        }
-
-        $cards[] = $card;
-    }
-
-    // Record each purchased card
-    foreach ($cards as $index => $card) {
-        $card_reference = $quantity > 1 ? ($reference . '-' . ($index + 1)) : $reference;
-        $successFields = [
-            ['column' => 'user_id', 'type' => 'i', 'value' => $current_user['id']],
-            ['column' => 'agent_id', 'type' => 'i', 'value' => $agent_id],
-            ['column' => 'card_id', 'type' => 'i', 'value' => $card['id']],
-            ['column' => 'card_type', 'type' => 's', 'value' => $card_type],
-            ['column' => 'amount', 'type' => 'd', 'value' => $unit_price_to_charge],
-            ['column' => 'admin_price', 'type' => 'd', 'value' => $unit_admin_price],
-            ['column' => 'profit_amount', 'type' => 'd', 'value' => $unit_profit_amount],
-            ['column' => 'payment_gateway', 'type' => 's', 'value' => 'wallet'],
-            ['column' => 'reference', 'type' => 's', 'value' => $card_reference],
-            ['column' => 'status', 'type' => 's', 'value' => 'success'],
-            ['column' => 'pin', 'type' => 's', 'value' => $card['pin']],
-            ['column' => 'serial_number', 'type' => 's', 'value' => $card['serial_number']],
-            ['column' => 'sms_phone', 'type' => 's', 'value' => $sms_phone],
-            ['column' => 'notification_email', 'type' => 's', 'value' => $notification_email],
-        ];
-
-        [$sql, $types, $values, $error] = dbh_build_insert_query(
-            'result_checker_purchases',
-            $successFields,
-            ['user_id', 'card_id', 'card_type', 'amount', 'reference', 'pin', 'serial_number']
-        );
-        if ($error) {
-            throw new Exception($error);
-        }
-        $insert = dbh_execute_prepared($db, $sql, $types, $values);
-        if (!$insert['ok']) {
-            throw new Exception('Failed to record purchase. Please try again.');
-        }
-    }
-
-    $db->getConnection()->commit();
-} catch (Exception $e) {
-    $db->getConnection()->rollback();
-
-    // Refund wallet operations when card allocation/recording fails
-    if ($is_agent_self_order) {
-        updateWalletBalance($current_user['id'], $price_to_charge, 'credit', $reference . '_REFUND', 'Refund: ' . $e->getMessage());
-    } elseif ($agent_id > 0) {
-        updateWalletBalance($agent_id, $admin_price, 'credit', $agent_reference . '_REFUND', 'Refund: ' . $e->getMessage());
-        transferWalletBalance($agent_id, $current_user['id'], $price_to_charge, $reference . '_REFUND', 'Refund: ' . $e->getMessage());
+if (!$card) {
+    // Refund wallet operations
+    if ($agent_id > 0) {
+        updateWalletBalance($agent_id, $admin_price, 'credit', $agent_reference . '_REFUND', 'Refund: card not available');
+        transferWalletBalance($agent_id, $current_user['id'], $price_to_charge, $reference . '_REFUND', 'Refund: card not available');
     } else {
-        updateWalletBalance($current_user['id'], $price_to_charge, 'credit', $reference . '_REFUND', 'Refund: ' . $e->getMessage());
+        updateWalletBalance($current_user['id'], $price_to_charge, 'credit', $reference . '_REFUND', 'Refund: card not available');
     }
+    dbh_json_error('No cards available. Payment reversed.', 400);
+}
 
-    dbh_json_error($e->getMessage(), 400);
+$stmt = $db->prepare("
+    UPDATE result_checker_cards
+    SET status = 'purchased', purchased_by = ?, purchased_at = NOW()
+    WHERE id = ? AND status = 'available'
+");
+if (!$stmt) {
+    dbh_json_error('Card allocation failed. Payment reversed.', 500);
+}
+$stmt->bind_param('ii', $current_user['id'], $card['id']);
+if (!$stmt->execute()) {
+    $stmt->close();
+    dbh_json_error('Card allocation failed. Payment reversed.', 500);
+}
+$stmt->close();
+
+if ($stmt->affected_rows <= 0) {
+    if ($agent_id > 0) {
+        updateWalletBalance($agent_id, $admin_price, 'credit', $agent_reference . '_REFUND', 'Refund: card allocation failed');
+        transferWalletBalance($agent_id, $current_user['id'], $price_to_charge, $reference . '_REFUND', 'Refund: card allocation failed');
+    } else {
+        updateWalletBalance($current_user['id'], $price_to_charge, 'credit', $reference . '_REFUND', 'Refund: card allocation failed');
+    }
+    dbh_json_error('Card allocation failed. Payment reversed.', 400);
+}
+
+// Record purchase
+$successFields = [
+    ['column' => 'user_id', 'type' => 'i', 'value' => $current_user['id']],
+    ['column' => 'agent_id', 'type' => 'i', 'value' => $agent_id],
+    ['column' => 'card_id', 'type' => 'i', 'value' => $card['id']],
+    ['column' => 'card_type', 'type' => 's', 'value' => $card_type],
+    ['column' => 'amount', 'type' => 'd', 'value' => $price_to_charge],
+    ['column' => 'admin_price', 'type' => 'd', 'value' => $admin_price],
+    ['column' => 'profit_amount', 'type' => 'd', 'value' => $profit_amount],
+    ['column' => 'payment_gateway', 'type' => 's', 'value' => 'wallet'],
+    ['column' => 'reference', 'type' => 's', 'value' => $reference],
+    ['column' => 'status', 'type' => 's', 'value' => 'success'],
+    ['column' => 'pin', 'type' => 's', 'value' => $card['pin']],
+    ['column' => 'serial_number', 'type' => 's', 'value' => $card['serial_number']],
+    ['column' => 'sms_phone', 'type' => 's', 'value' => $sms_phone],
+    ['column' => 'notification_email', 'type' => 's', 'value' => $notification_email],
+];
+
+[$sql, $types, $values, $error] = dbh_build_insert_query(
+    'result_checker_purchases',
+    $successFields,
+    ['user_id', 'card_id', 'card_type', 'amount', 'reference', 'pin', 'serial_number']
+);
+if ($error) {
+    dbh_json_error($error, 500);
+}
+$insert = dbh_execute_prepared($db, $sql, $types, $values);
+if (!$insert['ok']) {
+    dbh_json_error('Failed to record purchase. Please try again.', 500, ['detail' => $insert['error']]);
 }
 
 // Record transaction rows
@@ -716,8 +666,8 @@ if ($stmt) {
     $stmt->close();
 }
 
-if ($agent_id > 0 && !$is_agent_self_order) {
-    $agent_desc = 'Result checker wholesale cost for ' . $card_type . ' card' . ($quantity > 1 ? " x{$quantity}" : '');
+if ($agent_id > 0) {
+    $agent_desc = 'Result checker wholesale cost for ' . $card_type . ' card';
     $stmt = $db->prepare("
         INSERT INTO transactions (user_id, transaction_type, amount, status, reference, payment_method, description)
         VALUES (?, 'purchase', ?, 'success', ?, 'wallet', ?)
@@ -729,73 +679,16 @@ if ($agent_id > 0 && !$is_agent_self_order) {
     }
 }
 
-if ($is_agent_self_order && $profit_amount > 0 && function_exists('recordAgentCommission')) {
-    recordAgentCommission([
-        'agent_id' => (int) $current_user['id'],
-        'source_type' => 'checker',
-        'source_reference' => (string) $reference,
-        'amount' => $profit_amount,
-        'quantity' => $quantity,
-        'rate_snapshot' => function_exists('getAgentCommissionSettings') ? (float) (getAgentCommissionSettings()['checker_rate_per_card'] ?? 0) : null,
-        'notes' => $card_type . ' checker card' . ($quantity > 1 ? ' x' . $quantity : ''),
-    ]);
-}
-
-if ($agent_id > 0 && !$is_agent_self_order && $profit_amount > 0 && function_exists('sendAgentProfitNotification')) {
-    sendAgentProfitNotification([
-        'agent_id' => $agent_id,
-        'service' => 'Result Checker Purchase',
-        'reference' => $reference,
-        'customer_name' => $current_user['full_name'] ?? '',
-        'customer_email' => $current_user['email'] ?? '',
-        'beneficiary_number' => $sms_phone,
-        'item' => $card_type . ($quantity > 1 ? ' x' . $quantity : ''),
-        'amount' => $price_to_charge,
-        'profit_amount' => $profit_amount,
-        'payment_method' => 'wallet',
-        'status' => 'success',
-    ]);
-}
-
 // Send SMS with card details
 $checker_link = $card_type === 'BECE' ? ($settings['bece_checker_link'] ?? '') : ($settings['wassce_checker_link'] ?? '');
 if (function_exists('curl_init')) {
-    foreach ($cards as $card) {
-        sendResultCheckerSms($sms_phone, $card_type, $card['pin'], $card['serial_number'], $checker_link, $current_user['id']);
-    }
+    sendResultCheckerSms($sms_phone, $card_type, $card['pin'], $card['serial_number'], $checker_link, $current_user['id']);
 } else {
     error_log('Result checker SMS skipped: cURL extension not available.');
 }
 if ($notification_email) {
-    foreach ($cards as $card) {
-        sendResultCheckerEmail($notification_email, $card_type, $card['pin'], $card['serial_number'], $checker_link, $current_user['full_name'] ?? '');
-    }
+    sendResultCheckerEmail($notification_email, $card_type, $card['pin'], $card['serial_number'], $checker_link, $current_user['full_name'] ?? '');
 }
-if ($buyer_current_balance === null) {
-    $buyer_current_balance = getWalletBalance($current_user['id']);
-}
-if ($buyer_previous_balance === null) {
-    $buyer_previous_balance = $buyer_current_balance;
-}
-
-sendUserOrderNotification([
-    'order_type' => 'result_checker',
-    'reference' => $reference,
-    'user_id' => (int) $current_user['id'],
-    'buyer_name' => $current_user['full_name'] ?? '',
-    'buyer_email' => $current_user['email'] ?? '',
-    'customer_name' => $current_user['full_name'] ?? '',
-    'customer_email' => $current_user['email'] ?? '',
-    'buyer_role' => $current_user['role'] ?? 'customer',
-    'card_type' => $card_type,
-    'quantity' => $quantity,
-    'amount' => $price_to_charge,
-    'payment_method' => 'wallet',
-    'status' => 'success',
-    'previous_balance' => $buyer_previous_balance,
-    'current_balance' => $buyer_current_balance,
-    'source' => 'result_checker_wallet_purchase'
-]);
 
 sendAdminResultCheckerOrderNotification([
     'reference' => $reference,
@@ -803,14 +696,11 @@ sendAdminResultCheckerOrderNotification([
     'buyer_name' => $current_user['full_name'] ?? '',
     'buyer_email' => $current_user['email'] ?? '',
     'card_type' => $card_type,
-    'quantity' => $quantity,
     'amount' => $price_to_charge,
     'admin_price' => $admin_price,
     'profit_amount' => $profit_amount,
     'payment_method' => 'wallet',
     'status' => 'success',
-    'previous_balance' => $buyer_previous_balance,
-    'current_balance' => $buyer_current_balance,
     'agent_id' => $agent_id,
     'source' => 'result_checker_wallet_purchase'
 ]);
@@ -820,17 +710,9 @@ dbh_json_response([
     'message' => 'Purchase successful',
     'data' => [
         'card_type' => $card_type,
-        'quantity' => $quantity,
+        'pin' => $card['pin'],
+        'serial_number' => $card['serial_number'],
         'reference' => $reference,
-        'amount' => $price_to_charge,
-        'unit_amount' => $unit_price_to_charge,
-        'cards' => array_map(function ($card) {
-            return [
-                'pin' => $card['pin'],
-                'serial_number' => $card['serial_number']
-            ];
-        }, $cards),
-        'pin' => $cards[0]['pin'] ?? '',
-        'serial_number' => $cards[0]['serial_number'] ?? ''
+        'amount' => $price_to_charge
     ]
 ]);

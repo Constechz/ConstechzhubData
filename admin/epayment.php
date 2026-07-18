@@ -168,11 +168,11 @@ $flash = getFlashMessage();
             }
 
             .epayment-table tbody tr {
-                border: 1px solid var(--border-color, #e2e8f0);
+                border: 1px solid var(--border-color, #F1E9DA);
                 border-radius: 8px;
                 padding: 0.75rem 1rem;
                 margin-bottom: 1rem;
-                background: var(--card-bg, #fff);
+                background: var(--card-bg, #F1E9DA);
             }
 
             .epayment-table tbody td {
@@ -188,20 +188,20 @@ $flash = getFlashMessage();
             .epayment-table tbody td::before {
                 content: attr(data-label);
                 font-weight: 600;
-                color: var(--text-muted, #64748b);
+                color: var(--text-muted, #541388);
             }
 
             [data-theme="dark"] .epayment-table tbody tr {
-                background: #140b22;
-                border-color: #2b1f40;
+                background: #2E294E;
+                border-color: #2E294E;
             }
 
             [data-theme="dark"] .epayment-table tbody td {
-                color: #e2e8f0;
+                color: #F1E9DA;
             }
 
             [data-theme="dark"] .epayment-table tbody td::before {
-                color: #cbd5f5;
+                color: #F1E9DA;
             }
         }
     </style>
@@ -213,7 +213,34 @@ $flash = getFlashMessage();
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-                    <?php renderAdminSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Management</div>
+                <div class="nav-item"><a href="packages.php" class="nav-link"><i class="fas fa-box"></i> Data Packages</a></div>
+                <div class="nav-item"><a href="pricing.php" class="nav-link"><i class="fas fa-tags"></i> Pricing</a></div>
+                <div class="nav-item"><a href="afa-registration.php" class="nav-link"><i class="fas fa-user-check"></i> AFA Registration</a></div>
+                <div class="nav-item"><a href="users.php" class="nav-link"><i class="fas fa-users"></i> Users</a></div>
+                <div class="nav-item"><a href="agents.php" class="nav-link"><i class="fas fa-user-tie"></i> Agents</a></div>
+            
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Analytics</div>
+                <div class="nav-item"><a href="transactions.php" class="nav-link"><i class="fas fa-history"></i> Transactions</a></div>
+                <div class="nav-item"><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></div>
+                <div class="nav-item"><a href="epayment.php" class="nav-link active"><i class="fas fa-wallet"></i> ePayment</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item"><a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> System Settings</a></div>
+                <div class="nav-item"><a href="email-broadcast.php" class="nav-link"><i class="fas fa-paper-plane"></i> Email Broadcasts</a></div>
+                <div class="nav-item"><a href="system-reset.php" class="nav-link"><i class="fas fa-broom"></i> System Reset</a></div>
+            </li>
+        </ul>
                 <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
     </nav>
 

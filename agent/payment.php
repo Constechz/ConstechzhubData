@@ -48,12 +48,12 @@ if ($token !== '') {
     <link rel="dns-prefetch" href="https://pos.moolre.com">
     <style>
         :root {
-            --bg: #f6f6fb;
-            --card: #ffffff;
-            --text: #0f172a;
-            --muted: #5f667d;
-            --accent: #6c5ce7;
-            --border: rgba(15, 23, 42, 0.12);
+            --bg: #F1E9DA;
+            --card: #F1E9DA;
+            --text: #2E294E;
+            --muted: #541388;
+            --accent: #541388;
+            --border: rgba(46, 41, 78, 0.12);
         }
         * { box-sizing: border-box; }
         body {
@@ -73,7 +73,7 @@ if ($token !== '') {
             border: 1px solid var(--border);
             border-radius: 18px;
             padding: 2rem;
-            box-shadow: 0 18px 40px rgba(15, 23, 42, 0.12);
+            box-shadow: 0 18px 40px rgba(46, 41, 78, 0.12);
             text-align: center;
         }
         .brand {
@@ -98,8 +98,8 @@ if ($token !== '') {
             padding: 0.7rem 1.4rem;
             border-radius: 999px;
             border: 1px solid transparent;
-            background: linear-gradient(135deg, var(--accent), #3b82f6);
-            color: #fff;
+            background: linear-gradient(135deg, var(--accent), #541388);
+            color: #F1E9DA;
             font-weight: 600;
             text-decoration: none;
         }
@@ -120,7 +120,7 @@ if ($token !== '') {
             border-radius: 16px;
             overflow: hidden;
             border: 1px solid var(--border);
-            background: #fff;
+            background: #F1E9DA;
         }
         .payment-frame {
             width: 100%;
@@ -130,7 +130,7 @@ if ($token !== '') {
         .spinner {
             width: 28px;
             height: 28px;
-            border: 3px solid rgba(108, 92, 231, 0.2);
+            border: 3px solid rgba(84, 19, 136, 0.2);
             border-top-color: var(--accent);
             border-radius: 50%;
             margin: 0 auto 1rem;
@@ -200,3 +200,4 @@ if ($token !== '') {
     <?php endif; ?>
 </body>
 </html>
+

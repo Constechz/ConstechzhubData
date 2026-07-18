@@ -8,15 +8,48 @@ requireRole('admin');
 
 $current_user = getCurrentUser();
 
-if (function_exists('ensureToppilyProviderBootstrap')) {
-    ensureToppilyProviderBootstrap();
-}
-if (function_exists('ensureHubnetProviderBootstrap')) {
-    ensureHubnetProviderBootstrap();
-}
-if (function_exists('ensureDatawaxProviderBootstrap')) {
-    ensureDatawaxProviderBootstrap();
-}
+// Providers to hide from this admin screen.
+$excluded_provider_terms = ['arkesel', 'etruba hub', 'etrubahub'];
+$is_provider_excluded = static function ($name, $slug = '') use ($excluded_provider_terms) {
+    $name = strtolower(trim((string) $name));
+    $slug = strtolower(trim((string) $slug));
+
+    foreach ($excluded_provider_terms as $term) {
+        if (($name !== '' && strpos($name, $term) !== false) || ($slug !== '' && strpos($slug, $term) !== false)) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+$fetch_provider_by_id = static function ($provider_id) use ($db) {
+    $provider_id = (int) $provider_id;
+    if ($provider_id <= 0) {
+        return null;
+    }
+
+    $stmt = $db->prepare("SELECT id, name, slug FROM api_providers WHERE id = ? LIMIT 1");
+    if (!$stmt) {
+        return null;
+    }
+
+    $stmt->bind_param('i', $provider_id);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+
+    return $row ?: null;
+};
+
+$is_provider_allowed_id = static function ($provider_id) use ($fetch_provider_by_id, $is_provider_excluded) {
+    $provider = $fetch_provider_by_id($provider_id);
+    if (!$provider) {
+        return false;
+    }
+
+    return !$is_provider_excluded($provider['name'] ?? '', $provider['slug'] ?? '');
+};
 
 // Handle form submissions
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -26,7 +59,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $network_id = intval($_POST['network_id']);
                 $primary_provider_id = intval($_POST['primary_provider_id']);
                 $backup_provider_id = !empty($_POST['backup_provider_id']) ? intval($_POST['backup_provider_id']) : null;
-                
+
+                $primary_allowed = $is_provider_allowed_id($primary_provider_id);
+                $backup_allowed = $backup_provider_id === null || $is_provider_allowed_id($backup_provider_id);
+
+                if (!$primary_allowed || !$backup_allowed) {
+                    setFlashMessage('error', 'Selected provider is not available for configuration.');
+                    break;
+                }
+
                 if (switchNetworkProvider($network_id, $primary_provider_id, $backup_provider_id)) {
                     setFlashMessage('success', 'Provider configuration updated successfully');
                 } else {
@@ -37,119 +78,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             case 'toggle_provider':
                 $provider_id = intval($_POST['provider_id']);
                 $is_active = intval($_POST['is_active']);
-                if ($provider_id <= 0 || !in_array($is_active, [0, 1], true)) {
-                    setFlashMessage('error', 'Invalid provider toggle request.');
+
+                if (!$is_provider_allowed_id($provider_id)) {
+                    setFlashMessage('error', 'This provider cannot be managed from this page.');
                     break;
                 }
 
+                $conn = $db->getConnection();
+                $conn->begin_transaction();
+
                 try {
-                    // Toggle only provider-level status.
-                    // Keep per-network endpoint statuses and network mappings unchanged.
                     $stmt = $db->prepare("UPDATE api_providers SET is_active = ? WHERE id = ?");
-                    if (!$stmt) {
-                        throw new Exception('Failed to prepare provider status update');
-                    }
                     $stmt->bind_param('ii', $is_active, $provider_id);
                     if (!$stmt->execute()) {
                         throw new Exception('Failed to update provider status');
                     }
 
+                    // When deactivated, block any network mappings and endpoints that reference this provider.
+                    $endpoint_flag = $is_active ? 1 : 0;
+                    $stmt = $db->prepare("UPDATE provider_endpoints SET is_active = ? WHERE provider_id = ?");
+                    $stmt->bind_param('ii', $endpoint_flag, $provider_id);
+                    if (!$stmt->execute()) {
+                        throw new Exception('Failed to update provider endpoints');
+                    }
+
+                    $stmt = $db->prepare("
+                        UPDATE network_providers
+                        SET is_active = ?
+                        WHERE primary_provider_id = ? OR backup_provider_id = ?
+                    ");
+                    $stmt->bind_param('iii', $endpoint_flag, $provider_id, $provider_id);
+                    if (!$stmt->execute()) {
+                        throw new Exception('Failed to update network mappings');
+                    }
+
+                    $conn->commit();
                     $status = $is_active ? 'activated' : 'deactivated';
-                    setFlashMessage('success', "Provider {$status} successfully. Endpoint and network-type settings were preserved.");
+                    setFlashMessage('success', "Provider {$status} successfully");
                 } catch (Exception $e) {
+                    $conn->rollback();
                     error_log('Provider toggle failed: ' . $e->getMessage());
                     setFlashMessage('error', 'Failed to update provider status');
-                }
-                break;
-
-            case 'toggle_endpoint':
-                $endpoint_id = intval($_POST['endpoint_id'] ?? 0);
-                $provider_id = intval($_POST['provider_id'] ?? 0);
-                $is_active = intval($_POST['is_active'] ?? 0);
-
-                if ($endpoint_id <= 0 || !in_array($is_active, [0, 1], true)) {
-                    setFlashMessage('error', 'Invalid network-type toggle request.');
-                    break;
-                }
-
-                try {
-                    if ($provider_id > 0) {
-                        $stmt = $db->prepare("UPDATE provider_endpoints SET is_active = ? WHERE id = ? AND provider_id = ?");
-                        if (!$stmt) {
-                            throw new Exception('Failed to prepare endpoint status update');
-                        }
-                        $stmt->bind_param('iii', $is_active, $endpoint_id, $provider_id);
-                    } else {
-                        $stmt = $db->prepare("UPDATE provider_endpoints SET is_active = ? WHERE id = ?");
-                        if (!$stmt) {
-                            throw new Exception('Failed to prepare endpoint status update');
-                        }
-                        $stmt->bind_param('ii', $is_active, $endpoint_id);
-                    }
-
-                    if (!$stmt->execute()) {
-                        throw new Exception('Failed to update endpoint status');
-                    }
-
-                    $status = $is_active ? 'activated' : 'deactivated';
-                    setFlashMessage('success', "Network-type endpoint {$status} successfully.");
-                } catch (Exception $e) {
-                    error_log('Endpoint toggle failed: ' . $e->getMessage());
-                    setFlashMessage('error', 'Failed to update network-type endpoint status');
-                }
-                break;
-
-            case 'bulk_toggle_endpoints':
-                $provider_id = intval($_POST['provider_id'] ?? 0);
-                $is_active = intval($_POST['is_active'] ?? 0);
-                $endpoint_ids = [];
-
-                if (!empty($_POST['endpoint_ids_csv'])) {
-                    $raw_ids = explode(',', (string) $_POST['endpoint_ids_csv']);
-                    foreach ($raw_ids as $raw_id) {
-                        $endpoint_id = intval(trim((string) $raw_id));
-                        if ($endpoint_id > 0) {
-                            $endpoint_ids[] = $endpoint_id;
-                        }
-                    }
-                }
-
-                $endpoint_ids = array_values(array_unique($endpoint_ids));
-
-                if (empty($endpoint_ids) || !in_array($is_active, [0, 1], true)) {
-                    setFlashMessage('error', 'Select at least one endpoint before running a bulk action.');
-                    break;
-                }
-
-                try {
-                    $placeholders = implode(',', array_fill(0, count($endpoint_ids), '?'));
-
-                    if ($provider_id > 0) {
-                        $sql = "UPDATE provider_endpoints SET is_active = ? WHERE provider_id = ? AND id IN ({$placeholders})";
-                        $types = 'ii' . str_repeat('i', count($endpoint_ids));
-                        $params = array_merge([$is_active, $provider_id], $endpoint_ids);
-                    } else {
-                        $sql = "UPDATE provider_endpoints SET is_active = ? WHERE id IN ({$placeholders})";
-                        $types = 'i' . str_repeat('i', count($endpoint_ids));
-                        $params = array_merge([$is_active], $endpoint_ids);
-                    }
-
-                    $stmt = $db->prepare($sql);
-                    if (!$stmt) {
-                        throw new Exception('Failed to prepare bulk endpoint status update');
-                    }
-
-                    $stmt->bind_param($types, ...$params);
-                    if (!$stmt->execute()) {
-                        throw new Exception('Failed to update selected endpoints');
-                    }
-
-                    $affected = (int) $stmt->affected_rows;
-                    $status = $is_active ? 'activated' : 'deactivated';
-                    setFlashMessage('success', "{$affected} endpoint(s) {$status} successfully.");
-                } catch (Exception $e) {
-                    error_log('Bulk endpoint toggle failed: ' . $e->getMessage());
-                    setFlashMessage('error', 'Failed to update selected endpoints.');
                 }
                 break;
 
@@ -165,7 +134,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $valid_auth_types = ['bearer', 'api_key', 'header'];
                 $timeout_seconds = $timeout_seconds > 0 ? $timeout_seconds : 20;
                 $retry_attempts = $retry_attempts >= 0 ? $retry_attempts : 0;
-                
+
+                if (!$is_provider_allowed_id($provider_id)) {
+                    setFlashMessage('error', 'This provider cannot be managed from this page.');
+                    break;
+                }
+
                 if ($provider_id <= 0 || empty($base_url) || empty($auth_token) || !in_array($auth_type, $valid_auth_types, true)) {
                     setFlashMessage('error', 'Invalid provider details submitted. Please review and try again.');
                     break;
@@ -264,7 +238,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $providers = [];
 $result = $db->query("SELECT * FROM api_providers ORDER BY name");
 while ($row = $result->fetch_assoc()) {
+    if ($is_provider_excluded($row['name'] ?? '', $row['slug'] ?? '')) {
+        continue;
+    }
     $providers[] = $row;
+}
+$visible_provider_lookup = [];
+foreach ($providers as $provider_row) {
+    $visible_provider_lookup[(int)($provider_row['id'] ?? 0)] = true;
 }
 
 // Get all networks
@@ -290,62 +271,50 @@ $result = $db->query("
     ORDER BY n.name
 ");
 while ($row = $result->fetch_assoc()) {
+    $primary_provider_id = (int)($row['primary_provider_id'] ?? 0);
+    $backup_provider_id = (int)($row['backup_provider_id'] ?? 0);
+
+    if (!isset($visible_provider_lookup[$primary_provider_id])) {
+        continue;
+    }
+
+    if ($backup_provider_id > 0 && !isset($visible_provider_lookup[$backup_provider_id])) {
+        $row['backup_provider_id'] = null;
+        $row['backup_provider_name'] = null;
+    }
+
     $network_mappings[] = $row;
 }
 
 // Get provider statistics
 $provider_stats = getProviderStats(7);
+if (!empty($provider_stats)) {
+    $provider_stats = array_values(array_filter($provider_stats, static function ($stat) use ($is_provider_excluded) {
+        return !$is_provider_excluded($stat['provider_name'] ?? '', '');
+    }));
+}
 
 // Load provider-specific endpoint configurations
 $provider_endpoints = [];
-$endpoint_toggle_rows = [];
 $endpoint_result = $db->query("
     SELECT 
         pe.*,
-        n.name AS network_name,
-        ap.name AS provider_name,
-        ap.is_active AS provider_is_active
+        n.name AS network_name
     FROM provider_endpoints pe
     JOIN networks n ON pe.network_id = n.id
-    JOIN api_providers ap ON ap.id = pe.provider_id
     ORDER BY pe.provider_id, n.name, pe.endpoint_type
 ");
 
 if ($endpoint_result) {
     while ($row = $endpoint_result->fetch_assoc()) {
         $provider_id = (int)$row['provider_id'];
+        if (!isset($visible_provider_lookup[$provider_id])) {
+            continue;
+        }
         if (!isset($provider_endpoints[$provider_id])) {
             $provider_endpoints[$provider_id] = [];
         }
         $provider_endpoints[$provider_id][] = $row;
-        $endpoint_toggle_rows[] = $row;
-    }
-}
-
-if (!function_exists('formatNetworkTypeLabel')) {
-    function formatNetworkTypeLabel($network_name, $endpoint_type) {
-        $network = strtoupper(trim((string)$network_name));
-        $type = strtolower(trim((string)$endpoint_type));
-
-        if ($network === 'AT') {
-            if ($type === 'regular') {
-                return 'AT ISHARE';
-            }
-            if ($type === 'bigtime') {
-                return 'AT BIG TIME';
-            }
-        }
-
-        if ($type === 'regular') {
-            return $network;
-        }
-        if ($type === 'bigtime') {
-            return $network . ' BIG TIME';
-        }
-        if ($type === 'special') {
-            return $network . ' SPECIAL';
-        }
-        return trim($network . ' ' . strtoupper($type));
     }
 }
 ?>
@@ -356,8 +325,8 @@ if (!function_exists('formatNetworkTypeLabel')) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>API Providers - <?php echo htmlspecialchars(getSiteName()); ?></title>
-    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>">
-    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>"">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>"">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>">
 </head>
 <body>
@@ -366,11 +335,83 @@ if (!function_exists('formatNetworkTypeLabel')) {
         <nav class="sidebar">
             <div class="sidebar-header">
                 <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
-                <button class="sidebar-close" type="button" aria-label="Close navigation menu">
-                    <i class="fas fa-times"></i>
-                </button>
             </div>
-            <?php renderAdminSidebar(); ?>
+            <ul class="nav-menu">
+                <li class="nav-section">
+                    <div class="nav-section-title">Main</div>
+                    <div class="nav-item">
+                        <a href="dashboard.php" class="nav-link">
+                            <i class="fas fa-chart-line"></i>
+                            Dashboard
+                        </a>
+                    </div>
+                    <div class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Management</div>
+                    <div class="nav-item">
+                        <a href="users.php" class="nav-link">
+                            <i class="fas fa-users"></i>
+                            Users
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="agents.php" class="nav-link">
+                            <i class="fas fa-user-tie"></i>
+                            Agents
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="packages.php" class="nav-link">
+                            <i class="fas fa-box"></i>
+                            Packages
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="pricing.php" class="nav-link">
+                            <i class="fas fa-tags"></i>
+                            Pricing
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="afa-registration.php" class="nav-link">
+                            <i class="fas fa-user-check"></i>
+                            AFA Registration
+                        </a>
+                    </div>
+                
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">System</div>
+                    <div class="nav-item">
+                        <a href="api-providers.php" class="nav-link active">
+                            <i class="fas fa-plug"></i>
+                            API Providers
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="settings.php" class="nav-link">
+                            <i class="fas fa-cog"></i>
+                            Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="email-broadcast.php" class="nav-link">
+                            <i class="fas fa-paper-plane"></i>
+                            Email Broadcasts
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="system-reset.php" class="nav-link">
+                            <i class="fas fa-broom"></i>
+                            System Reset
+                        </a>
+                    </div>
+                </li>
+            </ul>
         </nav>
 
         <!-- Main Content -->
@@ -378,7 +419,7 @@ if (!function_exists('formatNetworkTypeLabel')) {
             <!-- Header -->
             <header class="dashboard-header">
                 <div class="header-left">
-                    <button class="mobile-menu-toggle" type="button" aria-label="Toggle navigation menu">
+                    <button class="mobile-menu-toggle" type="button">
                         <i class="fas fa-bars"></i>
                     </button>
                     <nav class="breadcrumb">
@@ -450,7 +491,7 @@ if (!function_exists('formatNetworkTypeLabel')) {
         $provider_description = $provider['description'] ?? '';
         $provider_endpoint_list = $provider_endpoints[$provider_id] ?? [];
     ?>
-    <div id="providerModal_<?php echo $provider_id; ?>" class="modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 9999;">
+    <div id="providerModal_<?php echo $provider_id; ?>" class="modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(46, 41, 78, 0.5); z-index: 9999;">
         <div class="modal-content modal-wide">
             <span class="close" onclick="closeProviderSettingsModal(<?php echo $provider_id; ?>)">&times;</span>
             <h2>Manage <?php echo htmlspecialchars($provider['name']); ?> API</h2>
@@ -621,99 +662,6 @@ if (!function_exists('formatNetworkTypeLabel')) {
                     </div>
                 </div>
 
-                <!-- Per-Network Type Activation -->
-                <div class="widget">
-                    <div class="widget-header">
-                        <h3 class="widget-title">Per-Network Type API Activation</h3>
-                    </div>
-                    <div class="widget-body">
-                        <div class="bulk-endpoint-actions">
-                            <form method="POST" id="bulkEndpointActionForm" class="bulk-endpoint-form">
-                                <input type="hidden" name="action" value="bulk_toggle_endpoints">
-                                <input type="hidden" name="provider_id" value="0">
-                                <input type="hidden" name="is_active" value="0">
-                                <input type="hidden" name="endpoint_ids_csv" id="bulk_endpoint_ids_csv" value="">
-                                <button
-                                    type="button"
-                                    class="btn btn-danger"
-                                    id="bulkDeactivateEndpointsBtn"
-                                    onclick="submitBulkEndpointAction(0)"
-                                    disabled
-                                >
-                                    Deactivate Selected
-                                </button>
-                                <span class="bulk-selection-summary" id="bulkEndpointSelectionSummary">0 selected</span>
-                            </form>
-                        </div>
-                        <div class="table-responsive">
-                            <table class="table">
-                                <thead>
-                                    <tr>
-                                        <th class="bulk-select-column">
-                                            <input type="checkbox" id="select_all_endpoints" aria-label="Select all endpoints">
-                                        </th>
-                                        <th>Provider</th>
-                                        <th>Network Type</th>
-                                        <th>Endpoint Type</th>
-                                        <th>Status</th>
-                                        <th>Action</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php if (!empty($endpoint_toggle_rows)): ?>
-                                        <?php foreach ($endpoint_toggle_rows as $row): ?>
-                                            <?php
-                                                $endpoint_active = !empty($row['is_active']);
-                                                $provider_active = !empty($row['provider_is_active']);
-                                                $next_state = $endpoint_active ? 0 : 1;
-                                                $network_type_label = formatNetworkTypeLabel($row['network_name'] ?? '', $row['endpoint_type'] ?? 'regular');
-                                            ?>
-                                            <tr>
-                                                <td class="bulk-select-column">
-                                                    <input
-                                                        type="checkbox"
-                                                        class="endpoint-bulk-checkbox"
-                                                        value="<?php echo (int)($row['id'] ?? 0); ?>"
-                                                        aria-label="Select <?php echo htmlspecialchars($row['provider_name'] ?? 'Provider'); ?> <?php echo htmlspecialchars($network_type_label); ?>"
-                                                    >
-                                                </td>
-                                                <td>
-                                                    <strong><?php echo htmlspecialchars($row['provider_name'] ?? 'Provider'); ?></strong>
-                                                    <?php if (!$provider_active): ?>
-                                                        <div class="text-muted">Provider is currently inactive</div>
-                                                    <?php endif; ?>
-                                                </td>
-                                                <td><?php echo htmlspecialchars($network_type_label); ?></td>
-                                                <td><?php echo strtoupper(htmlspecialchars($row['endpoint_type'] ?? 'regular')); ?></td>
-                                                <td>
-                                                    <span class="badge <?php echo $endpoint_active ? 'badge-success' : 'badge-danger'; ?>">
-                                                        <?php echo $endpoint_active ? 'Active' : 'Inactive'; ?>
-                                                    </span>
-                                                </td>
-                                                <td>
-                                                    <form method="POST" style="display:inline;">
-                                                        <input type="hidden" name="action" value="toggle_endpoint">
-                                                        <input type="hidden" name="endpoint_id" value="<?php echo (int)($row['id'] ?? 0); ?>">
-                                                        <input type="hidden" name="provider_id" value="<?php echo (int)($row['provider_id'] ?? 0); ?>">
-                                                        <input type="hidden" name="is_active" value="<?php echo $next_state; ?>">
-                                                        <button type="submit" class="btn btn-sm <?php echo $endpoint_active ? 'btn-danger' : 'btn-success'; ?>">
-                                                            <?php echo $endpoint_active ? 'Deactivate' : 'Activate'; ?>
-                                                        </button>
-                                                    </form>
-                                                </td>
-                                            </tr>
-                                        <?php endforeach; ?>
-                                    <?php else: ?>
-                                        <tr>
-                                            <td colspan="6" class="text-muted">No provider endpoints found.</td>
-                                        </tr>
-                                    <?php endif; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
-                </div>
-
                 <!-- Provider Statistics -->
                 <?php if (!empty($provider_stats)): ?>
                     <div class="widget">
@@ -757,7 +705,7 @@ if (!function_exists('formatNetworkTypeLabel')) {
     </div>
 
     <!-- Configuration Modal -->
-    <div id="configModal" class="modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 9999;">
+    <div id="configModal" class="modal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(46, 41, 78, 0.5); z-index: 9999;">
         <div class="modal-content">
             <span class="close" onclick="closeConfigModal()">&times;</span>
             <h2>Configure Network Provider</h2>
@@ -810,24 +758,11 @@ if (!function_exists('formatNetworkTypeLabel')) {
         top: 0;
         width: 100%;
         height: 100%;
-        background-color: rgba(0, 0, 0, 0.5);
-    }
-
-    .sidebar-header {
-        padding: 0 var(--spacing-lg);
-        margin-bottom: var(--spacing-xl);
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: var(--spacing-sm);
-    }
-
-    .sidebar-header h3 {
-        margin: 0;
+        background-color: rgba(46, 41, 78, 0.5);
     }
     
     .modal-content {
-        background-color: var(--card-bg, #fff);
+        background-color: var(--card-bg, #F1E9DA);
         margin: 5% auto;
         padding: 20px;
         border-radius: 8px;
@@ -836,16 +771,16 @@ if (!function_exists('formatNetworkTypeLabel')) {
         max-height: 90vh;
         overflow-y: auto;
         position: relative;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+        box-shadow: 0 4px 20px rgba(46, 41, 78, 0.3);
     }
     
     [data-theme="dark"] .modal-content {
-        background-color: #2d3748;
-        color: #e2e8f0;
+        background-color: #2E294E;
+        color: #F1E9DA;
     }
     
     .modal .close {
-        color: var(--text-color, #aaa);
+        color: var(--text-color, #F1E9DA);
         float: right;
         font-size: 28px;
         font-weight: bold;
@@ -856,23 +791,23 @@ if (!function_exists('formatNetworkTypeLabel')) {
     }
     
     [data-theme="dark"] .modal .close {
-        color: #e2e8f0;
+        color: #F1E9DA;
     }
     
     .modal .close:hover,
     .modal .close:focus {
-        color: var(--primary-color, #007bff);
+        color: var(--primary-color, #541388);
         text-decoration: none;
     }
     
     .modal h2 {
         margin-top: 0;
         margin-bottom: 20px;
-        color: var(--text-color, #333);
+        color: var(--text-color, #2E294E);
     }
     
     [data-theme="dark"] .modal h2 {
-        color: #e2e8f0;
+        color: #F1E9DA;
     }
     
     .modal .form-group {
@@ -883,52 +818,52 @@ if (!function_exists('formatNetworkTypeLabel')) {
         display: block;
         margin-bottom: 5px;
         font-weight: bold;
-        color: var(--text-color, #333);
+        color: var(--text-color, #2E294E);
     }
     
     [data-theme="dark"] .modal .form-label {
-        color: #e2e8f0;
+        color: #F1E9DA;
     }
     
     .modal .form-control {
         width: 100%;
         padding: 10px;
-        border: 1px solid var(--border-color, #ddd);
+        border: 1px solid var(--border-color, #F1E9DA);
         border-radius: 4px;
-        background: var(--input-bg, #fff);
-        color: var(--text-color, #333);
+        background: var(--input-bg, #F1E9DA);
+        color: var(--text-color, #2E294E);
         font-size: 14px;
     }
     
     [data-theme="dark"] .modal .form-control {
-        background: #4a5568;
-        border-color: #718096;
-        color: #e2e8f0;
+        background: #2E294E;
+        border-color: #541388;
+        color: #F1E9DA;
     }
     
     .modal .form-control:focus {
         outline: none;
-        border-color: var(--primary-color, #007bff);
-        box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+        border-color: var(--primary-color, #541388);
+        box-shadow: 0 0 0 2px rgba(84, 19, 136, 0.25);
     }
     
     .modal .form-control[readonly] {
-        background-color: var(--input-disabled-bg, #f5f5f5);
+        background-color: var(--input-disabled-bg, #F1E9DA);
     }
     
     [data-theme="dark"] .modal .form-control[readonly] {
-        background-color: #2d3748;
+        background-color: #2E294E;
     }
     
     .modal .form-actions {
         text-align: right;
         margin-top: 30px;
         padding-top: 20px;
-        border-top: 1px solid var(--border-color, #eee);
+        border-top: 1px solid var(--border-color, #F1E9DA);
     }
     
     [data-theme="dark"] .modal .form-actions {
-        border-top-color: #4a5568;
+        border-top-color: #2E294E;
     }
     
     .modal .btn {
@@ -941,18 +876,18 @@ if (!function_exists('formatNetworkTypeLabel')) {
     }
     
     .modal .btn-secondary {
-        background: var(--bg-secondary, #6c757d);
-        color: white;
+        background: var(--bg-secondary, #541388);
+        color: #F1E9DA;
     }
     
     [data-theme="dark"] .modal .btn-secondary {
-        background: #4a5568;
-        color: #e2e8f0;
+        background: #2E294E;
+        color: #F1E9DA;
     }
     
     .modal .btn-primary {
-        background: var(--primary-color, #007bff);
-        color: white;
+        background: var(--primary-color, #541388);
+        color: #F1E9DA;
     }
     
     .modal .btn:hover {
@@ -977,11 +912,11 @@ if (!function_exists('formatNetworkTypeLabel')) {
         display: block;
         margin-top: 6px;
         font-size: 12px;
-        color: var(--text-muted, #6c757d);
+        color: var(--text-muted, #541388);
     }
 
     [data-theme="dark"] .form-help {
-        color: #a0aec0;
+        color: #F1E9DA;
     }
 
     .endpoint-sections {
@@ -993,16 +928,16 @@ if (!function_exists('formatNetworkTypeLabel')) {
     }
 
     .endpoint-card {
-        background: var(--card-muted-bg, #f8fafc);
-        border: 1px solid var(--border-color, #e2e8f0);
+        background: var(--card-muted-bg, #F1E9DA);
+        border: 1px solid var(--border-color, #F1E9DA);
         border-radius: 6px;
         padding: 18px;
         margin-bottom: 20px;
     }
 
     [data-theme="dark"] .endpoint-card {
-        background: #1f2937;
-        border-color: #374151;
+        background: #2E294E;
+        border-color: #2E294E;
     }
 
     .endpoint-header {
@@ -1023,11 +958,11 @@ if (!function_exists('formatNetworkTypeLabel')) {
         font-size: 12px;
         text-transform: uppercase;
         letter-spacing: 0.04em;
-        color: var(--text-muted, #6c757d);
+        color: var(--text-muted, #541388);
     }
 
     [data-theme="dark"] .endpoint-type-label {
-        color: #cbd5f5;
+        color: #F1E9DA;
     }
 
     .endpoint-status {
@@ -1044,14 +979,14 @@ if (!function_exists('formatNetworkTypeLabel')) {
 
     .empty-endpoints {
         padding: 20px;
-        border: 1px dashed var(--border-color, #e2e8f0);
+        border: 1px dashed var(--border-color, #F1E9DA);
         border-radius: 6px;
-        background: rgba(0, 123, 255, 0.05);
+        background: rgba(84, 19, 136, 0.05);
     }
 
     [data-theme="dark"] .empty-endpoints {
-        background: rgba(59, 130, 246, 0.1);
-        border-color: #2d3748;
+        background: rgba(84, 19, 136, 0.1);
+        border-color: #2E294E;
     }
 
     .stat-actions {
@@ -1063,13 +998,13 @@ if (!function_exists('formatNetworkTypeLabel')) {
     }
 
     .stat-actions .btn-secondary {
-        background: var(--card-muted-bg, #f1f5f9);
-        color: var(--text-color, #1a202c);
+        background: var(--card-muted-bg, #F1E9DA);
+        color: var(--text-color, #2E294E);
     }
 
     [data-theme="dark"] .stat-actions .btn-secondary {
-        background: #4a5568;
-        color: #e2e8f0;
+        background: #2E294E;
+        color: #F1E9DA;
     }
 
     .provider-settings-form .form-actions {
@@ -1081,13 +1016,13 @@ if (!function_exists('formatNetworkTypeLabel')) {
         margin-top: 30px;
         padding-top: 16px;
         padding-bottom: 10px;
-        border-top: 1px solid var(--border-color, #eee);
-        background: var(--card-bg, #fff);
+        border-top: 1px solid var(--border-color, #F1E9DA);
+        background: var(--card-bg, #F1E9DA);
     }
 
     [data-theme="dark"] .provider-settings-form .form-actions {
-        border-top-color: #4a5568;
-        background: #2d3748;
+        border-top-color: #2E294E;
+        background: #2E294E;
     }
 
     .header-right {
@@ -1103,9 +1038,9 @@ if (!function_exists('formatNetworkTypeLabel')) {
         gap: 8px;
         padding: 0.55rem 0.9rem;
         border-radius: 999px;
-        border: 1px solid var(--border-color, #e2e8f0);
-        background: var(--bg-secondary, #f8fafc);
-        color: var(--text-primary, #1a202c);
+        border: 1px solid var(--border-color, #F1E9DA);
+        background: var(--bg-secondary, #F1E9DA);
+        color: var(--text-primary, #2E294E);
         text-decoration: none;
         font-weight: 600;
         font-size: 0.9rem;
@@ -1131,36 +1066,6 @@ if (!function_exists('formatNetworkTypeLabel')) {
         width: 100%;
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
-    }
-
-    .bulk-endpoint-actions {
-        display: flex;
-        align-items: center;
-        justify-content: flex-end;
-        margin-bottom: 16px;
-    }
-
-    .bulk-endpoint-form {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        flex-wrap: wrap;
-    }
-
-    .bulk-selection-summary {
-        font-size: 0.9rem;
-        color: var(--text-muted, #6b7280);
-    }
-
-    .bulk-select-column {
-        width: 52px;
-        text-align: center;
-    }
-
-    .bulk-select-column input[type="checkbox"] {
-        width: 16px;
-        height: 16px;
-        cursor: pointer;
     }
 
     .provider-settings-form .two-columns {
@@ -1194,22 +1099,22 @@ if (!function_exists('formatNetworkTypeLabel')) {
     }
 
     .logout-btn:hover {
-        background: var(--bg-tertiary, #eef2ff);
-        border-color: var(--brand-primary, #6366f1);
-        color: var(--brand-primary, #6366f1);
-        box-shadow: 0 10px 22px rgba(99, 102, 241, 0.18);
+        background: var(--bg-tertiary, #F1E9DA);
+        border-color: var(--brand-primary, #541388);
+        color: var(--brand-primary, #541388);
+        box-shadow: 0 10px 22px rgba(84, 19, 136, 0.18);
     }
 
     [data-theme="dark"] .logout-btn {
-        background: rgba(255, 255, 255, 0.06);
-        border-color: rgba(255, 255, 255, 0.12);
-        color: #e2e8f0;
+        background: rgba(241, 233, 218, 0.06);
+        border-color: rgba(241, 233, 218, 0.12);
+        color: #F1E9DA;
     }
 
     [data-theme="dark"] .logout-btn:hover {
-        background: rgba(255, 255, 255, 0.12);
-        border-color: var(--brand-primary, #6366f1);
-        color: var(--brand-primary, #6366f1);
+        background: rgba(241, 233, 218, 0.12);
+        border-color: var(--brand-primary, #541388);
+        color: var(--brand-primary, #541388);
     }
 
     @media (max-width: 1024px) {
@@ -1276,19 +1181,6 @@ if (!function_exists('formatNetworkTypeLabel')) {
             flex-wrap: wrap;
             margin-top: 8px;
         }
-
-        .bulk-endpoint-actions {
-            justify-content: flex-start;
-        }
-
-        .bulk-endpoint-form {
-            width: 100%;
-            align-items: stretch;
-        }
-
-        .bulk-endpoint-form .btn {
-            width: 100%;
-        }
     }
 
     @media (max-width: 640px) {
@@ -1343,239 +1235,104 @@ if (!function_exists('formatNetworkTypeLabel')) {
         }
 
         function openProviderSettingsModal(providerId) {
-            var modal = document.getElementById('providerModal_' + providerId);
+            const modal = document.getElementById(`providerModal_${providerId}`);
             if (modal) {
                 modal.style.display = 'block';
             }
         }
 
         function closeProviderSettingsModal(providerId) {
-            var modal = document.getElementById('providerModal_' + providerId);
+            const modal = document.getElementById(`providerModal_${providerId}`);
             if (modal) {
                 modal.style.display = 'none';
             }
         }
 
-        function syncBulkEndpointSelection() {
-            var selectAll = document.getElementById('select_all_endpoints');
-            var checkboxes = document.querySelectorAll('.endpoint-bulk-checkbox');
-            var summary = document.getElementById('bulkEndpointSelectionSummary');
-            var button = document.getElementById('bulkDeactivateEndpointsBtn');
-            var selectedIds = [];
-
-            for (var i = 0; i < checkboxes.length; i++) {
-                if (checkboxes[i].checked) {
-                    selectedIds.push(checkboxes[i].value);
-                }
-            }
-
-            if (summary) {
-                summary.textContent = selectedIds.length + ' selected';
-            }
-
-            if (button) {
-                button.disabled = selectedIds.length === 0;
-            }
-
-            if (selectAll) {
-                if (checkboxes.length === 0) {
-                    selectAll.checked = false;
-                    selectAll.indeterminate = false;
-                } else {
-                    selectAll.checked = selectedIds.length === checkboxes.length;
-                    selectAll.indeterminate = selectedIds.length > 0 && selectedIds.length < checkboxes.length;
-                }
-            }
-        }
-
-        function submitBulkEndpointAction(isActive) {
-            var form = document.getElementById('bulkEndpointActionForm');
-            var targetInput = document.getElementById('bulk_endpoint_ids_csv');
-            var checkboxes = document.querySelectorAll('.endpoint-bulk-checkbox:checked');
-            var selectedIds = [];
-
-            for (var i = 0; i < checkboxes.length; i++) {
-                selectedIds.push(checkboxes[i].value);
-            }
-
-            if (!form || !targetInput || selectedIds.length === 0) {
+        function toggleMobileMenu() {
+            const sidebar = document.querySelector('.sidebar');
+            const dashboardWrapper = document.querySelector('.dashboard-wrapper');
+            if (!sidebar || !dashboardWrapper) {
                 return;
             }
 
-            targetInput.value = selectedIds.join(',');
-            form.querySelector('input[name="is_active"]').value = String(isActive);
-            form.submit();
-        }
-
-        function bindBulkEndpointActions() {
-            var selectAll = document.getElementById('select_all_endpoints');
-            var checkboxes = document.querySelectorAll('.endpoint-bulk-checkbox');
-
-            if (selectAll) {
-                selectAll.addEventListener('change', function () {
-                    for (var i = 0; i < checkboxes.length; i++) {
-                        checkboxes[i].checked = selectAll.checked;
+            let overlay = document.querySelector('.sidebar-overlay');
+            if (!overlay) {
+                overlay = document.createElement('div');
+                overlay.className = 'sidebar-overlay';
+                dashboardWrapper.appendChild(overlay);
+                overlay.addEventListener('click', function() {
+                    sidebar.classList.remove('show');
+                    overlay.classList.remove('show');
+                    document.body.classList.remove('sidebar-open');
+                });
+                document.addEventListener('keydown', function(e) {
+                    if (e.key === 'Escape' && sidebar.classList.contains('show')) {
+                        sidebar.classList.remove('show');
+                        overlay.classList.remove('show');
+                        document.body.classList.remove('sidebar-open');
                     }
-                    syncBulkEndpointSelection();
                 });
             }
 
-            for (var i = 0; i < checkboxes.length; i++) {
-                checkboxes[i].addEventListener('change', syncBulkEndpointSelection);
-            }
-
-            syncBulkEndpointSelection();
+            const shouldShow = !sidebar.classList.contains('show');
+            sidebar.classList.toggle('show', shouldShow);
+            overlay.classList.toggle('show', shouldShow);
+            document.body.classList.toggle('sidebar-open', shouldShow);
         }
 
-        (function () {
-            var sidebar = null;
-            var wrapper = null;
-            var toggleBtn = null;
-            var closeBtn = null;
-            var overlay = null;
-            var lastTouchAt = 0;
-
-            function ensureOverlay() {
-                if (overlay) {
-                    return overlay;
-                }
-                overlay = document.querySelector('.sidebar-overlay');
-                if (!overlay) {
-                    overlay = document.createElement('div');
-                    overlay.className = 'sidebar-overlay';
-                    (wrapper || document.body).appendChild(overlay);
-                }
-                overlay.onclick = closeSidebar;
-                return overlay;
+        function bindMobileMenuToggle() {
+            const mobileToggle = document.querySelector('.mobile-menu-toggle');
+            if (!mobileToggle || mobileToggle.dataset.bound === '1') {
+                return;
             }
+            mobileToggle.dataset.bound = '1';
 
-            function isOpen() {
-                return sidebar && (sidebar.classList.contains('show') || sidebar.classList.contains('active'));
-            }
-
-            function openSidebar() {
-                if (!sidebar) {
-                    return;
-                }
-                ensureOverlay();
-                sidebar.classList.add('show', 'active');
-                overlay.classList.add('show', 'active');
-                document.body.classList.add('sidebar-open');
-            }
-
-            function closeSidebar() {
-                if (!sidebar) {
-                    return;
-                }
-                ensureOverlay();
-                sidebar.classList.remove('show', 'active');
-                overlay.classList.remove('show', 'active');
-                document.body.classList.remove('sidebar-open');
-            }
-
-            function toggleSidebar(e) {
+            let lastToggleAt = 0;
+            const handler = (e) => {
                 if (e && typeof e.preventDefault === 'function') {
                     e.preventDefault();
                 }
                 if (e && typeof e.stopPropagation === 'function') {
                     e.stopPropagation();
                 }
-                if (isOpen()) {
-                    closeSidebar();
-                } else {
-                    openSidebar();
-                }
-                return false;
-            }
 
-            function bindMobileMenu() {
-                sidebar = document.querySelector('.sidebar');
-                wrapper = document.querySelector('.dashboard-wrapper');
-                toggleBtn = document.querySelector('.mobile-menu-toggle');
-                closeBtn = document.querySelector('.sidebar .sidebar-close');
-
-                if (!sidebar || !toggleBtn) {
+                const now = Date.now();
+                if (now - lastToggleAt < 300) {
                     return;
                 }
-                if (toggleBtn.getAttribute('data-mobile-bound') === '1') {
-                    return;
-                }
-                toggleBtn.setAttribute('data-mobile-bound', '1');
-                ensureOverlay();
+                lastToggleAt = now;
+                toggleMobileMenu();
+            };
 
-                toggleBtn.addEventListener('touchstart', function (e) {
-                    lastTouchAt = Date.now();
-                    toggleSidebar(e);
-                }, false);
+            mobileToggle.addEventListener('click', handler);
+            mobileToggle.addEventListener('touchend', handler, { passive: false });
+            mobileToggle.addEventListener('pointerup', handler);
+        }
 
-                toggleBtn.addEventListener('click', function (e) {
-                    // Ignore synthetic click immediately after touch.
-                    if (Date.now() - lastTouchAt < 600) {
-                        if (e && typeof e.preventDefault === 'function') {
-                            e.preventDefault();
-                        }
-                        return false;
+        // Initialize theme on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            bindMobileMenuToggle();
+            
+            // Close modal when clicking outside
+            window.addEventListener('click', function(e) {
+                if (e.target.classList && e.target.classList.contains('modal')) {
+                    if (e.target.id === 'configModal') {
+                        closeConfigModal();
+                    } else if (e.target.id && e.target.id.startsWith('providerModal_')) {
+                        e.target.style.display = 'none';
                     }
-                    return toggleSidebar(e);
-                }, false);
-
-                document.addEventListener('keydown', function (e) {
-                    if (e.key === 'Escape' && isOpen()) {
-                        closeSidebar();
-                    }
-                });
-
-                if (closeBtn) {
-                    closeBtn.addEventListener('click', function (e) {
-                        if (e && typeof e.preventDefault === 'function') {
-                            e.preventDefault();
-                        }
-                        closeSidebar();
-                    }, false);
                 }
-
-                var navLinks = sidebar.querySelectorAll('.nav-link');
-                for (var i = 0; i < navLinks.length; i++) {
-                    navLinks[i].addEventListener('click', function () {
-                        if (window.innerWidth <= 768) {
-                            closeSidebar();
-                        }
-                    });
-                }
-            }
-
-            function bindModalOutsideClick() {
-                window.addEventListener('click', function (e) {
-                    if (e.target.classList && e.target.classList.contains('modal')) {
-                        if (e.target.id === 'configModal') {
-                            closeConfigModal();
-                        } else if (e.target.id && e.target.id.indexOf('providerModal_') === 0) {
-                            e.target.style.display = 'none';
-                        }
-                    }
-                });
-            }
-
-            function initPage() {
-                bindMobileMenu();
-                bindModalOutsideClick();
-                bindBulkEndpointActions();
-            }
-
-            if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', initPage);
-            } else {
-                initPage();
-            }
-        })();
+            });
+        });
     </script>
     
     <!-- Theme Script -->
-    <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/theme.js')); ?>"></script>
+    <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/theme.js')); ?>""></script>
     <!-- IMMEDIATE Icon Fix for square placeholder issues -->
     <script src="../immediate_icon_fix.js"></script>
 </body>
 </html>
+
 
 
 

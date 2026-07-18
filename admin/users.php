@@ -54,35 +54,6 @@ if (!function_exists('generateUniqueUsername')) {
     }
 }
 
-if (!function_exists('generateUniqueAgentStoreSlug')) {
-    function generateUniqueAgentStoreSlug($store_name, $agent_id = 0) {
-        global $db;
-
-        $base_slug = generateStoreSlug($store_name);
-        if ($base_slug === '') {
-            $base_slug = 'agent-store';
-        }
-
-        $slug = $base_slug;
-        $counter = 1;
-        while (true) {
-            $stmt = $db->prepare("SELECT id FROM agent_stores WHERE store_slug = ? AND agent_id <> ? LIMIT 1");
-            if (!$stmt) {
-                return $slug;
-            }
-            $agent_id = (int) $agent_id;
-            $stmt->bind_param('si', $slug, $agent_id);
-            $stmt->execute();
-            if ($stmt->get_result()->num_rows === 0) {
-                return $slug;
-            }
-
-            $counter++;
-            $slug = $base_slug . '-' . $counter;
-        }
-    }
-}
-
 if (!function_exists('generateTemporaryPassword')) {
     function generateTemporaryPassword($length = 10) {
         $length = max(6, (int) $length);
@@ -122,7 +93,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $assigned_agent_id = isset($_POST['assigned_agent_id']) ? intval($_POST['assigned_agent_id']) : 0;
         
         $errors = [];
-        $valid_roles = ['admin', 'agent', 'customer', 'vip'];
+        $valid_roles = ['admin', 'agent', 'customer'];
         
         if ($full_name === '') {
             $errors[] = 'Full name is required.';
@@ -193,7 +164,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         
         $agent_assignment_id = null;
-        if (isCustomerAccountRole($role) && $assigned_agent_id > 0) {
+        if ($role === 'customer' && $assigned_agent_id > 0) {
             $stmt = $db->prepare("SELECT id FROM users WHERE id = ? AND role = 'agent' LIMIT 1");
             $stmt->bind_param('i', $assigned_agent_id);
             $stmt->execute();
@@ -247,7 +218,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute();
             }
             
-            if (isCustomerAccountRole($role) && $agent_assignment_id) {
+            if ($role === 'customer' && $agent_assignment_id) {
                 $stmt = $db->prepare("UPDATE users SET agent_id = ?, referring_agent_id = ? WHERE id = ?");
                 $stmt->bind_param('iii', $agent_assignment_id, $agent_assignment_id, $new_user_id);
                 $stmt->execute();
@@ -426,257 +397,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             setFlashMessage('success', 'User details updated successfully.');
         } else {
             setFlashMessage('error', 'Failed to update user details.');
-        }
-
-        header('Location: users.php');
-        exit();
-    }
-
-    if ($action === 'update_user_account_type') {
-        if (function_exists('ensureAccountTypeSchema')) {
-            ensureAccountTypeSchema();
-        }
-
-        $id = intval($_POST['id'] ?? 0);
-        $role = normalizeUserRole(sanitize($_POST['role'] ?? ''));
-        $store_name = sanitize($_POST['store_name'] ?? '');
-        $assigned_agent_id = isset($_POST['assigned_agent_id']) ? intval($_POST['assigned_agent_id']) : 0;
-        $valid_roles = ['customer', 'vip', 'agent'];
-
-        if ($id <= 0) {
-            setFlashMessage('error', 'Invalid user selected.');
-            header('Location: users.php');
-            exit();
-        }
-
-        if ($id === intval($_SESSION['user_id'] ?? 0)) {
-            setFlashMessage('error', 'You cannot change your own account type.');
-            header('Location: users.php');
-            exit();
-        }
-
-        if (!in_array($role, $valid_roles, true)) {
-            setFlashMessage('error', 'Invalid account type selected.');
-            header('Location: users.php');
-            exit();
-        }
-
-        if ($role === 'vip' && function_exists('dbh_enum_column_contains_value') && !dbh_enum_column_contains_value('users', 'role', 'vip')) {
-            setFlashMessage('error', 'VIP account type is not enabled in the live database yet. Upload includes/functions.php, then try again.');
-            header('Location: users.php');
-            exit();
-        }
-
-        $stmt = $db->prepare("SELECT id, username, full_name, role, store_name FROM users WHERE id = ? LIMIT 1");
-        if (!$stmt) {
-            setFlashMessage('error', 'Unable to update account type.');
-            header('Location: users.php');
-            exit();
-        }
-        $stmt->bind_param('i', $id);
-        $stmt->execute();
-        $target_user = $stmt->get_result()->fetch_assoc();
-        if (!$target_user) {
-            setFlashMessage('error', 'User not found.');
-            header('Location: users.php');
-            exit();
-        }
-
-        $store_name = $store_name !== '' ? $store_name : trim((string) ($target_user['store_name'] ?? ''));
-        if ($role === 'agent' && $store_name === '') {
-            setFlashMessage('error', 'Store name is required when changing a user to Agent.');
-            header('Location: users.php');
-            exit();
-        }
-
-        $agent_assignment_id = null;
-        if (isCustomerAccountRole($role) && $assigned_agent_id > 0) {
-            if ($assigned_agent_id === $id) {
-                setFlashMessage('error', 'A user cannot be assigned to themselves as agent.');
-                header('Location: users.php');
-                exit();
-            }
-
-            $agent_check = $db->prepare("SELECT id FROM users WHERE id = ? AND role = 'agent' LIMIT 1");
-            if (!$agent_check) {
-                setFlashMessage('error', 'Unable to verify selected agent.');
-                header('Location: users.php');
-                exit();
-            }
-            $agent_check->bind_param('i', $assigned_agent_id);
-            $agent_check->execute();
-            if ($agent_check->get_result()->num_rows === 0) {
-                setFlashMessage('error', 'Selected agent not found.');
-                header('Location: users.php');
-                exit();
-            }
-            $agent_assignment_id = $assigned_agent_id;
-        }
-
-        try {
-            $conn = $db->getConnection();
-            $conn->begin_transaction();
-
-            if ($role === 'agent') {
-                $store_slug = generateUniqueAgentStoreSlug($store_name, $id);
-                $sets = ["role = 'agent'", 'is_active = 1'];
-                $params = [];
-                $types = '';
-
-                if (dbh_table_has_column('users', 'agent_id')) {
-                    $sets[] = dbh_column_allows_null('users', 'agent_id') ? 'agent_id = NULL' : 'agent_id = 0';
-                }
-                if (dbh_table_has_column('users', 'referring_agent_id')) {
-                    $sets[] = dbh_column_allows_null('users', 'referring_agent_id') ? 'referring_agent_id = NULL' : 'referring_agent_id = 0';
-                }
-                if (dbh_table_has_column('users', 'store_name')) {
-                    $sets[] = 'store_name = ?';
-                    $params[] = $store_name;
-                    $types .= 's';
-                }
-                if (dbh_table_has_column('users', 'store_slug')) {
-                    $sets[] = 'store_slug = ?';
-                    $params[] = $store_slug;
-                    $types .= 's';
-                }
-
-                $params[] = $id;
-                $types .= 'i';
-                $stmt = $db->prepare("UPDATE users SET " . implode(', ', $sets) . " WHERE id = ?");
-                if (!$stmt) {
-                    throw new Exception('Failed to prepare agent role update.');
-                }
-                $stmt->bind_param($types, ...$params);
-                if (!$stmt->execute()) {
-                    throw new Exception('Agent role update failed: ' . $stmt->error);
-                }
-
-                if (dbh_table_exists('agent_stores')) {
-                    $stmt = $db->prepare("SELECT id FROM agent_stores WHERE agent_id = ? LIMIT 1");
-                    if (!$stmt) {
-                        throw new Exception('Agent store lookup prepare failed.');
-                    }
-                    $stmt->bind_param('i', $id);
-                    if (!$stmt->execute()) {
-                        throw new Exception('Agent store lookup failed: ' . $stmt->error);
-                    }
-                    $store_row = $stmt->get_result()->fetch_assoc();
-                    if ($store_row) {
-                        $stmt = $db->prepare("UPDATE agent_stores SET store_name = ?, store_slug = ?, is_active = TRUE WHERE id = ?");
-                        if (!$stmt) {
-                            throw new Exception('Agent store update prepare failed.');
-                        }
-                        $stmt->bind_param('ssi', $store_name, $store_slug, $store_row['id']);
-                    } else {
-                        $stmt = $db->prepare("INSERT INTO agent_stores (agent_id, store_name, store_slug, is_active) VALUES (?, ?, ?, TRUE)");
-                        if (!$stmt) {
-                            throw new Exception('Agent store insert prepare failed.');
-                        }
-                        $stmt->bind_param('iss', $id, $store_name, $store_slug);
-                    }
-                    if (!$stmt->execute()) {
-                        throw new Exception('Agent store save failed: ' . $stmt->error);
-                    }
-                }
-            } else {
-                $sets = ['role = ?'];
-                $params = [$role];
-                $types = 's';
-
-                if (dbh_table_has_column('users', 'store_name')) {
-                    $sets[] = dbh_column_allows_null('users', 'store_name') ? 'store_name = NULL' : "store_name = ''";
-                }
-                if (dbh_table_has_column('users', 'store_slug')) {
-                    $sets[] = dbh_column_allows_null('users', 'store_slug') ? 'store_slug = NULL' : "store_slug = ''";
-                }
-                if (dbh_table_has_column('users', 'agent_id')) {
-                    if ($agent_assignment_id !== null) {
-                        $sets[] = 'agent_id = ?';
-                        $params[] = $agent_assignment_id;
-                        $types .= 'i';
-                    } else {
-                        $sets[] = dbh_column_allows_null('users', 'agent_id') ? 'agent_id = NULL' : 'agent_id = 0';
-                    }
-                }
-                if (dbh_table_has_column('users', 'referring_agent_id')) {
-                    if ($agent_assignment_id !== null) {
-                        $sets[] = 'referring_agent_id = ?';
-                        $params[] = $agent_assignment_id;
-                        $types .= 'i';
-                    } else {
-                        $sets[] = dbh_column_allows_null('users', 'referring_agent_id') ? 'referring_agent_id = NULL' : 'referring_agent_id = 0';
-                    }
-                }
-
-                $params[] = $id;
-                $types .= 'i';
-                $stmt = $db->prepare("UPDATE users SET " . implode(', ', $sets) . " WHERE id = ?");
-                if (!$stmt) {
-                    throw new Exception('Failed to prepare customer role update.');
-                }
-                $stmt->bind_param($types, ...$params);
-                if (!$stmt->execute()) {
-                    throw new Exception('Customer/VIP role update failed: ' . $stmt->error);
-                }
-
-                if ($target_user['role'] === 'agent') {
-                    if (dbh_table_exists('agent_stores')) {
-                        $stmt = $db->prepare("UPDATE agent_stores SET is_active = FALSE WHERE agent_id = ?");
-                        if (!$stmt) {
-                            throw new Exception('Agent store deactivation prepare failed.');
-                        }
-                        $stmt->bind_param('i', $id);
-                        if (!$stmt->execute()) {
-                            throw new Exception('Agent store deactivation failed: ' . $stmt->error);
-                        }
-                    }
-                    if (dbh_table_has_column('users', 'agent_id')) {
-                        $clearAgentSql = dbh_column_allows_null('users', 'agent_id')
-                            ? "UPDATE users SET agent_id = NULL WHERE agent_id = ?"
-                            : "UPDATE users SET agent_id = 0 WHERE agent_id = ?";
-                        $stmt = $db->prepare($clearAgentSql);
-                        if (!$stmt) {
-                            throw new Exception('Customer agent cleanup prepare failed.');
-                        }
-                        $stmt->bind_param('i', $id);
-                        if (!$stmt->execute()) {
-                            throw new Exception('Customer agent cleanup failed: ' . $stmt->error);
-                        }
-                    }
-                    if (dbh_table_has_column('users', 'referring_agent_id')) {
-                        $clearReferrerSql = dbh_column_allows_null('users', 'referring_agent_id')
-                            ? "UPDATE users SET referring_agent_id = NULL WHERE referring_agent_id = ?"
-                            : "UPDATE users SET referring_agent_id = 0 WHERE referring_agent_id = ?";
-                        $stmt = $db->prepare($clearReferrerSql);
-                        if (!$stmt) {
-                            throw new Exception('Customer referrer cleanup prepare failed.');
-                        }
-                        $stmt->bind_param('i', $id);
-                        if (!$stmt->execute()) {
-                            throw new Exception('Customer referrer cleanup failed: ' . $stmt->error);
-                        }
-                    }
-                }
-            }
-
-            if (function_exists('logActivity')) {
-                $details = sprintf(
-                    'Admin changed account type for user ID %d from %s to %s.',
-                    $id,
-                    $target_user['role'],
-                    $role
-                );
-                logActivity($_SESSION['user_id'] ?? null, 'user_account_type_update_admin', $details);
-            }
-
-            $conn->commit();
-            setFlashMessage('success', 'User account type updated successfully.');
-        } catch (Exception $e) {
-            if (isset($conn)) {
-                $conn->rollback();
-            }
-            error_log('Admin account type update error: ' . $e->getMessage());
-            setFlashMessage('error', 'Failed to update account type.');
         }
 
         header('Location: users.php');
@@ -1169,11 +889,12 @@ $offset = ($page - 1) * $per_page;
 
 $query = "
     SELECT u.id, u.username, u.full_name, u.email, u.phone, u.role, u.is_active, u.created_at, u.agent_id,
-           COALESCE((SELECT SUM(balance) FROM wallets WHERE user_id = u.id), 0) as wallet_balance,
+           COALESCE(w.balance, 0) as wallet_balance,
            COALESCE(bo.total_orders, 0) as total_orders,
            COALESCE(t.total_transactions, 0) as total_transactions,
            ast.store_name, ast.store_slug
     FROM users u
+    LEFT JOIN wallets w ON w.user_id = u.id
     LEFT JOIN (
         SELECT user_id, COUNT(*) as total_orders
         FROM bundle_orders
@@ -1231,7 +952,35 @@ $flash = getFlashMessage();
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-                    <?php renderAdminSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Management</div>
+                <div class="nav-item"><a href="packages.php" class="nav-link"><i class="fas fa-box"></i> Data Packages</a></div>
+                <div class="nav-item"><a href="pricing.php" class="nav-link"><i class="fas fa-tags"></i> Pricing</a></div>
+                <div class="nav-item"><a href="afa-registration.php" class="nav-link"><i class="fas fa-user-check"></i> AFA Registration</a></div>
+                <div class="nav-item"><a href="users.php" class="nav-link active"><i class="fas fa-users"></i> Users</a></div>
+                <div class="nav-item"><a href="agents.php" class="nav-link"><i class="fas fa-user-tie"></i> Agents</a></div>
+            
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Analytics</div>
+                <div class="nav-item"><a href="transactions.php" class="nav-link"><i class="fas fa-history"></i> Transactions</a></div>
+                <div class="nav-item"><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></div>
+                <div class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item"><a href="notifications.php" class="nav-link"><i class="fas fa-bell"></i> Notification Settings</a></div>
+                <div class="nav-item"><a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> System Settings</a></div>
+                <div class="nav-item"><a href="email-broadcast.php" class="nav-link"><i class="fas fa-paper-plane"></i> Email Broadcasts</a></div>
+                <div class="nav-item"><a href="system-reset.php" class="nav-link"><i class="fas fa-broom"></i> System Reset</a></div>
+            </li>
+        </ul>
                 <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
     </nav>
 
@@ -1282,7 +1031,7 @@ $flash = getFlashMessage();
         <div class="dashboard-content">
             <div class="page-title">
                 <h1>User Management</h1>
-                <p class="page-subtitle">Manage all system users, customers, VIPs, and agents.</p>
+                <p class="page-subtitle">Manage all system users, customers, and agents.</p>
             </div>
 
             <?php if ($flash): ?>
@@ -1308,7 +1057,6 @@ $flash = getFlashMessage();
                         <select name="role" class="form-control" onchange="this.form.submit()">
                             <option value="">All Roles</option>
                             <option value="customer" <?php echo $selected_role==='customer'?'selected':''; ?>>Customer</option>
-                            <option value="vip" <?php echo $selected_role==='vip'?'selected':''; ?>>VIP</option>
                             <option value="agent" <?php echo $selected_role==='agent'?'selected':''; ?>>Agent</option>
                             <option value="admin" <?php echo $selected_role==='admin'?'selected':''; ?>>Admin</option>
                         </select>
@@ -1470,47 +1218,6 @@ $flash = getFlashMessage();
                     </form>
                 </div>
 
-                <?php if ($user['id'] !== $_SESSION['user_id']): ?>
-                    <div class="detail-form-card">
-                        <h4>Account Type</h4>
-                        <form method="post" class="detail-form">
-                            <input type="hidden" name="action" value="update_user_account_type">
-                            <input type="hidden" name="id" value="<?php echo $user['id']; ?>">
-                            <label class="form-label" for="account_role_<?php echo $user['id']; ?>">Type</label>
-                            <select id="account_role_<?php echo $user['id']; ?>" name="role" class="form-control account-role-select" data-user-id="<?php echo $user['id']; ?>" required>
-                                <option value="customer" <?php echo $user['role'] === 'customer' ? 'selected' : ''; ?>>Customer</option>
-                                <option value="vip" <?php echo $user['role'] === 'vip' ? 'selected' : ''; ?>>VIP</option>
-                                <option value="agent" <?php echo $user['role'] === 'agent' ? 'selected' : ''; ?>>Agent</option>
-                            </select>
-
-                            <div id="account_agent_fields_<?php echo $user['id']; ?>" class="account-role-field account-role-agent">
-                                <label class="form-label" for="account_store_<?php echo $user['id']; ?>">Store Name</label>
-                                <input type="text" id="account_store_<?php echo $user['id']; ?>" name="store_name" class="form-control store-name-input" value="<?php echo htmlspecialchars($user['store_name'] ?? ''); ?>" placeholder="Agent store name">
-                            </div>
-
-                            <?php if (!empty($agents)): ?>
-                                <div id="account_customer_fields_<?php echo $user['id']; ?>" class="account-role-field account-role-customer">
-                                    <label class="form-label" for="account_assigned_agent_<?php echo $user['id']; ?>">Assign Agent (optional)</label>
-                                    <select id="account_assigned_agent_<?php echo $user['id']; ?>" name="assigned_agent_id" class="form-control">
-                                        <option value="0">No agent</option>
-                                        <?php foreach ($agents as $agent): ?>
-                                            <?php if ((int) $agent['id'] === (int) $user['id']) continue; ?>
-                                            <option value="<?php echo $agent['id']; ?>" <?php echo (isset($user['agent_id']) && $user['agent_id'] == $agent['id']) ? 'selected' : ''; ?>>
-                                                <?php echo htmlspecialchars($agent['full_name'] ?? $agent['username']); ?>
-                                            </option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </div>
-                            <?php endif; ?>
-
-                            <div class="form-actions compact">
-                                <button type="submit" class="btn btn-primary">Save Type</button>
-                            </div>
-                            <small class="form-help">Agent accounts need a store name. Customer and VIP accounts can optionally be linked to an agent.</small>
-                        </form>
-                    </div>
-                <?php endif; ?>
-
                 <?php if ($user['role'] !== 'agent'): ?>
                     <div class="detail-form-card">
                         <h4>Convert to Agent</h4>
@@ -1607,7 +1314,6 @@ $flash = getFlashMessage();
                     <label class="form-label" for="user_role">Role</label>
                     <select id="user_role" name="role" class="form-control" required>
                         <option value="customer" selected>Customer</option>
-                        <option value="vip">VIP</option>
                         <option value="agent">Agent</option>
                         <option value="admin">Admin</option>
                     </select>
@@ -1637,7 +1343,7 @@ $flash = getFlashMessage();
                         <option value="0">Inactive</option>
                     </select>
                 </div>
-                <div class="form-group role-field role-customer role-vip" style="display: none;">
+                <div class="form-group role-field role-customer" style="display: none;">
                     <label class="form-label" for="assigned_agent_id">Assign Agent (optional)</label>
                     <select id="assigned_agent_id" name="assigned_agent_id" class="form-control">
                         <option value="0">No agent</option>
@@ -1708,7 +1414,6 @@ $flash = getFlashMessage();
             modal.style.display = 'block';
             document.body.classList.add('modal-open');
         }
-        handleAccountTypeFields(userId);
     }
 
     function closeUserDetails(userId) {
@@ -1740,28 +1445,6 @@ $flash = getFlashMessage();
                 }
             }
         });
-    }
-
-    function handleAccountTypeFields(userId) {
-        const roleSelect = document.getElementById(`account_role_${userId}`);
-        if (!roleSelect) {
-            return;
-        }
-
-        const role = roleSelect.value;
-        const agentFields = document.getElementById(`account_agent_fields_${userId}`);
-        const customerFields = document.getElementById(`account_customer_fields_${userId}`);
-        const storeInput = document.getElementById(`account_store_${userId}`);
-
-        if (agentFields) {
-            agentFields.style.display = role === 'agent' ? '' : 'none';
-        }
-        if (customerFields) {
-            customerFields.style.display = (role === 'customer' || role === 'vip') ? '' : 'none';
-        }
-        if (storeInput) {
-            storeInput.required = role === 'agent';
-        }
     }
     
     // Theme management - consistent across all pages
@@ -1818,14 +1501,6 @@ $flash = getFlashMessage();
                 handleRoleFields(this.value);
             });
         }
-
-        document.querySelectorAll('.account-role-select').forEach(function(select) {
-            const userId = select.getAttribute('data-user-id');
-            handleAccountTypeFields(userId);
-            select.addEventListener('change', function() {
-                handleAccountTypeFields(userId);
-            });
-        });
         
         window.addEventListener('click', function(event) {
             if (event.target.classList && event.target.classList.contains('modal')) {
@@ -1868,18 +1543,49 @@ $flash = getFlashMessage();
     gap: 0.15rem;
 }
 
+/* Dark mode contrast fixes for Role/Status badges in users table */
+[data-theme="dark"] .table .badge {
+    border: 1px solid rgba(241, 233, 218, 0.22);
+    font-weight: 600;
+}
+
+[data-theme="dark"] .table .badge-danger {
+    background-color: rgba(217, 3, 104, 0.35);
+    color: #ffe5f2;
+}
+
+[data-theme="dark"] .table .badge-warning {
+    background-color: rgba(255, 212, 0, 0.36);
+    color: #2e294e;
+}
+
+[data-theme="dark"] .table .badge-info {
+    background-color: rgba(84, 19, 136, 0.52);
+    color: #f1e9da;
+}
+
+[data-theme="dark"] .table .badge-success {
+    background-color: rgba(24, 160, 88, 0.42);
+    color: #e9fff3;
+}
+
+[data-theme="dark"] .table .badge-secondary {
+    background-color: rgba(241, 233, 218, 0.24);
+    color: #f1e9da;
+}
+
 .user-name {
     font-weight: 600;
-    color: var(--text-color, #1f2937);
+    color: var(--text-color, #2E294E);
 }
 
 [data-theme="dark"] .user-name {
-    color: #e2e8f0;
+    color: #F1E9DA;
 }
 
 .user-email {
     font-size: 0.8rem;
-    color: var(--text-muted, #64748b);
+    color: var(--text-muted, #541388);
 }
 
 .user-summary {
@@ -1924,7 +1630,7 @@ $flash = getFlashMessage();
     left: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 0.45);
+    background-color: rgba(46, 41, 78, 0.45);
     z-index: 10000;
     display: none;
     padding: 2rem 1rem;
@@ -1936,12 +1642,12 @@ $flash = getFlashMessage();
 }
 
 .modal-content {
-    background: var(--card-bg, #fff);
+    background: var(--card-bg, #F1E9DA);
     border-radius: 10px;
     margin: 0 auto;
     padding: 24px;
     max-width: 580px;
-    box-shadow: 0 10px 40px rgba(15, 23, 42, 0.2);
+    box-shadow: 0 10px 40px rgba(46, 41, 78, 0.2);
     position: relative;
 }
 
@@ -1950,8 +1656,8 @@ $flash = getFlashMessage();
 }
 
 [data-theme="dark"] .modal-content {
-    background: #1f2937;
-    color: #e2e8f0;
+    background: #2E294E;
+    color: #F1E9DA;
 }
 
 .modal-content .close {
@@ -1960,11 +1666,11 @@ $flash = getFlashMessage();
     right: 20px;
     font-size: 1.5rem;
     cursor: pointer;
-    color: var(--text-muted, #64748b);
+    color: var(--text-muted, #541388);
 }
 
 [data-theme="dark"] .modal-content .close {
-    color: #cbd5f5;
+    color: #F1E9DA;
 }
 
 .modal-form h2 {
@@ -1986,11 +1692,11 @@ $flash = getFlashMessage();
     display: block;
     margin-top: 0.35rem;
     font-size: 0.75rem;
-    color: var(--text-muted, #64748b);
+    color: var(--text-muted, #541388);
 }
 
 [data-theme="dark"] .form-help {
-    color: #a0aec0;
+    color: #F1E9DA;
 }
 
 .modal-form .form-actions {
@@ -1999,14 +1705,14 @@ $flash = getFlashMessage();
     gap: 0.75rem;
     margin-top: 1.5rem;
     padding-top: 1rem;
-    border-top: 1px solid var(--border-color, #e2e8f0);
+    border-top: 1px solid var(--border-color, #F1E9DA);
     position: sticky;
     bottom: 0;
     background: inherit;
 }
 
 [data-theme="dark"] .modal-form .form-actions {
-    border-top-color: #4a5568;
+    border-top-color: #2E294E;
 }
 
 .detail-grid {
@@ -2017,15 +1723,15 @@ $flash = getFlashMessage();
 }
 
 .detail-card {
-    background: var(--card-muted-bg, #f8fafc);
-    border: 1px solid var(--border-color, #e2e8f0);
+    background: var(--card-muted-bg, #F1E9DA);
+    border: 1px solid var(--border-color, #F1E9DA);
     border-radius: 8px;
     padding: 1rem 1.25rem;
 }
 
 [data-theme="dark"] .detail-card {
-    background: #1f2937;
-    border-color: #374151;
+    background: #2E294E;
+    border-color: #2E294E;
 }
 
 .detail-card h3 {
@@ -2046,17 +1752,17 @@ $flash = getFlashMessage();
 
 .detail-list dt {
     font-weight: 600;
-    color: var(--text-muted, #64748b);
+    color: var(--text-muted, #541388);
 }
 
 .detail-list dd {
     margin: 0;
     text-align: right;
-    color: var(--text-color, #1f2937);
+    color: var(--text-color, #2E294E);
 }
 
 [data-theme="dark"] .detail-list dd {
-    color: #e2e8f0;
+    color: #F1E9DA;
 }
 
 .detail-actions {
@@ -2066,15 +1772,15 @@ $flash = getFlashMessage();
 }
 
 .detail-form-card {
-    border: 1px solid var(--border-color, #e2e8f0);
+    border: 1px solid var(--border-color, #F1E9DA);
     border-radius: 8px;
     padding: 1rem;
-    background: var(--card-bg, #fff);
+    background: var(--card-bg, #F1E9DA);
 }
 
 [data-theme="dark"] .detail-form-card {
-    border-color: #374151;
-    background: #111827;
+    border-color: #2E294E;
+    background: #2E294E;
 }
 
 .detail-form-card h4 {
@@ -2084,7 +1790,7 @@ $flash = getFlashMessage();
 .detail-form-card .form-help {
     display: block;
     margin-top: 0.5rem;
-    color: var(--text-muted, #64748b);
+    color: var(--text-muted, #541388);
     font-size: 0.85rem;
 }
 
@@ -2092,7 +1798,7 @@ $flash = getFlashMessage();
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
-    color: var(--text-muted, #64748b);
+    color: var(--text-muted, #541388);
     font-size: 0.9rem;
 }
 
@@ -2106,11 +1812,11 @@ $flash = getFlashMessage();
     gap: 0.5rem;
     margin-top: 0.75rem;
     padding-top: 0.75rem;
-    border-top: 1px solid var(--border-color, #e2e8f0);
+    border-top: 1px solid var(--border-color, #F1E9DA);
 }
 
 [data-theme="dark"] .detail-form .form-actions.compact {
-    border-top-color: #4a5568;
+    border-top-color: #2E294E;
 }
 
 .detail-form .form-actions.compact button {
@@ -2172,15 +1878,15 @@ $flash = getFlashMessage();
 
     .table-responsive tbody tr {
         margin-bottom: 1rem;
-        border: 1px solid var(--border-color, #e2e8f0);
+        border: 1px solid var(--border-color, #F1E9DA);
         border-radius: 8px;
         padding: 0.75rem 1rem;
-        background: var(--card-bg, #fff);
+        background: var(--card-bg, #F1E9DA);
     }
 
     [data-theme="dark"] .table-responsive tbody tr {
-        background: #1f2937;
-        border-color: #374151;
+        background: #2E294E;
+        border-color: #2E294E;
     }
 
     .table-responsive tbody td {
@@ -2198,7 +1904,7 @@ $flash = getFlashMessage();
     .table-responsive tbody td::before {
         content: attr(data-label);
         font-weight: 600;
-        color: var(--text-muted, #64748b);
+        color: var(--text-muted, #541388);
     }
 
     .table-responsive tbody td[data-label="Actions"] {
@@ -2252,7 +1958,7 @@ $flash = getFlashMessage();
     color: var(--text-primary) !important;
     background-color: var(--bg-primary) !important;
     border-color: var(--brand-primary) !important;
-    box-shadow: 0 0 0 0.2rem rgba(139, 92, 246, 0.25) !important;
+    box-shadow: 0 0 0 0.2rem rgba(84, 19, 136, 0.25) !important;
 }
 
 .store-name-input::placeholder {

@@ -14,8 +14,8 @@
             position: fixed;
             top: 10px;
             right: 10px;
-            background: #333;
-            color: white;
+            background: #2E294E;
+            color: #F1E9DA;
             padding: 8px 12px;
             border-radius: 20px;
             font-size: 12px;
@@ -67,13 +67,13 @@
                                  (content && content !== 'none' && content !== '\"\"');
             
             if (isFontAwesome) {
-                updateStatus('Working', '#28a745');
+                updateStatus('Working', '#2E294E');
             } else {
                 // Check if we're in fallback mode
                 if (document.body.classList.contains('fa-fallback')) {
-                    updateStatus('Fallback Mode', '#ffc107');
+                    updateStatus('Fallback Mode', '#FFD400');
                 } else {
-                    updateStatus('Failed', '#dc3545');
+                    updateStatus('Failed', '#D90368');
                 }
             }
         }, 100);
@@ -88,11 +88,11 @@
         
         // Listen for Font Awesome events
         document.addEventListener('fontAwesomeLoaded', function() {
-            updateStatus('CDN Loaded', '#28a745');
+            updateStatus('CDN Loaded', '#2E294E');
         });
         
         document.addEventListener('fontAwesomeFallback', function() {
-            updateStatus('Fallback Mode', '#ffc107');
+            updateStatus('Fallback Mode', '#FFD400');
         });
         
         // Retest after 3 seconds

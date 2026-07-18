@@ -18,15 +18,7 @@
         location.port === '8080'
     );
     
-    let basePath = '';
-    const pathParts = window.location.pathname.split('/').filter(p => p !== '');
-    if (pathParts.length > 0) {
-        const firstSegment = pathParts[0];
-        if (!firstSegment.endsWith('.php') && !['admin', 'agent', 'customer', 'vip'].includes(firstSegment)) {
-            basePath = '/' + firstSegment;
-        }
-    }
-    const swPath = basePath + (isProduction ? '/sw-production.js' : '/sw.js');
+    const swPath = isProduction ? '/sw-production.js' : '/sw.js';
     const environment = isProduction ? 'production' : 'development';
     
     console.log(`🔧 SW Manager: Detected ${environment} environment`);

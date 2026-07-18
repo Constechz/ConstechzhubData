@@ -5,23 +5,6 @@ require_once '../includes/email.php';
 requireLogin();
 $current = getCurrentUser();
 $csrf = generateCSRF();
-$store_slug = sanitize($_GET['store'] ?? '');
-$agent_store = null;
-
-if ($store_slug !== '') {
-    $stmt = $db->prepare("
-        SELECT ast.store_name, u.full_name AS agent_name
-        FROM agent_stores ast
-        JOIN users u ON ast.agent_id = u.id
-        WHERE ast.store_slug = ? AND ast.is_active = 1 AND u.status = 'active'
-        LIMIT 1
-    ");
-    if ($stmt) {
-        $stmt->bind_param('s', $store_slug);
-        $stmt->execute();
-        $agent_store = $stmt->get_result()->fetch_assoc() ?: null;
-    }
-}
 
 // Handle support ticket submission
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_ticket'])) {
@@ -81,88 +64,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_ticket'])) {
 </head>
 <body>
   <div class="dashboard-wrapper">
-    <nav class="sidebar">
-      <div class="sidebar-brand">
-        <h3><?php echo $agent_store ? htmlspecialchars($agent_store['store_name']) : htmlspecialchars(getSiteName()); ?></h3>
-        <?php if ($agent_store): ?>
-          <small style="opacity: 0.7; font-size: 0.8rem;">by <?php echo htmlspecialchars($agent_store['agent_name']); ?></small>
-        <?php endif; ?>
-      </div>
-      <ul class="sidebar-nav">
-        <li class="nav-section">
-          <div class="nav-section-title">Dashboard</div>
-          <div class="nav-item">
-            <a class="nav-link" href="dashboard.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-              <i class="fas fa-home"></i> Dashboard
-            </a>
-          </div>
-        </li>
-        <li class="nav-section">
-          <div class="nav-section-title">Services</div>
-          <div class="nav-item">
-            <a class="nav-link" href="buy-data.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-              <i class="fas fa-mobile-alt"></i> Buy Data
-            </a>
-          </div>
-          <div class="nav-item">
-            <a class="nav-link" href="bulk-mtn.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-              <i class="fas fa-layer-group"></i> Bulk MTN
-            </a>
-          </div>
-          <div class="nav-item">
-            <a class="nav-link" href="result-checker.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-              <i class="fas fa-award"></i> Result Checker
-            </a>
-          </div>
-          <div class="nav-item">
-            <a class="nav-link" href="afa-registration.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-              <i class="fas fa-id-card"></i> AFA Registration
-            </a>
-          </div>
-          <div class="nav-item">
-            <a class="nav-link" href="order-history.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-              <i class="fas fa-history"></i> Order History
-            </a>
-          </div>
-          <div class="nav-item">
-            <a class="nav-link" href="reference.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-              <i class="fas fa-search"></i> Reference
-            </a>
-          </div>
-        </li>
-        <li class="nav-section">
-          <div class="nav-section-title">Account</div>
-          <div class="nav-item">
-            <a class="nav-link" href="wallet.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-              <i class="fas fa-wallet"></i> Wallet
-            </a>
-          </div>
-          <div class="nav-item">
-            <a class="nav-link" href="profile.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-              <i class="fas fa-user"></i> Profile
-            </a>
-          </div>
-          <div class="nav-item">
-            <a class="nav-link" href="constchat.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-              <i class="fas fa-comments"></i> Constchat
-            </a>
-          </div>
-          <div class="nav-item">
-            <a class="nav-link active" href="support.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-              <i class="fas fa-life-ring"></i> Support
-            </a>
-          </div>
-        </li>
-        <li class="nav-section">
-          <div class="nav-section-title">Settings</div>
-          <div class="nav-item">
-            <a class="nav-link" href="../logout.php">
-              <i class="fas fa-sign-out-alt"></i> Logout
-            </a>
-          </div>
-        </li>
-      </ul>
-    </nav>
+    <?php require_once '../includes/customer_sidebar.php'; ?>
     <main class="main-content">
       <header class="dashboard-header">
         <div class="header-left">
@@ -211,6 +113,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_ticket'])) {
           </div>
         </div>
       </header>
+
+<?php echo renderNotificationSlides('customers'); ?>
+
       <div class="dashboard-content">
         <div class="dashboard-grid">
           <div class="widget">
@@ -292,20 +197,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_ticket'])) {
       top: 0;
       width: 100%;
       height: 100%;
-      background-color: rgba(0, 0, 0, 0.5);
+      background-color: rgba(46, 41, 78, 0.5);
       backdrop-filter: blur(4px);
     }
 
     .modal-content {
-      background-color: var(--bg-color, #ffffff);
+      background-color: var(--bg-color, #F1E9DA);
       margin: 5% auto;
-      border: 1px solid var(--border-color, #ddd);
+      border: 1px solid var(--border-color, #F1E9DA);
       border-radius: 12px;
       width: 90%;
       max-width: 700px;
       max-height: 80vh;
       overflow: hidden;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+      box-shadow: 0 10px 30px rgba(46, 41, 78, 0.3);
       animation: modalSlideIn 0.3s ease-out;
     }
 
@@ -322,12 +227,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_ticket'])) {
 
     .modal-header {
       padding: 20px 24px 16px;
-      border-bottom: 1px solid var(--border-color, #eee);
+      border-bottom: 1px solid var(--border-color, #F1E9DA);
       display: flex;
       justify-content: space-between;
       align-items: center;
-      background: linear-gradient(135deg, var(--primary-color, #007bff), var(--primary-dark, #0056b3));
-      color: white;
+      background: linear-gradient(135deg, var(--primary-color, #541388), var(--primary-dark, #541388));
+      color: #F1E9DA;
     }
 
     .modal-header h3 {
@@ -337,7 +242,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_ticket'])) {
     }
 
     .modal-close {
-      color: rgba(255, 255, 255, 0.8);
+      color: rgba(241, 233, 218, 0.8);
       font-size: 28px;
       font-weight: bold;
       cursor: pointer;
@@ -346,14 +251,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_ticket'])) {
     }
 
     .modal-close:hover {
-      color: white;
+      color: #F1E9DA;
     }
 
     .modal-body {
       padding: 24px;
       max-height: 60vh;
       overflow-y: auto;
-      color: var(--text-color, #333);
+      color: var(--text-color, #2E294E);
     }
 
     .ticket-messages {
@@ -364,14 +269,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_ticket'])) {
       padding: 16px;
       margin-bottom: 12px;
       border-radius: 8px;
-      border-left: 4px solid var(--primary-color, #007bff);
-      background-color: var(--widget-bg, #f8f9fa);
-      border: 1px solid var(--border-color, #e9ecef);
+      border-left: 4px solid var(--primary-color, #541388);
+      background-color: var(--widget-bg, #F1E9DA);
+      border: 1px solid var(--border-color, #F1E9DA);
     }
 
     .message-sender {
       font-weight: 600;
-      color: var(--primary-color, #007bff);
+      color: var(--primary-color, #541388);
       margin-bottom: 4px;
       display: flex;
       justify-content: space-between;
@@ -380,7 +285,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_ticket'])) {
 
     .message-time {
       font-size: 0.875rem;
-      color: var(--text-muted, #6c757d);
+      color: var(--text-muted, #541388);
       font-weight: normal;
     }
 
@@ -391,7 +296,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_ticket'])) {
     }
 
     .reply-section {
-      border-top: 1px solid var(--border-color, #eee);
+      border-top: 1px solid var(--border-color, #F1E9DA);
       padding-top: 20px;
     }
 
@@ -411,27 +316,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_ticket'])) {
 
     .modal-actions .btn:hover {
       transform: translateY(-1px);
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      box-shadow: 0 4px 12px rgba(46, 41, 78, 0.15);
     }
 
     /* Dark Mode Styles */
     [data-theme="dark"] .modal-content {
-      background-color: var(--bg-dark, #2d3748);
-      border-color: var(--border-dark, #4a5568);
-      color: var(--text-dark, #e2e8f0);
+      background-color: var(--bg-dark, #2E294E);
+      border-color: var(--border-dark, #2E294E);
+      color: var(--text-dark, #F1E9DA);
     }
 
     [data-theme="dark"] .modal-header {
-      border-bottom-color: var(--border-dark, #4a5568);
+      border-bottom-color: var(--border-dark, #2E294E);
     }
 
     [data-theme="dark"] .message-item {
-      background-color: var(--widget-bg-dark, #4a5568);
-      border-color: var(--border-dark, #718096);
+      background-color: var(--widget-bg-dark, #2E294E);
+      border-color: var(--border-dark, #541388);
     }
 
     [data-theme="dark"] .reply-section {
-      border-top-color: var(--border-dark, #4a5568);
+      border-top-color: var(--border-dark, #2E294E);
     }
 
     /* Responsive Design */
@@ -578,7 +483,7 @@ function showNotification(message, type = 'info') {
     z-index: 1100;
     max-width: 300px;
     animation: slideInRight 0.3s ease-out;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    box-shadow: 0 4px 12px rgba(46, 41, 78, 0.15);
   `;
   notification.textContent = message;
   
@@ -687,6 +592,8 @@ loadTickets();
 </script>
     <!-- IMMEDIATE Icon Fix for square placeholder issues -->
     <script src="../immediate_icon_fix.js"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
 

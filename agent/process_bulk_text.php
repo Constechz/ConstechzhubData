@@ -37,7 +37,6 @@ if (!$current_user) {
     echo json_encode(['success' => false, 'message' => 'User not authenticated']);
     exit;
 }
-ensureDataPackageStockStatusColumn();
 
 function normalize_volume_key($value) {
     $value = strtolower(trim($value));
@@ -62,14 +61,12 @@ function normalize_numeric_key($value) {
 try {
     $stmt = $db->prepare("
         SELECT dp.id, dp.name, dp.data_size,
-               COALESCE(dp.stock_status, 'in_stock') AS stock_status,
                COALESCE(pp_agent.price, pp_customer.price, dp.price) as effective_price
         FROM data_packages dp
         JOIN networks n ON dp.network_id = n.id
         LEFT JOIN package_pricing pp_agent ON pp_agent.package_id = dp.id AND pp_agent.user_type = 'agent'
         LEFT JOIN package_pricing pp_customer ON pp_customer.package_id = dp.id AND pp_customer.user_type = 'customer'
         WHERE n.name = 'MTN' AND dp.status = 'active'
-          AND COALESCE(dp.stock_status, 'in_stock') = 'in_stock'
         ORDER BY dp.data_size
     ");
     $stmt->execute();
@@ -260,7 +257,7 @@ try {
         if ($api_result['success']) {
             $stmt_update = $db->prepare("
                 UPDATE bundle_orders
-                SET status = 'processing', api_response = ?, provider_reference = ?, updated_at = NOW()
+                SET status = 'delivered', api_response = ?, provider_reference = ?, delivered_at = NOW()
                 WHERE id = ?
             ");
             $api_response_json = json_encode($api_result);
@@ -269,26 +266,7 @@ try {
             $stmt_update->execute();
 
             if (function_exists('applyMtnStatusPolicy')) {
-                applyMtnStatusPolicy($order_id, 'processing');
-            }
-
-            if (function_exists('recordAgentCommission')) {
-                $commission_amount = function_exists('calculateAgentDataCommissionAmount')
-                    ? calculateAgentDataCommissionAmount($order['data_size'] ?? '', 1)
-                    : 0.0;
-
-                if ($commission_amount > 0) {
-                    recordAgentCommission([
-                        'agent_id' => (int) $current_user['id'],
-                        'source_type' => 'data',
-                        'source_id' => (int) $order_id,
-                        'source_reference' => (string) $order_reference,
-                        'amount' => $commission_amount,
-                        'quantity' => 1,
-                        'rate_snapshot' => function_exists('getAgentCommissionSettings') ? (float) (getAgentCommissionSettings()['data_rate_per_gb'] ?? 0) : null,
-                        'notes' => ($order['network_name'] ?? 'Data') . ' ' . ($order['data_size'] ?? 'bundle') . ' for ' . $formatted_phone,
-                    ]);
-                }
+                applyMtnStatusPolicy($order_id, 'delivered');
             }
 
             $processed++;
@@ -327,22 +305,6 @@ try {
             'payment_method' => 'wallet',
             'status' => 'processed',
             'agent_id' => (int) $current_user['id'],
-            'source' => 'agent_bulk_text'
-        ]);
-
-        sendUserOrderNotification([
-            'order_type' => 'data',
-            'order_reference' => generateReference('AGBULKTXT'),
-            'order_id' => 0,
-            'user_id' => (int) $current_user['id'],
-            'customer_name' => $current_user['full_name'] ?? '',
-            'customer_email' => $current_user['email'] ?? '',
-            'beneficiary_number' => 'Multiple numbers',
-            'network_name' => 'MTN',
-            'package_name' => "Agent Bulk MTN ({$processed} successful orders)",
-            'amount' => (float) $charged_total,
-            'payment_method' => 'wallet',
-            'status' => 'processed',
             'source' => 'agent_bulk_text'
         ]);
     }

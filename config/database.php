@@ -6,22 +6,19 @@ class Database {
     private $username = DB_USER;
     private $password = DB_PASS;
     private $database = DB_NAME;
-    private $port = null;
+    private $port = DB_PORT;
     private $connection;
     
     public function __construct() {
-        if (strpos($this->host, ':') !== false) {
-            list($host, $port) = explode(':', $this->host, 2);
-            $this->host = $host;
-            $this->port = (int)$port;
-        } elseif (defined('DB_PORT') && DB_PORT !== null) {
-            $this->port = (int)DB_PORT;
-        }
         $this->connect();
     }
     
     private function connect() {
         try {
+            if ($this->connection && $this->connection instanceof mysqli) {
+                @$this->connection->close();
+            }
+
             $conn = mysqli_init();
             if (!$conn) {
                 throw new Exception("MySQLi init failed.");
@@ -32,11 +29,14 @@ class Database {
             if (defined('MYSQLI_OPT_READ_TIMEOUT')) {
                 $conn->options(MYSQLI_OPT_READ_TIMEOUT, 8);
             }
+            if (defined('MYSQLI_OPT_RECONNECT')) {
+                $conn->options(MYSQLI_OPT_RECONNECT, true);
+            }
             if (defined('MYSQLI_OPT_INT_AND_FLOAT_NATIVE')) {
                 $conn->options(MYSQLI_OPT_INT_AND_FLOAT_NATIVE, 1);
             }
 
-            $conn->real_connect($this->host, $this->username, $this->password, $this->database, $this->port);
+            $conn->real_connect($this->host, $this->username, $this->password, $this->database, (int) $this->port);
             $this->connection = $conn;
             
             if ($this->connection->connect_error) {
@@ -50,20 +50,61 @@ class Database {
             die("Database connection error: " . $e->getMessage());
         }
     }
+
+    private function ensureConnection() {
+        if (!$this->connection || !($this->connection instanceof mysqli)) {
+            $this->connect();
+            return;
+        }
+
+        try {
+            $ok = $this->connection->ping();
+        } catch (mysqli_sql_exception $e) {
+            $ok = false;
+        }
+
+        if (!$ok) {
+            $this->connect();
+        }
+    }
     
     public function getConnection() {
+        $this->ensureConnection();
         return $this->connection;
     }
     
     public function query($sql) {
-        return $this->connection->query($sql);
+        $this->ensureConnection();
+        try {
+            return $this->connection->query($sql);
+        } catch (mysqli_sql_exception $e) {
+            $code = (int) $e->getCode();
+            // Retry once on lost connection.
+            if ($code === 2006 || $code === 2013) {
+                $this->connect();
+                return $this->connection->query($sql);
+            }
+            throw $e;
+        }
     }
     
     public function prepare($sql) {
-        return $this->connection->prepare($sql);
+        $this->ensureConnection();
+        try {
+            return $this->connection->prepare($sql);
+        } catch (mysqli_sql_exception $e) {
+            $code = (int) $e->getCode();
+            // Retry once on lost connection.
+            if ($code === 2006 || $code === 2013) {
+                $this->connect();
+                return $this->connection->prepare($sql);
+            }
+            throw $e;
+        }
     }
     
     public function escape($string) {
+        $this->ensureConnection();
         return $this->connection->real_escape_string($string);
     }
     

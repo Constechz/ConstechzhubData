@@ -124,28 +124,28 @@ try {
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>">
     <style>
         .warning-box {
-            background: #fff3cd;
-            border: 1px solid #ffeaa7;
+            background: #F1E9DA;
+            border: 1px solid #F1E9DA;
             border-radius: 8px;
             padding: 1.5rem;
             margin: 1rem 0;
-            color: #856404;
+            color: #2E294E;
         }
         .danger-box {
-            background: #f8d7da;
-            border: 1px solid #f5c6cb;
+            background: #F1E9DA;
+            border: 1px solid #F1E9DA;
             border-radius: 8px;
             padding: 1.5rem;
             margin: 1rem 0;
-            color: #721c24;
+            color: #2E294E;
         }
         .success-box {
-            background: #d4edda;
-            border: 1px solid #c3e6cb;
+            background: #F1E9DA;
+            border: 1px solid #F1E9DA;
             border-radius: 8px;
             padding: 1.5rem;
             margin: 1rem 0;
-            color: #155724;
+            color: #2E294E;
         }
         .stats-grid {
             display: grid;
@@ -170,13 +170,13 @@ try {
             font-weight: bold;
             padding: 0.75rem;
             width: 100%;
-            border: 2px solid #dc3545;
+            border: 2px solid #D90368;
             border-radius: 4px;
             margin: 0.5rem 0;
         }
         .reset-button {
-            background: #dc3545;
-            color: white;
+            background: #D90368;
+            color: #F1E9DA;
             border: none;
             padding: 0.75rem 1.5rem;
             border-radius: 4px;
@@ -185,10 +185,10 @@ try {
             transition: background 0.2s;
         }
         .reset-button:hover {
-            background: #c82333;
+            background: #D90368;
         }
         .reset-button:disabled {
-            background: #6c757d;
+            background: #541388;
             cursor: not-allowed;
         }
     </style>
@@ -200,7 +200,23 @@ try {
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-                    <?php renderAdminSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
+                <div class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Management</div>
+                <div class="nav-item"><a href="packages.php" class="nav-link"><i class="fas fa-box"></i> Data Packages</a></div>
+                <div class="nav-item"><a href="pricing.php" class="nav-link"><i class="fas fa-tags"></i> Pricing</a></div>
+                <div class="nav-item"><a href="afa-registration.php" class="nav-link"><i class="fas fa-user-check"></i> AFA Registration</a></div>
+                <div class="nav-item"><a href="users.php" class="nav-link"><i class="fas fa-users"></i> Users</a></div>
+                <div class="nav-item"><a href="agents.php" class="nav-link"><i class="fas fa-user-tie"></i> Agents</a></div>
+            
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+        </ul>
                 <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
     </nav>
 
@@ -225,7 +241,7 @@ try {
 
         <div class="dashboard-content">
             <div class="page-title">
-                <h1><i class="fas fa-exclamation-triangle" style="color: #dc3545;"></i> Reset Data Packages</h1>
+                <h1><i class="fas fa-exclamation-triangle" style="color: #D90368;"></i> Reset Data Packages</h1>
                 <p class="page-subtitle">Permanently remove all data bundle packages and related data from the system.</p>
             </div>
 
@@ -373,10 +389,10 @@ document.getElementById('confirmation').addEventListener('input', function() {
     
     if (confirmationText === 'RESET PACKAGES') {
         resetButton.disabled = false;
-        resetButton.style.background = '#dc3545';
+        resetButton.style.background = '#D90368';
     } else {
         resetButton.disabled = true;
-        resetButton.style.background = '#6c757d';
+        resetButton.style.background = '#541388';
     }
 });
 

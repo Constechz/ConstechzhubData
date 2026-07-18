@@ -11,211 +11,54 @@ $agent_id = $current_user['id'];
 $error = '';
 $success = '';
 
-$commission_settings = function_exists('getAgentCommissionSettings')
-    ? getAgentCommissionSettings()
-    : ['program_enabled' => false, 'start_at' => '', 'active_now' => false];
-$store_profit_total = 0.0;
-$modern_profit_total = 0.0;
-$data_commission = 0.0;
-$checker_commission = 0.0;
-$afa_commission = 0.0;
-$pending_requests_total = 0.0;
-$liquidated_commission = 0.0;
-$commission_by_source = [];
-$recent_commissions = [];
-$liquidation_history = [];
-
-if (function_exists('dbh_table_exists') && dbh_table_exists('agent_profits')) {
-    $stmt = $db->prepare("SELECT COALESCE(SUM(profit_amount), 0) AS total FROM agent_profits WHERE agent_id = ? AND status = 'earned'");
-    if ($stmt) {
-        $stmt->bind_param('i', $agent_id);
-        $stmt->execute();
-        if ($row = $stmt->get_result()->fetch_assoc()) {
-            $store_profit_total = (float) ($row['total'] ?? 0);
-            $modern_profit_total = $store_profit_total;
-        }
-        $stmt->close();
-    }
-}
-
-if (function_exists('ensureAgentCommissionTables')) {
-    ensureAgentCommissionTables();
-}
-
-if (function_exists('dbh_table_exists') && dbh_table_exists('agent_commissions')) {
-    $stmt = $db->prepare("
-        SELECT source_type, COUNT(*) AS total_count, COALESCE(SUM(amount), 0) AS total_amount
-        FROM agent_commissions
-        WHERE agent_id = ? AND status <> 'cancelled'
-        GROUP BY source_type
-    ");
-    if ($stmt) {
-        $stmt->bind_param('i', $agent_id);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        while ($row = $result->fetch_assoc()) {
-            $sourceType = strtolower(trim((string) ($row['source_type'] ?? '')));
-            $amount = (float) ($row['total_amount'] ?? 0);
-            $count = (int) ($row['total_count'] ?? 0);
-
-            if ($sourceType === 'data') {
-                $data_commission = $amount;
-                $label = 'Data Commission';
-                $color = '#2563eb';
-                $icon = 'fa-wifi';
-            } elseif ($sourceType === 'checker') {
-                $checker_commission = $amount;
-                $label = 'Result Checker Commission';
-                $color = '#f59e0b';
-                $icon = 'fa-award';
-            } elseif ($sourceType === 'afa') {
-                $afa_commission = $amount;
-                $label = 'AFA Commission';
-                $color = '#059669';
-                $icon = 'fa-id-card';
-            } else {
-                $label = ucfirst($sourceType) . ' Commission';
-                $color = '#64748b';
-                $icon = 'fa-coins';
-            }
-
-            $commission_by_source[] = [
-                'label' => $label,
-                'amount' => $amount,
-                'count' => $count,
-                'icon' => $icon,
-                'color' => $color,
-            ];
-        }
-        $stmt->close();
-    }
-
-    $stmt = $db->prepare("
-        SELECT source_type, source_reference, amount, quantity, rate_snapshot, status, earned_at, notes
-        FROM agent_commissions
-        WHERE agent_id = ?
-        ORDER BY earned_at DESC, id DESC
-        LIMIT 20
-    ");
-    if ($stmt) {
-        $stmt->bind_param('i', $agent_id);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        while ($row = $result->fetch_assoc()) {
-            $sourceType = strtolower(trim((string) ($row['source_type'] ?? '')));
-            if ($sourceType === 'data') {
-                $sourceLabel = 'Data Commission';
-            } elseif ($sourceType === 'checker') {
-                $sourceLabel = 'Result Checker';
-            } elseif ($sourceType === 'afa') {
-                $sourceLabel = 'AFA Registration';
-            } else {
-                $sourceLabel = ucfirst($sourceType);
-            }
-
-            $itemLabel = trim((string) ($row['notes'] ?? ''));
-            if ($itemLabel === '') {
-                $itemLabel = (string) ($row['source_reference'] ?? 'Commission record');
-            }
-
-            $recent_commissions[] = [
-                'created_at' => $row['earned_at'] ?? null,
-                'source_label' => $sourceLabel,
-                'item_label' => $itemLabel,
-                'amount' => (float) ($row['amount'] ?? 0),
-                'commission_amount' => (float) ($row['amount'] ?? 0),
-                'status_label' => ucfirst(strtolower((string) ($row['status'] ?? 'earned'))),
-                'commission_earned' => (float) ($row['amount'] ?? 0),
-                'commission_status' => strtolower((string) ($row['status'] ?? 'earned')),
-            ];
-        }
-        $stmt->close();
-    }
-}
-
-$commission_by_network = $commission_by_source;
-
-$total_commission = round($data_commission + $checker_commission + $afa_commission, 2);
-
-$hasCommissionLiquidations = function_exists('dbh_table_exists') && dbh_table_exists('commission_liquidations');
-if ($hasCommissionLiquidations) {
-    $stmt = $db->prepare("
-        SELECT
-            COALESCE(SUM(CASE WHEN status IN ('pending', 'processing') THEN liquidated_amount ELSE 0 END), 0) AS pending_total,
-            COALESCE(SUM(CASE WHEN status = 'completed' THEN liquidated_amount ELSE 0 END), 0) AS completed_total
-        FROM commission_liquidations
-        WHERE agent_id = ?
-    ");
-    if ($stmt) {
-        $stmt->bind_param('i', $agent_id);
-        $stmt->execute();
-        if ($row = $stmt->get_result()->fetch_assoc()) {
-            $pending_requests_total = (float) ($row['pending_total'] ?? 0);
-            $liquidated_commission = (float) ($row['completed_total'] ?? 0);
-        }
-        $stmt->close();
-    }
-
-    if (function_exists('getAgentLiquidationHistory')) {
-        $liquidation_history = getAgentLiquidationHistory($agent_id, 10);
-    }
-}
-
-$liquidated_commission = max(
-    $liquidated_commission,
-    function_exists('getAgentLiquidatedCommission') ? (float) getAgentLiquidatedCommission($agent_id) : 0.0
-);
-$pending_commission = function_exists('getAgentPendingCommission')
-    ? (float) getAgentPendingCommission($agent_id)
-    : max(0, round($total_commission - $pending_requests_total - $liquidated_commission, 2));
-
 // Handle liquidation request
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!isset($_POST['csrf_token']) || !hash_equals($_SESSION['csrf_token'], $_POST['csrf_token'])) {
         $error = 'Invalid security token. Please try again.';
     } else {
         $action = $_POST['action'] ?? '';
-
+        
         if ($action === 'request_liquidation') {
-            $amount = round((float) ($_POST['amount'] ?? 0), 2);
+            $amount = floatval($_POST['amount']);
             $method = sanitize($_POST['method'] ?? 'wallet_credit');
             $notes = sanitize($_POST['notes'] ?? '');
-            $allowed_methods = ['wallet_credit', 'mobile_money', 'bank_transfer'];
-            if (!in_array($method, $allowed_methods, true)) {
-                $method = 'wallet_credit';
-            }
-
-            if ($amount > $pending_commission) {
-                $error = 'Insufficient pending commission.';
-            } elseif ($amount < 1.00) {
-                $error = 'Minimum liquidation amount is ' . CURRENCY . '1.00';
+            
+            $result = createCommissionLiquidation($agent_id, $amount, $method, $notes);
+            
+            if ($result['success']) {
+                $success = $result['message'] . ' (Reference: ' . $result['reference'] . ')';
             } else {
-                $reference = function_exists('generateReference')
-                    ? generateReference('LIQ')
-                    : ('LIQ_' . time() . '_' . $agent_id);
-                $remaining = max(0, round($pending_commission - $amount, 2));
-                $stmt = $db->prepare("
-                    INSERT INTO commission_liquidations
-                    (agent_id, total_commission, liquidated_amount, remaining_commission, liquidation_method, reference_number, notes)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                ");
-                if ($stmt) {
-                    $stmt->bind_param('idddsss', $agent_id, $pending_commission, $amount, $remaining, $method, $reference, $notes);
-                    if ($stmt->execute()) {
-                        $success = 'Liquidation request created successfully (Reference: ' . $reference . ')';
-                        $pending_requests_total = round($pending_requests_total + $amount, 2);
-                        $pending_commission = max(0, round($pending_commission - $amount, 2));
-                    } else {
-                        $error = 'Failed to create liquidation request.';
-                    }
-                    $stmt->close();
-                } else {
-                    $error = 'Failed to prepare liquidation request.';
-                }
+                $error = $result['message'];
             }
         }
     }
 }
+
+// Get commission data
+$pending_commission = getAgentPendingCommission($agent_id);
+$liquidated_commission = getAgentLiquidatedCommission($agent_id);
+$total_commission = $pending_commission + $liquidated_commission;
+
+// Get commission breakdown by network
+$commission_by_network = getAgentCommissionByNetwork($agent_id, 'pending');
+
+// Get liquidation history
+$liquidation_history = getAgentLiquidationHistory($agent_id, 10);
+
+// Get recent commission transactions
+$stmt = $db->prepare("
+    SELECT t.*, bo.id as order_id, dp.name as package_name, n.name as network_name, n.color as network_color
+    FROM transactions t
+    LEFT JOIN bundle_orders bo ON t.reference = CONCAT('ORDER_', bo.id)
+    LEFT JOIN data_packages dp ON bo.package_id = dp.id
+    LEFT JOIN networks n ON dp.network_id = n.id
+    WHERE t.user_id = ? AND t.commission_earned > 0
+    ORDER BY t.created_at DESC
+    LIMIT 20
+");
+$stmt->bind_param("i", $agent_id);
+$stmt->execute();
+$recent_commissions = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
 // Generate CSRF token
 if (!isset($_SESSION['csrf_token'])) {
@@ -232,88 +75,6 @@ if (!isset($_SESSION['csrf_token'])) {
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>"">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <style>
-        html,
-        body {
-            overflow-x: hidden;
-        }
-
-        .dashboard-wrapper,
-        .main-content,
-        .dashboard-content,
-        .grid-2,
-        .widget,
-        .stats-grid,
-        .stat-card,
-        .header-actions,
-        .user-dropdown {
-            min-width: 0;
-            max-width: 100%;
-        }
-
-        @media (max-width: 768px) {
-            .header-actions {
-                margin-right: 0;
-            }
-
-            .alert {
-                overflow-wrap: anywhere;
-            }
-
-            .network-commission-item {
-                flex-direction: column;
-                align-items: flex-start !important;
-                gap: 0.65rem;
-            }
-
-            .network-commission-item > div:last-child {
-                text-align: left !important;
-            }
-
-            .table-responsive {
-                overflow: visible;
-            }
-
-            .table {
-                width: 100%;
-                min-width: 0 !important;
-            }
-
-            .table thead {
-                display: none;
-            }
-
-            .table tbody,
-            .table tr,
-            .table td {
-                display: block;
-                width: 100%;
-            }
-
-            .table tr {
-                padding: 0.95rem 0;
-                border-bottom: 1px solid var(--border-color);
-            }
-
-            .table td {
-                padding: 0.35rem 0;
-                border: none;
-                text-align: left;
-                overflow-wrap: anywhere;
-            }
-
-            .table td::before {
-                content: attr(data-label);
-                display: block;
-                margin-bottom: 0.15rem;
-                font-size: 0.75rem;
-                font-weight: 600;
-                color: var(--text-muted);
-                text-transform: uppercase;
-                letter-spacing: 0.04em;
-            }
-        }
-    </style>
 </head>
 <body>
 <div class="dashboard-wrapper">
@@ -322,7 +83,42 @@ if (!isset($_SESSION['csrf_token'])) {
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-        <?php renderAgentSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Business</div>
+                <div class="nav-item"><a href="at-business.php" class="nav-link"><i class="fas fa-shopping-cart"></i> AT Business</a></div>
+                <div class="nav-item"><a href="mtn-business.php" class="nav-link"><i class="fas fa-mobile-alt"></i> MTN Business</a></div>
+                <div class="nav-item">
+                    <a href="afa-registration.php" class="nav-link">
+                        <i class="fas fa-user-check"></i>
+                        AFA Registration
+                    </a>
+                </div>
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+                <div class="nav-item"><a href="customers.php" class="nav-link"><i class="fas fa-users"></i> My Customers</a></div>
+                <div class="nav-item"><a href="customer_topup.php" class="nav-link"><i class="fas fa-plus-circle"></i> Customer Top-up</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Earnings</div>
+                <div class="nav-item"><a href="commission.php" class="nav-link active"><i class="fas fa-coins"></i> Commission</a></div>
+                <div class="nav-item"><a href="transactions.php" class="nav-link"><i class="fas fa-history"></i> Transactions</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item"><a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> Settings</a></div>
+                <div class="nav-item"><a href="support.php" class="nav-link"><i class="fas fa-life-ring"></i> Support</a></div>
+            </li>
+        </ul>
+                    <div class="nav-item">
+                        <a href="withdraw-profit.php" class="nav-link">
+                            <i class="fas fa-wallet"></i>
+                            Withdraw Profit
+                        </a>
+                    </div>
     </nav>
 
     <!-- Main Content -->
@@ -368,6 +164,9 @@ if (!isset($_SESSION['csrf_token'])) {
             </div>
         </header>
 
+<?php echo renderNotificationSlides('agents'); ?>
+
+
         <div class="dashboard-content">
             <div class="page-title">
                 <h1>Commission Management</h1>
@@ -386,40 +185,34 @@ if (!isset($_SESSION['csrf_token'])) {
                 </div>
             <?php endif; ?>
 
-            <?php if (!empty($commission_settings['start_at']) && empty($commission_settings['active_now']) && !empty($commission_settings['program_enabled'])): ?>
-            <div class="alert alert-info" style="margin-bottom: 1rem;">
-                Commission recording starts on <strong><?php echo htmlspecialchars(date('M j, Y H:i', strtotime((string) $commission_settings['start_at']))); ?></strong>.
-            </div>
-            <?php endif; ?>
-
             <!-- Commission Overview -->
             <div class="stats-grid" style="margin-bottom: 2rem;">
                 <div class="stat-card">
                     <div class="stat-icon"><i class="fas fa-coins text-warning"></i></div>
                     <div class="stat-content">
-                        <div class="stat-value"><?php echo CURRENCY . number_format($total_commission, 2); ?></div>
-                        <div class="stat-label"><strong>Total Commission Earned</strong></div>
+                        <div class="stat-value">₵<?php echo number_format($total_commission, 2); ?></div>
+                        <div class="stat-label">Total Commission Earned</div>
                     </div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-icon"><i class="fas fa-clock text-primary"></i></div>
                     <div class="stat-content">
-                        <div class="stat-value"><?php echo CURRENCY . number_format($pending_commission, 2); ?></div>
-                        <div class="stat-label"><strong>Available for Liquidation</strong></div>
+                        <div class="stat-value">₵<?php echo number_format($pending_commission, 2); ?></div>
+                        <div class="stat-label">Pending Commission</div>
                     </div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-icon"><i class="fas fa-check-circle text-success"></i></div>
                     <div class="stat-content">
-                        <div class="stat-value"><?php echo CURRENCY . number_format($liquidated_commission, 2); ?></div>
-                        <div class="stat-label"><strong>Paid Out</strong></div>
+                        <div class="stat-value">₵<?php echo number_format($liquidated_commission, 2); ?></div>
+                        <div class="stat-label">Liquidated Commission</div>
                     </div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-icon"><i class="fas fa-hourglass-half text-info"></i></div>
+                    <div class="stat-icon"><i class="fas fa-percentage text-info"></i></div>
                     <div class="stat-content">
-                        <div class="stat-value"><?php echo CURRENCY . number_format($pending_requests_total, 2); ?></div>
-                        <div class="stat-label"><strong>Pending Requests</strong></div>
+                        <div class="stat-value"><?php echo $total_commission > 0 ? number_format(($liquidated_commission / $total_commission) * 100, 1) : 0; ?>%</div>
+                        <div class="stat-label">Liquidation Rate</div>
                     </div>
                 </div>
             </div>
@@ -427,6 +220,10 @@ if (!isset($_SESSION['csrf_token'])) {
             <div class="grid-2">
                 <!-- Commission Liquidation -->
                 <div class="widget">
+                    <div class="widget-header">
+                        <h3 class="widget-title">Request Commission Liquidation</h3>
+                        <p class="widget-subtitle">Convert your pending commission to wallet credit or request withdrawal.</p>
+                    </div>
                     <div class="widget-content">
                         <?php if ($pending_commission > 0): ?>
                             <form method="post">
@@ -434,11 +231,11 @@ if (!isset($_SESSION['csrf_token'])) {
                                 <input type="hidden" name="action" value="request_liquidation">
                                 
                                 <div class="form-group">
-                                    <label for="amount" class="form-label">Liquidation Amount (<?php echo htmlspecialchars(CURRENCY); ?>)</label>
-                                    <input type="number" id="amount" name="amount" class="form-control"
-                                           min="1" max="<?php echo $pending_commission; ?>" step="0.01"
-                                           value="<?php echo $pending_commission; ?>" readonly required>
-                                    <div class="form-help">Maximum available: <?php echo CURRENCY . number_format($pending_commission, 2); ?></div>
+                                    <label for="amount" class="form-label">Liquidation Amount (₵)</label>
+                                    <input type="number" id="amount" name="amount" class="form-control" 
+                                           min="1" max="<?php echo $pending_commission; ?>" step="0.01" 
+                                           value="<?php echo $pending_commission; ?>" required>
+                                    <div class="form-help">Maximum available: ₵<?php echo number_format($pending_commission, 2); ?></div>
                                 </div>
                                 
                                 <div class="form-group">
@@ -470,11 +267,11 @@ if (!isset($_SESSION['csrf_token'])) {
                     </div>
                 </div>
 
-                <!-- Commission by Source -->
+                <!-- Commission by Network -->
                 <div class="widget">
                     <div class="widget-header">
-                        <h3 class="widget-title">Commission by Source</h3>
-                        
+                        <h3 class="widget-title">Commission by Network</h3>
+                        <p class="widget-subtitle">Breakdown of your pending commission earnings.</p>
                     </div>
                     <div class="widget-content">
                         <?php if (!empty($commission_by_network)): ?>
@@ -482,14 +279,14 @@ if (!isset($_SESSION['csrf_token'])) {
                                 <?php foreach ($commission_by_network as $network): ?>
                                     <div class="network-commission-item" style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid var(--border-color);">
                                         <div style="display: flex; align-items: center;">
-                                            <div style="width: 12px; height: 12px; border-radius: 50%; background: <?php echo htmlspecialchars($network['color'] ?? '#64748b'); ?>; margin-right: 8px;"></div>
+                                            <div style="width: 12px; height: 12px; border-radius: 50%; background: <?php echo htmlspecialchars($network['network_color']); ?>; margin-right: 8px;"></div>
                                             <div>
-                                                <div style="font-weight: 500;"><?php echo htmlspecialchars($network['label'] ?? ''); ?></div>
-                                                <div style="font-size: 0.875rem; color: var(--text-muted);"><?php echo (int)($network['count'] ?? 0); ?> transactions</div>
+                                                <div style="font-weight: 500;"><?php echo htmlspecialchars($network['network_name']); ?></div>
+                                                <div style="font-size: 0.875rem; color: var(--text-muted);"><?php echo $network['transaction_count']; ?> transactions</div>
                                             </div>
                                         </div>
                                         <div style="text-align: right;">
-                                            <div style="font-weight: 500; color: var(--success-color);"><?php echo CURRENCY . number_format((float)($network['amount'] ?? 0), 2); ?></div>
+                                            <div style="font-weight: 500; color: var(--success-color);">₵<?php echo number_format($network['total_commission'], 2); ?></div>
                                         </div>
                                     </div>
                                 <?php endforeach; ?>
@@ -506,6 +303,10 @@ if (!isset($_SESSION['csrf_token'])) {
 
             <!-- Liquidation History -->
             <div class="widget">
+                <div class="widget-header">
+                    <h3 class="widget-title">Liquidation History</h3>
+                    <p class="widget-subtitle">Track your commission liquidation requests and status.</p>
+                </div>
                 <div class="widget-content">
                     <?php if (!empty($liquidation_history)): ?>
                         <div class="table-responsive">
@@ -523,14 +324,14 @@ if (!isset($_SESSION['csrf_token'])) {
                                 <tbody>
                                     <?php foreach ($liquidation_history as $liquidation): ?>
                                     <tr>
-                                        <td data-label="Reference"><code><?php echo htmlspecialchars($liquidation['reference_number']); ?></code></td>
-                                        <td data-label="Amount"><?php echo CURRENCY . number_format($liquidation['liquidated_amount'], 2); ?></td>
-                                        <td data-label="Method">
+                                        <td><code><?php echo htmlspecialchars($liquidation['reference_number']); ?></code></td>
+                                        <td>₵<?php echo number_format($liquidation['liquidated_amount'], 2); ?></td>
+                                        <td>
                                             <span class="badge badge-secondary">
                                                 <?php echo ucfirst(str_replace('_', ' ', $liquidation['liquidation_method'])); ?>
                                             </span>
                                         </td>
-                                        <td data-label="Status">
+                                        <td>
                                             <span class="badge badge-<?php 
                                                 echo $liquidation['status'] === 'completed' ? 'success' : 
                                                     ($liquidation['status'] === 'failed' ? 'danger' : 
@@ -539,8 +340,8 @@ if (!isset($_SESSION['csrf_token'])) {
                                                 <?php echo ucfirst($liquidation['status']); ?>
                                             </span>
                                         </td>
-                                        <td data-label="Date"><?php echo date('M j, Y', strtotime($liquidation['created_at'])); ?></td>
-                                        <td data-label="Processed">
+                                        <td><?php echo date('M j, Y', strtotime($liquidation['created_at'])); ?></td>
+                                        <td>
                                             <?php if ($liquidation['processed_at']): ?>
                                                 <?php echo date('M j, Y', strtotime($liquidation['processed_at'])); ?>
                                                 <?php if ($liquidation['processed_by_name']): ?>
@@ -565,11 +366,11 @@ if (!isset($_SESSION['csrf_token'])) {
                 </div>
             </div>
 
-            <!-- Recent Commission Activity -->
+            <!-- Recent Commission Transactions -->
             <div class="widget">
                 <div class="widget-header">
-                    <h3 class="widget-title">Recent Commission Activity</h3>
-                    
+                    <h3 class="widget-title">Recent Commission Transactions</h3>
+                    <p class="widget-subtitle">Your latest commission-earning transactions.</p>
                 </div>
                 <div class="widget-content">
                     <?php if (!empty($recent_commissions)): ?>
@@ -578,8 +379,8 @@ if (!isset($_SESSION['csrf_token'])) {
                                 <thead>
                                     <tr>
                                         <th>Date</th>
-                                        <th>Source</th>
-                                        <th>Item</th>
+                                        <th>Package</th>
+                                        <th>Network</th>
                                         <th>Amount</th>
                                         <th>Commission</th>
                                         <th>Status</th>
@@ -588,15 +389,23 @@ if (!isset($_SESSION['csrf_token'])) {
                                 <tbody>
                                     <?php foreach ($recent_commissions as $transaction): ?>
                                     <tr>
-                                        <td data-label="Date"><?php echo date('M j, Y H:i', strtotime($transaction['created_at'])); ?></td>
-                                        <td data-label="Source"><?php echo htmlspecialchars($transaction['source_label'] ?? ($transaction['network_name'] ?? 'Commission')); ?></td>
-                                        <td data-label="Item"><?php echo htmlspecialchars($transaction['item_label'] ?? ($transaction['package_name'] ?? 'N/A')); ?></td>
-                                        <td data-label="Amount"><?php echo CURRENCY . number_format($transaction['amount'], 2); ?></td>
-                                        <td data-label="Commission" class="text-success"><?php echo CURRENCY . number_format($transaction['commission_earned'], 2); ?></td>
-                                        <td data-label="Status">
-                                            <?php $status_label = strtolower((string) ($transaction['status_label'] ?? $transaction['commission_status'] ?? 'earned')); ?>
-                                            <span class="badge badge-<?php echo in_array($status_label, ['success', 'completed', 'earned'], true) ? 'success' : ($status_label === 'pending' ? 'warning' : 'secondary'); ?>">
-                                                <?php echo htmlspecialchars($transaction['status_label'] ?? ucfirst((string) ($transaction['commission_status'] ?? 'earned'))); ?>
+                                        <td><?php echo date('M j, Y H:i', strtotime($transaction['created_at'])); ?></td>
+                                        <td><?php echo htmlspecialchars($transaction['package_name'] ?? 'N/A'); ?></td>
+                                        <td>
+                                            <?php if ($transaction['network_name']): ?>
+                                                <div style="display: flex; align-items: center;">
+                                                    <div style="width: 8px; height: 8px; border-radius: 50%; background: <?php echo htmlspecialchars($transaction['network_color']); ?>; margin-right: 6px;"></div>
+                                                    <?php echo htmlspecialchars($transaction['network_name']); ?>
+                                                </div>
+                                            <?php else: ?>
+                                                N/A
+                                            <?php endif; ?>
+                                        </td>
+                                        <td>₵<?php echo number_format($transaction['amount'], 2); ?></td>
+                                        <td class="text-success">₵<?php echo number_format($transaction['commission_earned'], 2); ?></td>
+                                        <td>
+                                            <span class="badge badge-<?php echo $transaction['commission_status'] === 'liquidated' ? 'success' : 'warning'; ?>">
+                                                <?php echo ucfirst($transaction['commission_status']); ?>
                                             </span>
                                         </td>
                                     </tr>
@@ -607,8 +416,8 @@ if (!isset($_SESSION['csrf_token'])) {
                     <?php else: ?>
                         <div class="empty-state">
                             <i class="fas fa-receipt" style="font-size: 3rem; color: var(--text-muted); margin-bottom: 1rem;"></i>
-                            <h4>No Commission Activity</h4>
-                            <p>Your admin-configured commission earnings will appear here once you make eligible sales.</p>
+                            <h4>No Commission Transactions</h4>
+                            <p>Start selling data bundles to earn commission!</p>
                         </div>
                     <?php endif; ?>
                 </div>
@@ -651,6 +460,7 @@ document.addEventListener('click', function(event) {
 </script>
     <!-- IMMEDIATE Icon Fix for square placeholder issues -->
     <script src="../immediate_icon_fix.js"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
-

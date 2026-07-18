@@ -127,7 +127,7 @@ if (!isset($_SESSION['csrf_token'])) {
         }
         .btn-primary {
             background: var(--primary-color);
-            color: white;
+            color: #F1E9DA;
             padding: 0.75rem 1.5rem;
             border: none;
             border-radius: 0.375rem;
@@ -154,7 +154,7 @@ if (!isset($_SESSION['csrf_token'])) {
         }
         .btn-secondary:hover {
             background: var(--text-muted);
-            color: white;
+            color: #F1E9DA;
         }
         .alert {
             padding: 1rem;
@@ -162,14 +162,14 @@ if (!isset($_SESSION['csrf_token'])) {
             margin-bottom: 1.5rem;
         }
         .alert-success {
-            background: #d4edda;
-            color: #155724;
-            border: 1px solid #c3e6cb;
+            background: #F1E9DA;
+            color: #2E294E;
+            border: 1px solid #F1E9DA;
         }
         .alert-error {
-            background: #f8d7da;
-            color: #721c24;
-            border: 1px solid #f5c6cb;
+            background: #F1E9DA;
+            color: #2E294E;
+            border: 1px solid #F1E9DA;
         }
         .settings-grid {
             display: grid;
@@ -212,7 +212,49 @@ if (!isset($_SESSION['csrf_token'])) {
             <div class="sidebar-brand">
                 <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
             </div>
-                        <?php renderAdminSidebar(); ?>
+            <ul class="sidebar-nav">
+                <li class="nav-section">
+                    <div class="nav-section-title">Dashboard</div>
+                    <div class="nav-item">
+                        <a href="dashboard.php" class="nav-link">
+                            <i class="fas fa-home"></i>
+                            Dashboard
+                        </a>
+                    </div>
+                </li>
+                <li class="nav-section">
+                    <div class="nav-section-title">Management</div>
+                    <div class="nav-item"><a href="packages.php" class="nav-link"><i class="fas fa-box"></i> Data Packages</a></div>
+                    <div class="nav-item"><a href="pricing.php" class="nav-link"><i class="fas fa-tags"></i> Pricing</a></div>
+                    <div class="nav-item"><a href="afa-registration.php" class="nav-link"><i class="fas fa-user-check"></i> AFA Registration</a></div>
+                    <div class="nav-item"><a href="users.php" class="nav-link"><i class="fas fa-users"></i> Users</a></div>
+                    <div class="nav-item"><a href="agents.php" class="nav-link"><i class="fas fa-user-tie"></i> Agents</a></div>
+                
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+                <li class="nav-section">
+                    <div class="nav-section-title">Operations</div>
+                    <div class="nav-item"><a href="manual_topup.php" class="nav-link"><i class="fas fa-plus-circle"></i> Manual Top-up</a></div>
+                    <div class="nav-item"><a href="support.php" class="nav-link"><i class="fas fa-life-ring"></i> Support</a></div>
+                </li>
+                <li class="nav-section">
+                    <div class="nav-section-title">Analytics</div>
+                    <div class="nav-item"><a href="transactions.php" class="nav-link"><i class="fas fa-history"></i> Transactions</a></div>
+                    <div class="nav-item"><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></div>
+                    <div class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></div>
+                </li>
+                <li class="nav-section">
+                    <div class="nav-section-title">Settings</div>
+                    <div class="nav-item"><a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> System Settings</a></div>
+                    <div class="nav-item"><a href="system-reset.php" class="nav-link"><i class="fas fa-broom"></i> System Reset</a></div>
+                    <div class="nav-item"><a href="commission-settings.php" class="nav-link"><i class="fas fa-percentage"></i> Commission Settings</a></div>
+                    <div class="nav-item"><a href="pwa-settings.php" class="nav-link"><i class="fas fa-mobile-alt"></i> PWA Settings</a></div>
+                    <div class="nav-item"><a href="sms-settings.php" class="nav-link"><i class="fas fa-sms"></i> SMS Settings</a></div>
+                    <div class="nav-item"><a href="seo-settings.php" class="nav-link active"><i class="fas fa-globe"></i> SEO Settings</a></div>
+                    <div class="nav-item"><a href="smtp-settings.php" class="nav-link"><i class="fas fa-envelope"></i> SMTP Email Settings</a></div>
+                    <div class="nav-item"><a href="email-broadcast.php" class="nav-link"><i class="fas fa-paper-plane"></i> Email Broadcasts</a></div>
+                </li>
+            </ul>
                 <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
         </nav>
 

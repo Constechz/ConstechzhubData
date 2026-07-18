@@ -13,7 +13,7 @@ if (function_exists('ensureTopupSettingsTable')) {
 
 $current_user = getCurrentUser();
 $agent_id = (int) ($current_user['id'] ?? 0);
-$wallet_balance = round((float) getWalletBalance($agent_id), 2);
+$wallet_balance = getWalletBalance($agent_id);
 $fee_schedule = getProfitWithdrawalFeeSchedule();
 $fee_schedule_label = formatProfitWithdrawalFeeScheduleLabel($fee_schedule);
 
@@ -49,56 +49,44 @@ $default_number = $agentSettings['agent_topup_account_number'] ?? ($current_user
 
 // Profit summaries
 $data_profit = 0.0;
-$direct_data_profit = 0.0;
-$store_data_profit = 0.0;
 if (function_exists('dbh_table_exists') && dbh_table_exists('agent_profits')) {
-    $stmt = $db->prepare("
-        SELECT COALESCE(SUM(profit_amount), 0) AS total
-        FROM agent_profits ap
-        LEFT JOIN bundle_orders bo ON bo.id = ap.order_id
-        WHERE ap.agent_id = ?
-          AND ap.status = 'earned'
-          AND (bo.id IS NULL OR bo.user_id IS NULL OR bo.user_id <> ?)
-    ");
+    $stmt = $db->prepare("SELECT COALESCE(SUM(profit_amount), 0) AS total FROM agent_profits WHERE agent_id = ? AND status = 'earned'");
     if ($stmt) {
-        $stmt->bind_param('ii', $agent_id, $agent_id);
+        $stmt->bind_param('i', $agent_id);
         $stmt->execute();
         if ($row = $stmt->get_result()->fetch_assoc()) {
             $data_profit = (float) ($row['total'] ?? 0);
         }
     }
+}
 
-    if (function_exists('dbh_table_has_column') && dbh_table_has_column('agent_profits', 'customer_id')) {
-        $stmt = $db->prepare("
-            SELECT
-                COALESCE(SUM(CASE WHEN customer_id = ? THEN profit_amount ELSE 0 END), 0) AS direct_total,
-                COALESCE(SUM(CASE WHEN customer_id IS NULL OR customer_id <> ? THEN profit_amount ELSE 0 END), 0) AS store_total
-            FROM agent_profits
-            WHERE agent_id = ?
-              AND status = 'earned'
-        ");
-        if ($stmt) {
-            $stmt->bind_param('iii', $agent_id, $agent_id, $agent_id);
-            $stmt->execute();
-            if ($row = $stmt->get_result()->fetch_assoc()) {
-                $direct_data_profit = (float) ($row['direct_total'] ?? 0);
-                $store_data_profit = (float) ($row['store_total'] ?? 0);
-            }
-            $stmt->close();
+$checker_profit = 0.0;
+if (function_exists('dbh_table_exists') && dbh_table_exists('result_checker_purchases')
+    && function_exists('dbh_table_has_column') && dbh_table_has_column('result_checker_purchases', 'profit_amount')) {
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(profit_amount), 0) AS total
+        FROM result_checker_purchases
+        WHERE agent_id = ? AND status = 'success'
+    ");
+    if ($stmt) {
+        $stmt->bind_param('i', $agent_id);
+        $stmt->execute();
+        if ($row = $stmt->get_result()->fetch_assoc()) {
+            $checker_profit = (float) ($row['total'] ?? 0);
         }
     }
 }
 
 $pending_withdrawals = 0.0;
-$paid_out_withdrawals = 0.0;
+$approved_withdrawals = 0.0;
 $withdrawalSumColumn = 'amount';
 if (function_exists('dbh_table_has_column') && dbh_table_has_column('profit_withdrawals', 'total_debit')) {
     $withdrawalSumColumn = 'CASE WHEN total_debit IS NULL OR total_debit <= 0 THEN amount WHEN total_debit > amount THEN amount ELSE total_debit END';
 }
 $stmt = $db->prepare("
     SELECT
-        COALESCE(SUM(CASE WHEN status IN ('pending','approved','processing') THEN {$withdrawalSumColumn} ELSE 0 END), 0) AS pending_total,
-        COALESCE(SUM(CASE WHEN status = 'paid' THEN {$withdrawalSumColumn} ELSE 0 END), 0) AS paid_total
+        COALESCE(SUM(CASE WHEN status = 'pending' THEN {$withdrawalSumColumn} ELSE 0 END), 0) AS pending_total,
+        COALESCE(SUM(CASE WHEN status IN ('approved','paid') THEN {$withdrawalSumColumn} ELSE 0 END), 0) AS approved_total
     FROM profit_withdrawals
     WHERE agent_id = ?
 ");
@@ -107,37 +95,17 @@ if ($stmt) {
     $stmt->execute();
     if ($row = $stmt->get_result()->fetch_assoc()) {
         $pending_withdrawals = (float) ($row['pending_total'] ?? 0);
-        $paid_out_withdrawals = (float) ($row['paid_total'] ?? 0);
+        $approved_withdrawals = (float) ($row['approved_total'] ?? 0);
     }
 }
 
-$total_profit = $data_profit;
-$total_profit = round((float) $total_profit, 2);
-$available_profit = round(max(0, $total_profit - $pending_withdrawals - $paid_out_withdrawals), 2);
-$withdrawable_limit = $available_profit;
+$total_profit = $data_profit + $checker_profit;
+$available_profit = max(0, $total_profit - $pending_withdrawals - $approved_withdrawals);
+$withdrawable_limit = min($available_profit, $wallet_balance);
 $withdrawable_profit_wallet = $withdrawable_limit;
 $withdrawable_profit_momo = $withdrawable_limit;
 $withdrawable_profit = $withdrawable_profit_wallet;
 $processing_fee_label = $fee_schedule_label;
-$wallet_is_limiting_withdrawal = false;
-$wallet_shortfall = max(0, $available_profit - $withdrawable_limit);
-
-$formatWithdrawalLimitMessage = static function ($requestedAmount, $limitAmount, $availableProfitAmount, $walletBalanceAmount, $walletLimited) {
-    $requestedText = CURRENCY . number_format((float) $requestedAmount, 2);
-    $limitText = CURRENCY . number_format((float) $limitAmount, 2);
-    $profitText = CURRENCY . number_format((float) $availableProfitAmount, 2);
-    $walletText = CURRENCY . number_format((float) $walletBalanceAmount, 2);
-
-    if ($walletLimited) {
-        return 'Requested amount ' . $requestedText
-            . ' exceeds your current withdrawable limit of ' . $limitText
-            . '. Earned profit available: ' . $profitText
-            . ', but your wallet balance funding withdrawals is currently ' . $walletText . '.';
-    }
-
-    return 'Requested amount ' . $requestedText
-        . ' exceeds your available profit balance of ' . $limitText . '.';
-};
 
 // Handle withdrawal request
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -145,20 +113,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!validateCSRF($csrf)) {
         $error = 'Invalid security token. Please refresh and try again.';
     } else {
-        $amount = round((float) ($_POST['amount'] ?? 0), 2);
+        $amount = (float) ($_POST['amount'] ?? 0);
         $payout_method = strtolower(trim((string) ($_POST['payout_method'] ?? 'momo')));
         $payout_method = $payout_method === 'wallet' ? 'wallet' : 'momo';
         $payout_network = sanitize($_POST['payout_network'] ?? '');
         $payout_name = sanitize($_POST['payout_name'] ?? '');
         $payout_number = sanitize($_POST['payout_number'] ?? '');
-        if ($payout_method === 'momo') {
-            $payout_number = formatPhone($payout_number);
-        }
         $notes = sanitize($_POST['notes'] ?? '');
         $fee_amount = 0.0;
         $total_debit = $amount;
         $net_payout = $amount;
-        $comparison_epsilon = 0.00001;
 
         if ($payout_method === 'momo') {
             $fee_amount = calculateProfitWithdrawalFee($amount, $fee_schedule);
@@ -168,10 +132,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if ($amount <= 0) {
             $error = 'Withdrawal amount must be greater than zero.';
-        } elseif ($payout_method === 'wallet' && ($amount - $withdrawable_profit_wallet) > $comparison_epsilon) {
-            $error = $formatWithdrawalLimitMessage($amount, $withdrawable_profit_wallet, $available_profit, $wallet_balance, $wallet_is_limiting_withdrawal);
-        } elseif ($payout_method === 'momo' && ($amount - $withdrawable_limit) > $comparison_epsilon) {
-            $error = $formatWithdrawalLimitMessage($amount, $withdrawable_limit, $available_profit, $wallet_balance, $wallet_is_limiting_withdrawal);
+        } elseif ($payout_method === 'wallet' && $amount > $withdrawable_profit_wallet) {
+            $error = 'Withdrawal amount exceeds your available profit balance.';
+        } elseif ($payout_method === 'momo' && $amount > $withdrawable_limit) {
+            $error = 'Withdrawal amount exceeds your available profit balance.';
         } elseif ($payout_method === 'momo' && $net_payout <= 0) {
             $error = 'Withdrawal amount must be greater than the processing fee.';
         } elseif ($payout_method === 'momo' && $payout_number === '') {
@@ -187,93 +151,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($stmt) {
                     $stmt->bind_param('iddsssi', $agent_id, $amount, $fee_amount, $total_debit, $reference, $notes, $agent_id);
                     if ($stmt->execute()) {
-                        // Capture fresh wallet balance before top-up
-                        $prev_balance = round((float) getWalletBalance($agent_id), 2);
-
-                        // Call helper function to credit agent wallet balance and log a transaction
-                        updateWalletBalance($agent_id, $amount, 'credit', $reference, 'Store Profit Withdrawal to Wallet', 'wallet');
-
-                        $new_balance = round($prev_balance + $amount, 2);
-
-                        // Send email to Admin
-                        $admin_email = '';
-                        $admin_stmt = $db->prepare("SELECT email FROM users WHERE role IN ('admin','super_admin') ORDER BY id ASC LIMIT 1");
-                        if ($admin_stmt && $admin_stmt->execute()) {
-                            $admin = $admin_stmt->get_result()->fetch_assoc();
-                            $admin_email = $admin['email'] ?? '';
-                        }
-                        if (!$admin_email && defined('ADMIN_EMAIL')) {
-                            $admin_email = ADMIN_EMAIL;
-                        }
-
-                        if ($admin_email) {
-                            $amount_str = CURRENCY . number_format($amount, 2);
-                            $agent_name = $current_user['full_name'] ?? $current_user['username'] ?? 'Agent';
-                            $agent_email = $current_user['email'] ?? '';
-                            $agent_phone = $current_user['phone'] ?? ($current_user['mobile'] ?? '');
-                            $subject = "Profit Wallet Withdrawal - {$reference}";
-                            $body_html = "
-                                <h3>Profit Wallet Withdrawal Completed</h3>
-                                <p><strong>Reference:</strong> " . htmlspecialchars($reference) . "</p>
-                                <p><strong>Agent:</strong> " . htmlspecialchars($agent_name) . "</p>
-                                <p><strong>Email:</strong> " . htmlspecialchars($agent_email) . "</p>
-                                <p><strong>Phone:</strong> " . htmlspecialchars($agent_phone) . "</p>
-                                <p><strong>Withdrawn Amount:</strong> {$amount_str}</p>
-                                <p><strong>Payout Method:</strong> Wallet (Instant)</p>
-                                <p><strong>Status:</strong> Paid (Automatically Credited)</p>
-                                <p><strong>Notes:</strong> " . nl2br(htmlspecialchars($notes)) . "</p>
-                            ";
-                            $body_text = "Profit wallet withdrawal completed\n"
-                                . "Reference: {$reference}\n"
-                                . "Agent: {$agent_name}\n"
-                                . "Email: {$agent_email}\n"
-                                . "Phone: {$agent_phone}\n"
-                                . "Withdrawn Amount: {$amount_str}\n"
-                                . "Payout Method: Wallet (Instant)\n"
-                                . "Status: Paid (Automatically Credited)\n"
-                                . "Notes: {$notes}\n";
-
-                            try {
-                                sendEmail($admin_email, $subject, $body_html, $body_text, 'profit_withdrawal_wallet_admin');
-                            } catch (Exception $e) {
-                                error_log('Profit withdrawal admin email failed: ' . $e->getMessage());
-                            }
-                        }
-
-                        // Send email to User
-                        $user_email = $current_user['email'] ?? '';
-                        if ($user_email) {
-                            $amount_str = CURRENCY . number_format($amount, 2);
-                            $prev_str = CURRENCY . number_format($prev_balance, 2);
-                            $new_str = CURRENCY . number_format($new_balance, 2);
-                            $user_name = $current_user['full_name'] ?? $current_user['username'] ?? 'Agent';
-                            $subject = "Profit Withdrawal Credited to Wallet - {$reference}";
-                            $body_html = "
-                                <h3>Profit Withdrawal Credited to Wallet</h3>
-                                <p>Hi {$user_name},</p>
-                                <p>Your store profit withdrawal request was successfully processed and credited to your wallet.</p>
-                                <p><strong>Reference:</strong> " . htmlspecialchars($reference) . "</p>
-                                <p><strong>Previous Wallet Balance:</strong> {$prev_str}</p>
-                                <p><strong>Added Amount (Store Profit):</strong> {$amount_str}</p>
-                                <p><strong>New Wallet Balance:</strong> {$new_str}</p>
-                                <p><strong>Status:</strong> Credited Automatically</p>
-                                <p>Thank you for using " . SITE_NAME . "!</p>
-                            ";
-                            $body_text = "Hi {$user_name},\n\n"
-                                . "Your store profit withdrawal request was successfully processed and credited to your wallet.\n\n"
-                                . "Reference: {$reference}\n"
-                                . "Previous Wallet Balance: {$prev_str}\n"
-                                . "Added Amount (Store Profit): {$amount_str}\n"
-                                . "New Wallet Balance: {$new_str}\n"
-                                . "Status: Credited Automatically\n";
-
-                            try {
-                                sendEmail($user_email, $subject, $body_html, $body_text, 'profit_withdrawal_wallet_user');
-                            } catch (Exception $e) {
-                                error_log('Profit withdrawal user email failed: ' . $e->getMessage());
-                            }
-                        }
-
                         setFlashMessage('success', 'Profit reflected in wallet automatically. Reference: ' . $reference);
                         header('Location: withdraw-profit.php');
                         exit();
@@ -366,11 +243,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // Recent withdrawal history
 $withdrawal_history = [];
 $stmt = $db->prepare("
-    SELECT pw.*, u.full_name, u.email
-    FROM profit_withdrawals pw
-    LEFT JOIN users u ON u.id = pw.agent_id
-    WHERE pw.agent_id = ?
-    ORDER BY pw.created_at DESC
+    SELECT *
+    FROM profit_withdrawals
+    WHERE agent_id = ?
+    ORDER BY created_at DESC
     LIMIT 20
 ");
 if ($stmt) {
@@ -387,7 +263,7 @@ $csrf_token = generateCSRF();
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Store Profit - <?php echo SITE_NAME; ?></title>
+    <title>Withdraw Profit - <?php echo SITE_NAME; ?></title>
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>">
@@ -419,12 +295,6 @@ $csrf_token = generateCSRF();
             color: var(--text-primary);
         }
 
-        .locked-amount-input {
-            background: var(--bg-secondary);
-            cursor: not-allowed;
-            caret-color: transparent;
-        }
-
         .confirm-modal {
             position: fixed;
             inset: 0;
@@ -441,7 +311,7 @@ $csrf_token = generateCSRF();
         .confirm-backdrop {
             position: absolute;
             inset: 0;
-            background: rgba(15, 23, 42, 0.6);
+            background: rgba(46, 41, 78, 0.6);
         }
 
         .confirm-dialog {
@@ -553,10 +423,10 @@ $csrf_token = generateCSRF();
 
             .table tr {
                 margin-bottom: 1rem;
-                border: 1px solid var(--border-color, #e5e7eb);
+                border: 1px solid var(--border-color, #F1E9DA);
                 border-radius: 12px;
                 padding: 0.5rem;
-                background: #ffffff;
+                background: #F1E9DA;
             }
 
             .table td {
@@ -570,7 +440,7 @@ $csrf_token = generateCSRF();
                 content: attr(data-label);
                 display: block;
                 font-weight: 600;
-                color: var(--text-muted, #6b7280);
+                color: var(--text-muted, #541388);
                 margin-bottom: 0.25rem;
             }
 
@@ -585,21 +455,21 @@ $csrf_token = generateCSRF();
         }
 
         [data-theme="dark"] .table tr {
-            background: #0f172a;
-            border-color: #1f2937;
+            background: #2E294E;
+            border-color: #2E294E;
         }
 
         [data-theme="dark"] .table td {
-            color: #e5e7eb;
+            color: #F1E9DA;
         }
 
         [data-theme="dark"] .table td::before {
-            color: #9ca3af;
+            color: #F1E9DA;
         }
 
         [data-theme="dark"] .table td code {
-            color: #e5e7eb;
-            background: #111827;
+            color: #F1E9DA;
+            background: #2E294E;
         }
     </style>
 </head>
@@ -609,7 +479,37 @@ $csrf_token = generateCSRF();
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-        <?php renderAgentSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Business</div>
+                <div class="nav-item"><a href="at-business.php" class="nav-link"><i class="fas fa-shopping-cart"></i> AT Business</a></div>
+                <div class="nav-item"><a href="mtn-business.php" class="nav-link"><i class="fas fa-mobile-alt"></i> MTN Business</a></div>
+                <div class="nav-item">
+                    <a href="afa-registration.php" class="nav-link">
+                        <i class="fas fa-user-check"></i>
+                        AFA Registration
+                    </a>
+                </div>
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+                <div class="nav-item"><a href="customers.php" class="nav-link"><i class="fas fa-users"></i> My Customers</a></div>
+                <div class="nav-item"><a href="customer_topup.php" class="nav-link"><i class="fas fa-plus-circle"></i> Customer Top-up</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Earnings</div>
+                <div class="nav-item"><a href="commission.php" class="nav-link"><i class="fas fa-coins"></i> Commission</a></div>
+                <div class="nav-item"><a href="withdraw-profit.php" class="nav-link active"><i class="fas fa-wallet"></i> Withdraw Profit</a></div>
+                <div class="nav-item"><a href="transactions.php" class="nav-link"><i class="fas fa-history"></i> Transactions</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item"><a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> Settings</a></div>
+                <div class="nav-item"><a href="support.php" class="nav-link"><i class="fas fa-life-ring"></i> Support</a></div>
+            </li>
+        </ul>
     </nav>
 
     <main class="main-content">
@@ -618,7 +518,7 @@ $csrf_token = generateCSRF();
                 <button class="mobile-menu-toggle"><i class="fas fa-bars"></i></button>
                 <nav class="breadcrumb">
                     <div class="breadcrumb-item"><i class="fas fa-wallet"></i></div>
-                    <div class="breadcrumb-item active">Store Profit</div>
+                    <div class="breadcrumb-item active">Withdraw Profit</div>
                 </nav>
             </div>
             <div class="header-actions">
@@ -654,10 +554,13 @@ $csrf_token = generateCSRF();
             </div>
         </header>
 
+<?php echo renderNotificationSlides('agents'); ?>
+
+
         <div class="dashboard-content">
             <div class="page-title">
-                <h1>Store Profit</h1>
-                <p class="page-subtitle">This is the single place to view and withdraw your order earnings from your own bundle purchases, customer store-link orders, result checker, and AFA registration sales.</p>
+                <h1>Withdraw Profit</h1>
+                <p class="page-subtitle">Request withdrawal of profits earned from data and result checker sales.</p>
             </div>
 
             <?php if ($flash): ?>
@@ -678,91 +581,85 @@ $csrf_token = generateCSRF();
                 </div>
             <?php endif; ?>
 
-
             <div class="stats-grid" style="margin-bottom: 2rem;">
                 <div class="stat-card">
                     <div class="stat-icon"><i class="fas fa-sack-dollar text-success"></i></div>
                     <div class="stat-content">
                         <div class="stat-value"><?php echo CURRENCY . number_format($total_profit, 2); ?></div>
-                        <div class="stat-label"><strong>Total Profit Earned</strong></div>
+                        <div class="stat-label">Total Profit Earned</div>
                     </div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-icon"><i class="fas fa-wifi text-primary"></i></div>
                     <div class="stat-content">
                         <div class="stat-value"><?php echo CURRENCY . number_format($data_profit, 2); ?></div>
-                        <div class="stat-label"><strong>Bundle Profit</strong></div>
+                        <div class="stat-label">Data Profit</div>
                     </div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-icon"><i class="fas fa-store text-success"></i></div>
+                    <div class="stat-icon"><i class="fas fa-award text-warning"></i></div>
                     <div class="stat-content">
-                        <div class="stat-value"><?php echo CURRENCY . number_format($data_profit, 2); ?></div>
-                        <div class="stat-label"><strong>Store Link Orders</strong></div>
+                        <div class="stat-value"><?php echo CURRENCY . number_format($checker_profit, 2); ?></div>
+                        <div class="stat-label">Checker Profit</div>
                     </div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-icon"><i class="fas fa-hourglass-half text-info"></i></div>
                     <div class="stat-content">
                         <div class="stat-value"><?php echo CURRENCY . number_format($pending_withdrawals, 2); ?></div>
-                        <div class="stat-label"><strong>Pending Requests</strong></div>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon"><i class="fas fa-money-check-dollar text-warning"></i></div>
-                    <div class="stat-content">
-                        <div class="stat-value"><?php echo CURRENCY . number_format($paid_out_withdrawals, 2); ?></div>
-                        <div class="stat-label"><strong>Paid Out</strong></div>
+                        <div class="stat-label">Pending Withdrawals</div>
                     </div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-icon"><i class="fas fa-wallet text-secondary"></i></div>
                     <div class="stat-content">
                         <div class="stat-value"><?php echo CURRENCY . number_format($withdrawable_profit_wallet, 2); ?></div>
-                        <div class="stat-label"><strong>Available to Withdraw</strong></div>
+                        <div class="stat-label">Available to Withdraw</div>
                     </div>
                 </div>
             </div>
 
             <div class="grid-2">
                 <div class="widget">
+                    <div class="widget-header">
+                        <h3 class="widget-title">Request Withdrawal</h3>
+                        <p class="widget-subtitle">Provide your payout details and submit a withdrawal request.</p>
+                    </div>
                     <div class="widget-content">
                         <?php if ($withdrawable_profit > 0): ?>
                             <form method="post" id="withdrawForm">
                                 <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrf_token); ?>">
 
                                 <div class="form-group">
-                                    <label class="form-label" for="amount">Withdrawable Profit Amount (<?php echo CURRENCY; ?>)</label>
-                                    <input type="number" id="amount" name="amount"
+                                    <label class="form-label" for="amount">Amount (<?php echo CURRENCY; ?>)</label>
+                                    <input type="number" id="amount" name="amount" class="form-control"
                                            min="1"
                                            max="<?php echo htmlspecialchars($withdrawable_profit_wallet); ?>"
                                            step="0.01"
                                            value="<?php echo htmlspecialchars($withdrawable_profit_wallet); ?>"
                                            data-max-wallet="<?php echo htmlspecialchars(number_format($withdrawable_profit_wallet, 2, '.', '')); ?>"
                                            data-max-momo="<?php echo htmlspecialchars(number_format($withdrawable_profit_momo, 2, '.', '')); ?>"
-                                           readonly
-                                           aria-readonly="true"
-                                           inputmode="none"
-                                           onkeydown="return false;"
-                                           onwheel="this.blur();"
-                                           class="form-control locked-amount-input"
                                            required>
-                                <div class="form-help">
-                                    Earned profit available: <?php echo CURRENCY . number_format($available_profit, 2); ?>
-                                </div>
+                                    <div class="form-help">
+                                        Max wallet: <?php echo CURRENCY . number_format($withdrawable_profit_wallet, 2); ?>
+                                        | Max MoMo: <?php echo CURRENCY . number_format($withdrawable_profit_momo, 2); ?>
+                                        <span style="display:block;"><?php echo htmlspecialchars($processing_fee_label); ?></span>
+                                    </div>
                                 </div>
 
                                 <div class="form-group">
                                     <label class="form-label" for="payout_method">Withdrawal Method</label>
                                     <select id="payout_method" name="payout_method" class="form-control" required>
                                         <option value="wallet">Wallet (Instant)</option>
-                                        <option value="momo">Mobile Money (Admin Approval via Paystack)</option>
+                                        <option value="momo">Mobile Money (Admin Approval)</option>
                                     </select>
+                                    <div class="form-help">Wallet option is automatic. Mobile money requests require admin approval and pay out Amount - Fee.</div>
                                 </div>
 
                                 <div id="feeSummary" class="form-help" style="margin-top: -0.5rem;">
                                     Processing fee: <strong id="processingFeeValue"><?php echo CURRENCY . number_format(0, 2); ?></strong>
                                     | You will receive: <strong id="netPayoutValue"><?php echo CURRENCY . number_format($withdrawable_profit_wallet, 2); ?></strong>
+                                    <span style="display:block;">Wallet debit is the full Amount entered.</span>
                                 </div>
 
                                 <div class="withdraw-summary" id="withdrawSummary">
@@ -834,18 +731,18 @@ $csrf_token = generateCSRF();
                 </div>
 
                 <div class="widget">
+                    <div class="widget-header">
+                        <h3 class="widget-title">Wallet Balance</h3>
+                        <p class="widget-subtitle">Your current wallet balance and withdrawal eligibility.</p>
+                    </div>
                     <div class="widget-content">
-                        <div style="font-weight: bold; margin-bottom: 1rem; text-align: center;">
-                            Wallet Balance: <?php echo CURRENCY . number_format($wallet_balance, 2); ?>
+                        <div style="display:flex; align-items:center; gap: 1rem; margin-bottom: 1rem;">
+                            <div style="font-size: 1.4rem; font-weight: 600;"><?php echo CURRENCY . number_format($wallet_balance, 2); ?></div>
+                            <span class="badge badge-secondary">Wallet Balance</span>
                         </div>
-                        <?php if ($wallet_is_limiting_withdrawal): ?>
-                            <div class="alert alert-warning" style="margin-top: 1rem;">
-                                You have <?php echo CURRENCY . number_format($available_profit, 2); ?> in earned profit, but only
-                                <?php echo CURRENCY . number_format($withdrawable_limit, 2); ?> is withdrawable right now because your
-                                wallet balance is <?php echo CURRENCY . number_format($wallet_balance, 2); ?>.
-                                The uncovered difference is <?php echo CURRENCY . number_format($wallet_shortfall, 2); ?>.
-                            </div>
-                        <?php endif; ?>
+                        <p style="color: var(--text-muted); margin-bottom: 0;">
+                            Available profit is capped by your wallet balance to avoid overdraft.
+                        </p>
                     </div>
                 </div>
             </div>
@@ -853,6 +750,7 @@ $csrf_token = generateCSRF();
             <div class="widget">
                 <div class="widget-header">
                     <h3 class="widget-title">Withdrawal History</h3>
+                    <p class="widget-subtitle">Track your profit withdrawal requests.</p>
                 </div>
                 <div class="widget-content">
                     <?php if (!empty($withdrawal_history)): ?>
@@ -860,7 +758,6 @@ $csrf_token = generateCSRF();
                             <table class="table">
                                 <thead>
                                     <tr>
-                                        <th>User</th>
                                         <th>Reference</th>
                                         <th>Amount</th>
                                         <th>Fee</th>
@@ -875,10 +772,6 @@ $csrf_token = generateCSRF();
                                 <tbody>
                                     <?php foreach ($withdrawal_history as $row): ?>
                                         <tr>
-                                            <td data-label="User">
-                                                <div style="font-weight: 500;"><?php echo htmlspecialchars($row['full_name'] ?? ''); ?></div>
-                                                <div style="font-size: 0.8rem; color: var(--text-muted);"><?php echo htmlspecialchars($row['email'] ?? ''); ?></div>
-                                            </td>
                                             <td data-label="Reference"><code><?php echo htmlspecialchars($row['reference'] ?? ''); ?></code></td>
                                             <td data-label="Amount"><?php echo CURRENCY . number_format((float) $row['amount'], 2); ?></td>
                                             <?php
@@ -897,9 +790,7 @@ $csrf_token = generateCSRF();
                                             <td data-label="Status">
                                                 <?php
                                                 $status = $row['status'] ?? 'pending';
-                                                $badge = $status === 'paid'
-                                                    ? 'success'
-                                                    : (in_array($status, ['failed', 'rejected', 'reversed'], true) ? 'danger' : 'warning');
+                                                $badge = $status === 'approved' || $status === 'paid' ? 'success' : ($status === 'rejected' ? 'danger' : 'warning');
                                                 ?>
                                                 <span class="badge badge-<?php echo $badge; ?>"><?php echo ucfirst($status); ?></span>
                                             </td>
@@ -1154,6 +1045,7 @@ document.addEventListener('click', function(event) {
 </script>
 <!-- IMMEDIATE Icon Fix for square placeholder issues -->
 <script src="../immediate_icon_fix.js"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
-

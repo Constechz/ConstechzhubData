@@ -1,7 +1,9 @@
 <?php
 require_once '../config/config.php';
 
+// Prevent browser caching for real-time updates
 preventBrowserCaching();
+
 $store_slug = sanitize($_GET['store'] ?? '');
 
 if (!isLoggedIn()) {
@@ -115,15 +117,27 @@ $gateway = getActivePaymentGateway();
 $gateway_label = $gateway === 'moolre' ? 'Moolre' : 'Paystack';
 ?>
 <!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AFA Registration - <?php echo htmlspecialchars(getSiteName()); ?></title>
+    
+    <!-- Stylesheets -->
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/icon-fixes.css')); ?>">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>">
+    
+    <script>
+        (function() {
+            const savedTheme = localStorage.getItem('theme');
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const theme = savedTheme || (prefersDark ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+    
     <style>
         html,
         body {
@@ -145,69 +159,64 @@ $gateway_label = $gateway === 'moolre' ? 'Moolre' : 'Paystack';
         }
 
         .afa-card {
-            background: #fff;
-            border: 1px solid #e5e7eb;
+            background: var(--card-bg, #fff);
+            border: 1px solid var(--border-color, #e5e7eb);
             border-radius: 14px;
-            padding: 1rem;
-            margin-bottom: 1rem;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
         }
 
         .metrics {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-            gap: 0.8rem;
+            gap: 1rem;
         }
 
         .metric {
-            border: 1px solid #e5e7eb;
+            border: 1px solid var(--border-color, #e5e7eb);
             border-radius: 10px;
-            padding: 0.75rem;
-            background: #fafafa;
+            padding: 1rem;
+            background: var(--bg-primary, #fafafa);
         }
 
-        .logout-icon {
-            width: 44px;
-            height: 44px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 999px;
-            border: 1px solid #fca5a5;
-            background: #ffffff;
-            color: #b91c1c;
-            text-decoration: none;
-            transition: all 0.2s ease;
-        }
-
-        .logout-icon:hover,
-        .logout-icon:focus-visible {
-            background: #fee2e2;
-            border-color: #ef4444;
-            color: #991b1b;
-        }
-
-        .logout-icon:focus-visible {
-            outline: none;
+        .metric span {
+            display: block;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin-bottom: 0.25rem;
         }
 
         .metric strong {
             display: block;
-            font-size: 1.05rem;
+            font-size: 1.25rem;
+            color: var(--text-primary);
         }
 
         .form-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
-            gap: 0.8rem;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 1.2rem;
+            margin-bottom: 1.2rem;
+        }
+
+        .form-grid label {
+            display: block;
+            font-size: 0.9rem;
+            font-weight: 500;
+            margin-bottom: 0.4rem;
+            color: var(--text-primary);
         }
 
         .note {
-            color: #6b7280;
-            font-size: 0.9rem;
+            color: var(--text-muted);
+            font-size: 0.85rem;
         }
 
         .afa-table-wrap {
-            overflow: auto;
+            overflow-x: auto;
+            border-radius: 8px;
+            border: 1px solid var(--border-color, #edf2f7);
         }
 
         .afa-table {
@@ -218,114 +227,39 @@ $gateway_label = $gateway === 'moolre' ? 'Moolre' : 'Paystack';
         .afa-table th,
         .afa-table td {
             text-align: left;
-            padding: 0.55rem;
-            border-bottom: 1px solid #edf2f7;
+            padding: 0.85rem 1rem;
+            border-bottom: 1px solid var(--border-color, #edf2f7);
             font-size: 0.9rem;
+            color: var(--text-primary);
             white-space: nowrap;
         }
 
-        .afa-table .afa-details-row {
-            background: #fafafa;
+        .afa-table th {
+            font-weight: 600;
+            background: var(--bg-primary, #fafafa);
+            color: var(--text-muted);
         }
+
+        .afa-table .afa-details-row {
+            background: var(--bg-primary, #fafafa);
+        }
+        
         .afa-table .afa-details-cell {
             white-space: normal !important;
             font-size: 0.85rem;
-            color: #4b5563;
-            border-bottom: 2px solid #edf2f7;
-        }
-        [data-theme="dark"] .afa-table .afa-details-row {
-            background: #1f2937;
-        }
-        [data-theme="dark"] .afa-table .afa-details-cell {
-            color: #d1d5db;
-            border-bottom-color: #2f3746;
-        }
-
-        [data-theme="dark"] .afa-card {
-            background: #111827;
-            border-color: #374151;
-        }
-
-        [data-theme="dark"] .metric {
-            background: #1f2937;
-            border-color: #374151;
-        }
-
-        [data-theme="dark"] .note,
-        [data-theme="dark"] .afa-table th,
-        [data-theme="dark"] .afa-table td {
-            color: #e5e7eb;
-            border-bottom-color: #2f3746;
-        }
-
-        [data-theme="dark"] .logout-icon {
-            background: #111827;
-            border-color: #7f1d1d;
-            color: #fca5a5;
-        }
-
-        [data-theme="dark"] .logout-icon:hover,
-        [data-theme="dark"] .logout-icon:focus-visible {
-            background: #3f1d1d;
-            border-color: #ef4444;
-            color: #fecaca;
+            color: var(--text-muted);
+            border-bottom: 2px solid var(--border-color, #edf2f7);
+            padding: 0.75rem 1rem;
         }
 
         @media (max-width: 768px) {
-            .dashboard-content {
-                padding: 0.75rem;
-            }
-
-            .dashboard-header {
-                padding: 0.45rem 0.55rem;
-            }
-
-            .header-left h2 {
-                margin: 0;
-                font-size: 1.1rem;
-                line-height: 1.2;
-            }
-
-            .header-left {
-                gap: 0.35rem;
-            }
-
-            .header-actions {
-                margin-right: 0;
-                gap: 0.3rem;
-                flex-wrap: wrap;
-                justify-content: flex-end;
-            }
-
-            .theme-toggle {
-                width: 34px;
-                height: 34px;
-            }
-
-            .logout-icon {
-                width: 34px;
-                height: 34px;
-            }
-
-            .header-actions .btn {
-                max-width: 100%;
-                min-height: 34px;
-                min-width: 34px;
-                padding: 0.35rem 0.55rem;
-                font-size: 0.72rem;
-                border-radius: 8px;
-            }
-
-            .header-actions .btn i {
-                font-size: 0.72rem;
-            }
-
             .metrics,
             .form-grid {
                 grid-template-columns: 1fr;
             }
 
             .afa-table-wrap {
+                border: none;
                 overflow: visible;
             }
 
@@ -344,15 +278,16 @@ $gateway_label = $gateway === 'moolre' ? 'Moolre' : 'Paystack';
             }
 
             .afa-table tr {
-                border: 1px solid #e5e7eb;
+                border: 1px solid var(--border-color, #e5e7eb);
                 border-radius: 12px;
-                padding: 0.35rem;
-                margin-bottom: 0.7rem;
+                padding: 0.5rem;
+                margin-bottom: 0.75rem;
+                background: var(--card-bg, #fff);
             }
 
             .afa-table td {
                 border: none;
-                padding: 0.5rem 0.55rem;
+                padding: 0.5rem;
                 display: flex;
                 align-items: flex-start;
                 justify-content: space-between;
@@ -366,7 +301,7 @@ $gateway_label = $gateway === 'moolre' ? 'Moolre' : 'Paystack';
             .afa-table td::before {
                 content: attr(data-label);
                 font-weight: 600;
-                color: #6b7280;
+                color: var(--text-muted);
                 text-align: left;
                 flex: 0 0 44%;
                 max-width: 44%;
@@ -374,127 +309,85 @@ $gateway_label = $gateway === 'moolre' ? 'Moolre' : 'Paystack';
 
             .afa-table .empty-row td {
                 display: block;
-                text-align: left;
-                padding: 0.6rem;
+                text-align: center;
+                padding: 1rem;
             }
 
             .afa-table .empty-row td::before {
                 content: none;
             }
-        }
-
-        @media (max-width: 480px) {
-            .dashboard-header {
-                padding: 0.4rem 0.45rem;
+            
+            .afa-table .afa-details-row {
+                background: transparent;
+                border: 1px solid var(--border-color, #e5e7eb);
+                margin-top: -0.5rem;
+                border-top: none;
+                border-radius: 0 0 12px 12px;
             }
 
-            .header-left h2 {
-                font-size: 0.95rem;
+            .afa-table .afa-details-cell {
+                display: block;
+                text-align: left;
+                padding: 0.75rem;
             }
-
-            .theme-toggle {
-                width: 30px;
-                height: 30px;
-            }
-
-            .logout-icon {
-                width: 30px;
-                height: 30px;
-            }
-
-            .header-actions .btn {
-                min-height: 30px;
-                min-width: 30px;
-                padding: 0.3rem 0.45rem;
-                font-size: 0.68rem;
-            }
-        }
-
-        @media (max-width: 360px) {
-            .header-left h2 {
-                font-size: 0.85rem;
-            }
-
-            .header-actions {
-                gap: 0.2rem;
-            }
-
-            .theme-toggle,
-            .logout-icon {
-                width: 28px;
-                height: 28px;
-            }
-
-            .header-actions .btn {
-                min-height: 28px;
-                min-width: 28px;
-                padding: 0.25rem 0.4rem;
-                font-size: 0.64rem;
-            }
-        }
-
-        [data-theme="dark"] .afa-table td::before {
-            color: #d1d5db;
         }
     </style>
 </head>
 <body>
 <div class="dashboard-wrapper">
-    <nav class="sidebar">
-        <div class="sidebar-brand">
-            <h3><?php echo $store_name !== '' ? htmlspecialchars($store_name) : htmlspecialchars(getSiteName()); ?></h3>
-            <?php if ($agent_name !== ''): ?>
-                <small style="opacity: 0.7; font-size: 0.8rem;">by <?php echo htmlspecialchars($agent_name); ?></small>
-            <?php endif; ?>
-        </div>
+    <?php require_once '../includes/customer_sidebar.php'; ?>
 
-        <ul class="sidebar-nav">
-            <li class="nav-section">
-                <div class="nav-section-title">Dashboard</div>
-                <div class="nav-item"><a href="dashboard.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
-            </li>
-
-            <li class="nav-section">
-                <div class="nav-section-title">Services</div>
-                <div class="nav-item"><a href="buy-data.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link"><i class="fas fa-mobile-alt"></i> Buy Data</a></div>
-                <div class="nav-item"><a href="bulk-mtn.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link"><i class="fas fa-layer-group"></i> Bulk MTN</a></div>
-                <div class="nav-item"><a href="result-checker.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
-                <div class="nav-item"><a href="afa-registration.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link active"><i class="fas fa-id-card"></i> AFA Registration</a></div>
-                <div class="nav-item"><a href="order-history.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link"><i class="fas fa-history"></i> Order History</a></div>
-                <div class="nav-item"><a href="reference.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link"><i class="fas fa-search"></i> Reference</a></div>
-            </li>
-
-            <li class="nav-section">
-                <div class="nav-section-title">Account</div>
-                <div class="nav-item"><a href="wallet.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link"><i class="fas fa-wallet"></i> Wallet</a></div>
-                <div class="nav-item"><a href="profile.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link"><i class="fas fa-user"></i> Profile</a></div>
-                <div class="nav-item"><a href="support.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link"><i class="fas fa-life-ring"></i> Support</a></div>
-                <div class="nav-item"><a href="../logout.php" class="nav-link"><i class="fas fa-sign-out-alt"></i> Logout</a></div>
-            </li>
-        </ul>
-    </nav>
-
+    <!-- Main Content -->
     <main class="main-content">
         <header class="dashboard-header">
             <div class="header-left">
                 <button class="mobile-menu-toggle" type="button"><i class="fas fa-bars"></i></button>
-                <h2>AFA Registration</h2>
+                <nav class="breadcrumb">
+                    <div class="breadcrumb-item"><i class="fas fa-user-check"></i></div>
+                    <div class="breadcrumb-item">Services</div>
+                    <div class="breadcrumb-item active">AFA Registration</div>
+                </nav>
             </div>
+            
             <div class="header-actions">
+                <div class="wallet-balance">
+                    <i class="fas fa-wallet"></i>
+                    <span>Balance: <?php echo CURRENCY . number_format((float)($wallet_balance ?? 0), 2); ?></span>
+                </div>
+                <a href="wallet.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="btn btn-sm btn-primary header-action-btn topup-btn">
+                    <i class="fas fa-plus-circle"></i> Top Up
+                </a>
                 <button class="theme-toggle" type="button" onclick="toggleTheme()"><i class="fas fa-sun" id="theme-icon"></i></button>
-                <a class="logout-icon" href="../logout.php" aria-label="Logout" title="Logout"><i class="fas fa-sign-out-alt"></i></a>
-                <a class="btn btn-outline" href="dashboard.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>"><i class="fas fa-home"></i> Dashboard</a>
+                
+                <div class="user-dropdown">
+                    <button class="user-dropdown-toggle" onclick="toggleUserDropdown()">
+                        <div class="user-avatar">
+                            <?php echo strtoupper(substr($current_user['full_name'] ?? $_SESSION['username'], 0, 1)); ?>
+                        </div>
+                        <div>
+                            <div style="font-weight: 500;"><?php echo htmlspecialchars($current_user['full_name'] ?? $_SESSION['username']); ?></div>
+                            <div style="font-size: 0.75rem; color: var(--text-muted);">Customer</div>
+                        </div>
+                        <i class="fas fa-chevron-down" style="margin-left: 0.5rem;"></i>
+                    </button>
+                    <div class="user-dropdown-menu" id="userDropdown">
+                        <a href="profile.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="dropdown-item"><i class="fas fa-user"></i> Profile</a>
+                        <a href="wallet.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="dropdown-item"><i class="fas fa-wallet"></i> Wallet</a>
+                        <hr style="margin: 0.5rem 0; border: none; border-top: 1px solid var(--border-color);">
+                        <a href="../logout.php" class="dropdown-item"><i class="fas fa-sign-out-alt"></i> Logout</a>
+                    </div>
+                </div>
             </div>
         </header>
 
         <div class="dashboard-content">
             <div class="afa-shell">
                 <?php if ($flash): ?>
-                    <div class="alert alert-<?php echo htmlspecialchars($flash['type']); ?>"><?php echo htmlspecialchars($flash['message']); ?></div>
+                    <div class="alert alert-<?php echo htmlspecialchars($flash['type']); ?>" style="margin-bottom:1.2rem;"><?php echo htmlspecialchars($flash['message']); ?></div>
                 <?php endif; ?>
 
                 <?php if (!$service_enabled): ?>
-                    <div class="alert alert-warning">AFA registration is disabled by admin.</div>
+                    <div class="alert alert-warning" style="margin-bottom:1.2rem;">AFA registration is disabled by admin.</div>
                 <?php endif; ?>
 
                 <div class="afa-card">
@@ -507,17 +400,35 @@ $gateway_label = $gateway === 'moolre' ? 'Moolre' : 'Paystack';
                 </div>
 
                 <div class="afa-card">
-                    <h3 style="margin-top:0;">AFA Registration Form</h3>
+                    <h3 style="margin-top:0; margin-bottom: 1.2rem; color: var(--text-primary);">AFA Registration Form</h3>
                     <form id="afaForm" enctype="multipart/form-data">
                         <input type="hidden" id="csrf_token" value="<?php echo htmlspecialchars($csrf_token); ?>">
                         <input type="hidden" id="store_slug" value="<?php echo htmlspecialchars($store_slug); ?>">
                         <div class="form-grid">
-                            <div><label>Beneficiary Fullname*</label><input class="form-control" name="beneficiary_name" required></div>
-                            <div><label>Number For Registration*</label><input class="form-control" name="phone" inputmode="numeric" pattern="[0-9]{10,15}" minlength="10" maxlength="15" value="<?php echo htmlspecialchars($current_user['phone'] ?? ''); ?>" required></div>
-                            <div><label>Ghana Card Number*</label><input class="form-control" name="ghana_card_number" maxlength="13" minlength="13" pattern="[A-Za-z0-9]{13}" style="text-transform:uppercase;" required></div>
-                            <div><label>Location*</label><input class="form-control" name="location" required></div>
-                            <div><label>Occupation*</label><input class="form-control" name="occupation" required></div>
-                            <div><label>Date of Birth*</label><input class="form-control" type="date" name="date_of_birth" required></div>
+                            <div>
+                                <label>Beneficiary Fullname*</label>
+                                <input class="form-control" name="beneficiary_name" placeholder="e.g. John Doe" required>
+                            </div>
+                            <div>
+                                <label>Number For Registration*</label>
+                                <input class="form-control" name="phone" placeholder="e.g. 0241234567" inputmode="numeric" pattern="[0-9]{10,15}" minlength="10" maxlength="15" value="<?php echo htmlspecialchars($current_user['phone'] ?? ''); ?>" required>
+                            </div>
+                            <div>
+                                <label>Ghana Card Number*</label>
+                                <input class="form-control" name="ghana_card_number" placeholder="e.g. GHA-123456789-0" maxlength="13" minlength="13" pattern="[A-Za-z0-9]{13}" style="text-transform:uppercase;" required>
+                            </div>
+                            <div>
+                                <label>Location*</label>
+                                <input class="form-control" name="location" placeholder="e.g. Accra" required>
+                            </div>
+                            <div>
+                                <label>Occupation*</label>
+                                <input class="form-control" name="occupation" placeholder="e.g. Trader" required>
+                            </div>
+                            <div>
+                                <label>Date of Birth*</label>
+                                <input class="form-control" type="date" name="date_of_birth" required>
+                            </div>
                             <div>
                                 <label>Payment Method</label>
                                 <select class="form-control" name="payment_method">
@@ -526,26 +437,47 @@ $gateway_label = $gateway === 'moolre' ? 'Moolre' : 'Paystack';
                                 </select>
                             </div>
                         </div>
-                        <button type="submit" class="btn btn-primary" style="margin-top:.9rem; width:100%;" <?php echo (!$service_enabled || (!$allow_wallet && !$allow_gateway)) ? 'disabled' : ''; ?>>Submit AFA Registration</button>
-                        <small class="note" id="afaMsg" style="display:block; margin-top:.6rem;"></small>
+                        <button type="submit" class="btn btn-primary" style="margin-top:.5rem; width:100%;" <?php echo (!$service_enabled || (!$allow_wallet && !$allow_gateway)) ? 'disabled' : ''; ?>>Submit AFA Registration</button>
+                        <small class="note" id="afaMsg" style="display:block; margin-top:.75rem; text-align: center; font-weight: 500;"></small>
                     </form>
                 </div>
 
                 <div class="afa-card">
-                    <h3 style="margin-top:0;">Recent AFA Registrations</h3>
+                    <h3 style="margin-top:0; margin-bottom: 1.2rem; color: var(--text-primary);">Recent AFA Registrations</h3>
                     <div class="afa-table-wrap">
                         <table class="afa-table">
-                            <thead><tr><th>Reference</th><th>Beneficiary</th><th>Amount</th><th>Gateway</th><th>Status</th><th>Date</th></tr></thead>
+                            <thead>
+                                <tr>
+                                    <th>Reference</th>
+                                    <th>Beneficiary</th>
+                                    <th>Amount</th>
+                                    <th>Gateway</th>
+                                    <th>Status</th>
+                                    <th>Date</th>
+                                </tr>
+                            </thead>
                             <tbody>
                             <?php if (empty($recent)): ?>
-                                <tr class="empty-row"><td colspan="6">No AFA registrations yet.</td></tr>
+                                <tr class="empty-row">
+                                    <td colspan="6" style="text-align: center; color: var(--text-muted);">No AFA registrations yet.</td>
+                                </tr>
                             <?php else: foreach ($recent as $row): ?>
                                 <tr>
                                     <td data-label="Reference"><?php echo htmlspecialchars($row['reference']); ?></td>
                                     <td data-label="Beneficiary"><?php echo htmlspecialchars($row['beneficiary_name']); ?></td>
                                     <td data-label="Amount"><?php echo htmlspecialchars(formatCurrency((float) $row['amount'], CURRENCY)); ?></td>
                                     <td data-label="Gateway"><?php echo htmlspecialchars(strtoupper((string) ($row['payment_gateway'] ?? '-'))); ?></td>
-                                    <td data-label="Status"><?php echo htmlspecialchars(ucfirst((string) $row['status'])); ?></td>
+                                    <td data-label="Status">
+                                        <?php
+                                        $status_class = 'bg-secondary';
+                                        $status_val = strtolower($row['status'] ?? 'pending');
+                                        if ($status_val === 'pending') $status_class = 'badge-warning text-dark';
+                                        elseif (in_array($status_val, ['completed', 'delivered', 'success'], true)) $status_class = 'badge-success';
+                                        elseif ($status_val === 'processing') $status_class = 'badge-info';
+                                        elseif (in_array($status_val, ['failed', 'refunded'], true)) $status_class = 'badge-danger';
+                                        ?>
+                                        <span class="badge <?php echo $status_class; ?>"><?php echo htmlspecialchars(ucfirst((string) $row['status'])); ?></span>
+                                    </td>
                                     <td data-label="Date"><?php echo htmlspecialchars(date('M j, Y g:i A', strtotime((string) $row['created_at']))); ?></td>
                                 </tr>
                                 <tr class="afa-details-row">
@@ -591,6 +523,19 @@ function updateThemeIcon(theme) {
     }
 }
 
+// User dropdown menu toggle
+function toggleUserDropdown() {
+    document.getElementById('userDropdown').classList.toggle('show');
+}
+
+document.addEventListener('click', function(e) {
+    const dropdown = document.getElementById('userDropdown');
+    const toggle = document.querySelector('.user-dropdown-toggle');
+    if (dropdown && toggle && !toggle.contains(e.target)) {
+        dropdown.classList.remove('show');
+    }
+});
+
 const form = document.getElementById('afaForm');
 const msg = document.getElementById('afaMsg');
 if (form) {
@@ -623,8 +568,8 @@ if (form) {
 
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
-        msg.textContent = 'Processing...';
-        msg.style.color = '#374151';
+        msg.textContent = 'Processing, please wait...';
+        msg.style.color = 'var(--text-primary)';
 
         normalizePhone();
         normalizeCard();
@@ -649,7 +594,7 @@ if (form) {
                 body: formData
             });
             const payload = await res.json();
-            if (!res.ok || payload.status !== 'success') {
+            if (payload.status !== 'success') {
                 throw new Error(payload.message || 'Request failed');
             }
             if (payload.data && payload.data.authorization_url) {

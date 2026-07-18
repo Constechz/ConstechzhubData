@@ -14,110 +14,45 @@ $selected_status = isset($_GET['status']) ? sanitize($_GET['status']) : '';
 $date_from = isset($_GET['date_from']) ? sanitize($_GET['date_from']) : '';
 $date_to = isset($_GET['date_to']) ? sanitize($_GET['date_to']) : '';
 $search = isset($_GET['search']) ? sanitize($_GET['search']) : '';
-$page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
-$limit = 20;
-$offset = ($page - 1) * $limit;
-
-// Get agent name for search & backward compatibility
-$agent_name = $current_user['full_name'];
-
-// Count Query for Pagination (Robust & Backward Compatible)
-$count_query = "
-    SELECT COUNT(*) as total
-    FROM transactions t
-    WHERE (
-        (t.user_id = ? AND t.transaction_type = 'topup')
-        OR 
-        (t.initiated_by_id = ?)
-        OR
-        (t.initiated_by_id IS NULL AND t.transaction_type = 'topup' AND t.description LIKE CONCAT('%', ?, '%') AND t.description NOT LIKE '%Approved manually%' AND t.description NOT LIKE '%failed manually%' AND t.description NOT LIKE '%Moses Sedodey%' AND t.description NOT LIKE '%by Moses%')
-    )
-";
-
-$count_params = [$agent_id, $agent_id, $agent_name];
-$count_types = 'iis';
-
-if ($selected_type !== '') {
-    if ($selected_type === 'agent_topup') {
-        $count_query .= " AND t.user_id = ? AND t.initiated_by_id IS NULL";
-        $count_params[] = $agent_id;
-        $count_types .= 'i';
-    } elseif ($selected_type === 'customer_topup') {
-        $count_query .= " AND (t.initiated_by_id = ? OR (t.initiated_by_id IS NULL AND t.description LIKE CONCAT('%', ?, '%') AND t.description NOT LIKE '%Approved manually%' AND t.description NOT LIKE '%failed manually%' AND t.description NOT LIKE '%Moses Sedodey%' AND t.description NOT LIKE '%by Moses%'))";
-        $count_params[] = $agent_id;
-        $count_params[] = $agent_name;
-        $count_types .= 'is';
-    }
-}
-
-if ($selected_status !== '') {
-    $count_query .= " AND t.status = ?";
-    $count_params[] = $selected_status;
-    $count_types .= 's';
-}
-
-if ($date_from !== '') {
-    $count_query .= " AND DATE(t.created_at) >= ?";
-    $count_params[] = $date_from;
-    $count_types .= 's';
-}
-
-if ($date_to !== '') {
-    $count_query .= " AND DATE(t.created_at) <= ?";
-    $count_params[] = $date_to;
-    $count_types .= 's';
-}
-
-if ($search !== '') {
-    $count_query .= " AND (t.reference LIKE ? OR t.description LIKE ? OR t.paystack_reference LIKE ?)";
-    $searchTerm = '%' . $search . '%';
-    $count_params[] = $searchTerm;
-    $count_params[] = $searchTerm;
-    $count_params[] = $searchTerm;
-    $count_types .= 'sss';
-}
-
-$stmt = $db->prepare($count_query);
-$stmt->bind_param($count_types, ...$count_params);
-$stmt->execute();
-$total_rows = $stmt->get_result()->fetch_assoc()['total'] ?? 0;
-$total_pages = ceil($total_rows / $limit);
 
 // Fetch monetary transactions for this agent
 $query = "
     SELECT t.id, t.transaction_type as type, t.amount, t.status, t.reference, t.payment_method, 
            t.description, t.created_at, t.paystack_reference, u.full_name as customer_name,
-           COALESCE(t.balance_after, wt.balance_after) as balance_after,
            CASE 
-               WHEN t.user_id = ? AND t.transaction_type = 'topup' AND t.initiated_by_id IS NULL THEN 'agent_topup'
-               WHEN t.initiated_by_id = ? OR (t.initiated_by_id IS NULL AND t.transaction_type = 'topup' AND t.description LIKE CONCAT('%', ?, '%') AND t.description NOT LIKE '%Approved manually%' AND t.description NOT LIKE '%failed manually%' AND t.description NOT LIKE '%Moses Sedodey%' AND t.description NOT LIKE '%by Moses%') THEN 'customer_topup'
+               WHEN t.user_id = ? AND t.transaction_type = 'topup' AND t.description LIKE '%Agent wallet top-up%' THEN 'agent_topup'
+               WHEN t.transaction_type = 'topup' AND (
+                   t.description LIKE CONCAT('%', ?, '%') OR 
+                   t.description LIKE '%Customer wallet top-up%'
+               ) THEN 'customer_topup'
+               WHEN t.transaction_type = 'topup' THEN 'wallet_topup'
                ELSE t.transaction_type
            END as display_type
     FROM transactions t
-    LEFT JOIN users u ON t.target_user_id = u.id
-    LEFT JOIN wallet_transactions wt ON wt.reference = t.reference
+    LEFT JOIN users u ON t.user_id = u.id
     WHERE (
-        (t.user_id = ? AND t.transaction_type = 'topup')
+        (t.user_id = ? AND t.transaction_type = 'topup' 
+         AND t.description LIKE '%wallet top-up%')
         OR 
-        (t.initiated_by_id = ?)
-        OR
-        (t.initiated_by_id IS NULL AND t.transaction_type = 'topup' AND t.description LIKE CONCAT('%', ?, '%') AND t.description NOT LIKE '%Approved manually%' AND t.description NOT LIKE '%failed manually%' AND t.description NOT LIKE '%Moses Sedodey%' AND t.description NOT LIKE '%by Moses%')
+        (t.transaction_type = 'topup' AND t.description LIKE CONCAT('%', ?, '%'))
     )
 ";
 
-$params = [$agent_id, $agent_id, $agent_name, $agent_id, $agent_id, $agent_name];
-$types = 'iisiis';
+// Get agent name for search
+$agent_name = $current_user['full_name'];
+
+$params = [$agent_id, $agent_name, $agent_id, $agent_name];
+$types = 'isii';
 
 if ($selected_type !== '') {
     if ($selected_type === 'agent_topup') {
-        $query .= " AND t.user_id = ? AND t.initiated_by_id IS NULL";
-        $params[] = $agent_id;
-        $types .= 'i';
+        $query .= " AND t.description LIKE '%Agent wallet top-up%'";
     } elseif ($selected_type === 'customer_topup') {
-        $query .= " AND (t.initiated_by_id = ? OR (t.initiated_by_id IS NULL AND t.description LIKE CONCAT('%', ?, '%') AND t.description NOT LIKE '%Approved manually%' AND t.description NOT LIKE '%failed manually%' AND t.description NOT LIKE '%Moses Sedodey%' AND t.description NOT LIKE '%by Moses%'))";
-        $params[] = $agent_id;
-        $params[] = $agent_name;
-        $types .= 'is';
+        $query .= " AND t.description LIKE '%Customer wallet top-up%'";
+    } else {
+        $query .= " AND t.transaction_type = ?";
+        $params[] = $selected_type;
+        $types .= 's';
     }
 }
 
@@ -148,10 +83,7 @@ if ($search !== '') {
     $types .= 'sss';
 }
 
-$query .= " ORDER BY t.created_at DESC LIMIT ? OFFSET ?";
-$params[] = $limit;
-$params[] = $offset;
-$types .= 'ii';
+$query .= " ORDER BY t.created_at DESC LIMIT 500";
 
 $stmt = $db->prepare($query);
 $stmt->bind_param($types, ...$params);
@@ -167,23 +99,22 @@ while ($row = $transactions_rs->fetch_assoc()) {
 $stats_query = "
     SELECT 
         COUNT(*) as total_transactions,
-        SUM(CASE WHEN status = 'success' AND user_id = ? AND transaction_type = 'topup' AND initiated_by_id IS NULL THEN amount ELSE 0 END) as total_agent_topups,
-        SUM(CASE WHEN status = 'success' AND (initiated_by_id = ? OR (initiated_by_id IS NULL AND transaction_type = 'topup' AND description LIKE CONCAT('%', ?, '%') AND description NOT LIKE '%Approved manually%' AND description NOT LIKE '%failed manually%' AND description NOT LIKE '%Moses Sedodey%' AND description NOT LIKE '%by Moses%')) THEN amount ELSE 0 END) as total_customer_topups,
+        SUM(CASE WHEN status = 'success' AND user_id = ? AND description LIKE '%Agent wallet top-up%' THEN amount ELSE 0 END) as total_agent_topups,
+        SUM(CASE WHEN status = 'success' AND transaction_type = 'topup' AND description LIKE CONCAT('%', ?, '%') THEN amount ELSE 0 END) as total_customer_topups,
         COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_count,
         COUNT(CASE WHEN status = 'success' THEN 1 END) as success_count,
         COUNT(CASE WHEN status = 'failed' THEN 1 END) as failed_count
     FROM transactions
     WHERE (
-        (user_id = ? AND transaction_type = 'topup')
+        (user_id = ? AND transaction_type = 'topup'
+         AND description LIKE '%wallet top-up%')
         OR 
-        (initiated_by_id = ?)
-        OR
-        (initiated_by_id IS NULL AND transaction_type = 'topup' AND description LIKE CONCAT('%', ?, '%') AND description NOT LIKE '%Approved manually%' AND description NOT LIKE '%failed manually%' AND description NOT LIKE '%Moses Sedodey%' AND description NOT LIKE '%by Moses%')
+        (transaction_type = 'topup' AND description LIKE CONCAT('%', ?, '%'))
     )
     AND DATE(created_at) >= DATE_SUB(CURDATE(), INTERVAL 30 DAY)
 ";
 $stmt = $db->prepare($stats_query);
-$stmt->bind_param("iisiis", $agent_id, $agent_id, $agent_name, $agent_id, $agent_id, $agent_name);
+$stmt->bind_param("isis", $agent_id, $agent_name, $agent_id, $agent_name);
 $stmt->execute();
 $stats_rs = $stmt->get_result();
 $stats = $stats_rs->fetch_assoc() ?: [];
@@ -225,7 +156,153 @@ $flash = getFlashMessage();
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
         
-        <?php renderAgentSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item">
+                    <a href="dashboard.php" class="nav-link">
+                        <i class="fas fa-home"></i>
+                        Dashboard
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Services</div>
+                <div class="nav-item">
+                    <a href="at-business.php" class="nav-link">
+                        <i class="fas fa-mobile-alt"></i>
+                        AT Business
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="mtn-business.php" class="nav-link">
+                        <i class="fas fa-mobile-alt"></i>
+                        MTN Business
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="afa-registration.php" class="nav-link">
+                        <i class="fas fa-user-check"></i>
+                        AFA Registration
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="bulk-mtn.php" class="nav-link">
+                        <i class="fas fa-layer-group"></i>
+                        Bulk MTN
+                    </a>
+                </div>
+                    <div class="nav-item">
+                        <a href="result-checker.php" class="nav-link">
+                            <i class="fas fa-award"></i>
+                            Result Checker
+                        </a>
+                    </div>
+                <div class="nav-item">
+                    <a href="telecel-business.php" class="nav-link">
+                        <i class="fas fa-signal"></i>
+                        Telecel Business
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Transaction</div>
+                <div class="nav-item">
+                    <a href="transactions.php" class="nav-link active">
+                        <i class="fas fa-money-bill-wave"></i>
+                        Transactions
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="histories.php" class="nav-link">
+                        <i class="fas fa-history"></i>
+                        Data Histories
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="reference.php" class="nav-link">
+                        <i class="fas fa-search"></i>
+                        Reference
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Operations</div>
+                <div class="nav-item">
+                    <a href="customer_topup.php" class="nav-link">
+                        <i class="fas fa-user-plus"></i>
+                        Customer Top-up
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="wallet.php" class="nav-link">
+                        <i class="fas fa-wallet"></i>
+                        Wallet
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="support.php" class="nav-link">
+                        <i class="fas fa-life-ring"></i>
+                        Support
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Business</div>
+                <div class="nav-item">
+                    <a href="pricing.php" class="nav-link">
+                        <i class="fas fa-tags"></i>
+                        Custom Pricing
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Users</div>
+                <div class="nav-item">
+                    <a href="customers.php" class="nav-link">
+                        <i class="fas fa-user-friends"></i>
+                        Customers
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Commission</div>
+                <div class="nav-item">
+                    <a href="commission.php" class="nav-link">
+                        <i class="fas fa-percentage"></i>
+                        Commission
+                    </a>
+                </div>
+                    <div class="nav-item">
+                        <a href="withdraw-profit.php" class="nav-link">
+                            <i class="fas fa-wallet"></i>
+                            Withdraw Profit
+                        </a>
+                    </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item">
+                    <a href="settings.php" class="nav-link">
+                        <i class="fas fa-cog"></i>
+                        Settings
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="api-access.php" class="nav-link">
+                        <i class="fas fa-key"></i>
+                        API Access
+                    </a>
+                </div>
+            </li>
+        </ul>
     </nav>
 
     <!-- Main Content -->
@@ -272,6 +349,9 @@ $flash = getFlashMessage();
             </div>
         </header>
 
+<?php echo renderNotificationSlides('agents'); ?>
+
+
         <div class="dashboard-content">
             <div class="page-title">
                 <h1>Monetary Transactions</h1>
@@ -287,7 +367,7 @@ $flash = getFlashMessage();
             <!-- Stats Cards -->
             <div class="stats-grid" style="margin-bottom: 2rem;">
                 <div class="stat-card">
-                    <div class="stat-icon" style="background-color: rgba(139, 92, 246, 0.1); color: var(--brand-primary);">
+                    <div class="stat-icon purple">
                         <i class="fas fa-wallet"></i>
                     </div>
                     <div class="stat-content">
@@ -297,7 +377,7 @@ $flash = getFlashMessage();
                 </div>
                 
                 <div class="stat-card">
-                    <div class="stat-icon" style="background-color: rgba(115, 237, 63, 0.1); color: var(--accent-green);">
+                    <div class="stat-icon blue">
                         <i class="fas fa-users"></i>
                     </div>
                     <div class="stat-content">
@@ -307,7 +387,7 @@ $flash = getFlashMessage();
                 </div>
                 
                 <div class="stat-card">
-                    <div class="stat-icon" style="background-color: rgba(230, 59, 44, 0.1); color: var(--accent-red);">
+                    <div class="stat-icon orange">
                         <i class="fas fa-clock"></i>
                     </div>
                     <div class="stat-content">
@@ -317,7 +397,7 @@ $flash = getFlashMessage();
                 </div>
                 
                 <div class="stat-card">
-                    <div class="stat-icon" style="background-color: rgba(34, 197, 94, 0.1); color: #22c55e;">
+                    <div class="stat-icon green">
                         <i class="fas fa-check-circle"></i>
                     </div>
                     <div class="stat-content">
@@ -372,22 +452,6 @@ $flash = getFlashMessage();
                 </div>
             </div>
 
-            <!-- Transaction Category Tabs -->
-            <div class="transaction-tabs" style="display: flex; gap: 0.5rem; margin-bottom: 1.5rem; border-bottom: 2px solid var(--border-color); padding-bottom: 0px; flex-wrap: wrap;">
-                <a href="?<?php echo http_build_query(array_merge($_GET, ['type' => '', 'page' => 1])); ?>" 
-                   style="text-decoration: none; padding: 0.75rem 1.25rem; font-weight: 600; font-size: 0.95rem; color: <?php echo $selected_type === '' ? 'var(--brand-primary)' : 'var(--text-muted)'; ?>; border-bottom: 3px solid <?php echo $selected_type === '' ? 'var(--brand-primary)' : 'transparent'; ?>; margin-bottom: -2px; transition: all 0.2s ease;">
-                    <i class="fas fa-list me-1"></i> All Transactions
-                </a>
-                <a href="?<?php echo http_build_query(array_merge($_GET, ['type' => 'agent_topup', 'page' => 1])); ?>" 
-                   style="text-decoration: none; padding: 0.75rem 1.25rem; font-weight: 600; font-size: 0.95rem; color: <?php echo $selected_type === 'agent_topup' ? 'var(--brand-primary)' : 'var(--text-muted)'; ?>; border-bottom: 3px solid <?php echo $selected_type === 'agent_topup' ? 'var(--brand-primary)' : 'transparent'; ?>; margin-bottom: -2px; transition: all 0.2s ease;">
-                    <i class="fas fa-wallet me-1"></i> My Wallet Funding (Inflows)
-                </a>
-                <a href="?<?php echo http_build_query(array_merge($_GET, ['type' => 'customer_topup', 'page' => 1])); ?>" 
-                   style="text-decoration: none; padding: 0.75rem 1.25rem; font-weight: 600; font-size: 0.95rem; color: <?php echo $selected_type === 'customer_topup' ? 'var(--brand-primary)' : 'var(--text-muted)'; ?>; border-bottom: 3px solid <?php echo $selected_type === 'customer_topup' ? 'var(--brand-primary)' : 'transparent'; ?>; margin-bottom: -2px; transition: all 0.2s ease;">
-                    <i class="fas fa-users me-1"></i> Customer Distributions (Outflows)
-                </a>
-            </div>
-
             <!-- Transactions Table -->
             <div class="card">
                 <div class="card-header">
@@ -412,56 +476,47 @@ $flash = getFlashMessage();
                                 <a href="wallet.php" class="btn btn-primary">
                                     <i class="fas fa-plus me-1"></i>Top-up Wallet
                                 </a>
-                                <a href="paystack-order-recovery.php" class="btn btn-secondary">
-                                    <i class="fas fa-sync-alt me-1"></i>Recover Paystack Order
-                                </a>
                             <?php endif; ?>
                         </div>
                     <?php else: ?>
                         <div class="table-responsive">
                             <table class="table table-hover mb-0 mobile-responsive-table">
-                                <thead class="table-light">
+                                <thead>
                                     <tr>
-                                        <th style="width: 1%; white-space: nowrap;">Reference</th>
-                                        <th style="width: 1%; white-space: nowrap;">Type</th>
-                                        <th class="d-none d-sm-table-cell" style="width: 1%; white-space: nowrap;">Customer</th>
-                                        <th style="width: 1%; white-space: nowrap;">Amount</th>
-                                        <th style="width: 1%; white-space: nowrap;">Wallet Balance</th>
-                                        <th style="width: 1%; white-space: nowrap;">Status</th>
-                                        <th class="d-none d-md-table-cell" style="width: 1%; white-space: nowrap;">Payment Method</th>
-                                        <th class="d-none d-lg-table-cell" style="width: 80%;">Description</th>
-                                        <th style="width: 15%; white-space: nowrap;">Date</th>
-                                        <th class="d-none d-xl-table-cell" style="width: 1%; white-space: nowrap;"><?php echo htmlspecialchars($gateway_label); ?> Ref</th>
+                                        <th>Reference</th>
+                                        <th>Type</th>
+                                        <th class="d-none d-sm-table-cell">Customer</th>
+                                        <th>Amount</th>
+                                        <th>Status</th>
+                                        <th class="d-none d-md-table-cell">Payment Method</th>
+                                        <th class="d-none d-lg-table-cell">Description</th>
+                                        <th>Date</th>
+                                        <th class="d-none d-xl-table-cell"><?php echo htmlspecialchars($gateway_label); ?> Ref</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <?php foreach ($transactions as $transaction): ?>
                                         <tr>
-                                            <td data-label="Reference" style="white-space: nowrap;">
-                                                <code style="background: var(--bg-secondary); padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.8rem;">
+                                            <td data-label="Reference">
+                                                <code>
                                                     <?php echo htmlspecialchars($transaction['reference']); ?>
                                                 </code>
                                             </td>
-                                            <td data-label="Type" style="white-space: nowrap;">
+                                            <td data-label="Type">
                                                 <?php 
-                                                 $display_type = $transaction['display_type'];
-                                                 if (stripos($transaction['description'] ?? '', 'profit withdrawal') !== false) {
-                                                     $display_type = 'profit_withdrawal';
-                                                 }
-                                                 $type_labels = [
-                                                     'agent_topup' => '<span class="badge bg-primary">Agent Top-up</span>',
-                                                     'customer_topup' => '<span class="badge bg-success">Customer Top-up</span>',
-                                                     'wallet_topup' => '<span class="badge bg-info">Wallet Top-up</span>',
-                                                     'topup' => '<span class="badge bg-info">Top-up</span>',
-                                                     'profit_withdrawal' => '<span class="badge bg-warning text-dark">Profit to Wallet</span>'
-                                                 ];
-                                                 echo $type_labels[$display_type] ?? '<span class="badge bg-secondary">' . htmlspecialchars($transaction['type']) . '</span>';
+                                                $type_labels = [
+                                                    'agent_topup' => '<span class="badge badge-primary">Agent Top-up</span>',
+                                                    'customer_topup' => '<span class="badge badge-success">Customer Top-up</span>',
+                                                    'wallet_topup' => '<span class="badge badge-info">Wallet Top-up</span>',
+                                                    'topup' => '<span class="badge badge-info">Top-up</span>'
+                                                ];
+                                                echo $type_labels[$transaction['display_type']] ?? '<span class="badge badge-secondary">' . htmlspecialchars($transaction['type']) . '</span>';
                                                 ?>
                                             </td>
                                             <td class="d-none d-sm-table-cell" data-label="Customer">
                                                 <?php if ($transaction['customer_name'] && $transaction['display_type'] === 'customer_topup'): ?>
                                                     <div class="small">
-                                                        <i class="fas fa-user text-primary"></i>
+                                                        <i class="fas fa-user" style="color: var(--brand-primary);"></i>
                                                         <?php echo htmlspecialchars($transaction['customer_name']); ?>
                                                     </div>
                                                 <?php elseif ($transaction['display_type'] === 'agent_topup'): ?>
@@ -474,36 +529,27 @@ $flash = getFlashMessage();
                                                 <?php endif; ?>
                                             </td>
                                             <td data-label="Amount">
-                                                <strong style="color: var(--accent-green);">
+                                                <strong>
                                                     <?php echo CURRENCY; ?> <?php echo number_format($transaction['amount'], 2); ?>
                                                 </strong>
-                                            </td>
-                                            <td data-label="Wallet Balance" style="white-space: nowrap;">
-                                                <?php if (isset($transaction['balance_after']) && $transaction['balance_after'] !== null): ?>
-                                                    <strong>
-                                                        <?php echo CURRENCY; ?> <?php echo number_format($transaction['balance_after'], 2); ?>
-                                                    </strong>
-                                                <?php else: ?>
-                                                    <span class="text-muted">-</span>
-                                                <?php endif; ?>
                                             </td>
                                             <td data-label="Status">
                                                 <?php 
                                                 $status_labels = [
-                                                    'success' => '<span class="badge bg-success">Success</span>',
-                                                    'pending' => '<span class="badge bg-warning text-dark">Pending</span>',
-                                                    'failed' => '<span class="badge bg-danger">Failed</span>'
+                                                    'success' => '<span class="badge badge-success">Success</span>',
+                                                    'pending' => '<span class="badge badge-warning">Pending</span>',
+                                                    'failed' => '<span class="badge badge-danger">Failed</span>'
                                                 ];
-                                                echo $status_labels[$transaction['status']] ?? '<span class="badge bg-secondary">' . htmlspecialchars($transaction['status']) . '</span>';
+                                                echo $status_labels[$transaction['status']] ?? '<span class="badge badge-secondary">' . htmlspecialchars($transaction['status']) . '</span>';
                                                 ?>
                                             </td>
                                             <td class="d-none d-md-table-cell" data-label="Payment Method">
                                                 <?php 
                                                 $payment_labels = [
-                                                    'paystack' => '<i class="fas fa-credit-card text-primary"></i> Paystack',
-                                                    'moolre' => '<i class="fas fa-credit-card text-primary"></i> Moolre',
-                                                    'wallet' => '<i class="fas fa-wallet text-info"></i> Wallet',
-                                                    'bank_transfer' => '<i class="fas fa-university text-success"></i> Bank Transfer'
+                                                    'paystack' => '<i class="fas fa-credit-card" style="color: var(--brand-primary);"></i> Paystack',
+                                                    'moolre' => '<i class="fas fa-credit-card" style="color: var(--brand-primary);"></i> Moolre',
+                                                    'wallet' => '<i class="fas fa-wallet" style="color: var(--brand-primary);"></i> Wallet',
+                                                    'bank_transfer' => '<i class="fas fa-university" style="color: var(--accent-green);"></i> Bank Transfer'
                                                 ];
                                                 echo $payment_labels[$transaction['payment_method']] ?? htmlspecialchars($transaction['payment_method']);
                                                 ?>
@@ -517,7 +563,7 @@ $flash = getFlashMessage();
                                             </td>
                                             <td class="small d-none d-xl-table-cell" data-label="<?php echo htmlspecialchars($gateway_label); ?> Ref">
                                                 <?php if ($transaction['paystack_reference']): ?>
-                                                    <code style="background: var(--bg-secondary); padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem;">
+                                                    <code>
                                                         <?php echo htmlspecialchars($transaction['paystack_reference']); ?>
                                                     </code>
                                                 <?php else: ?>
@@ -530,43 +576,12 @@ $flash = getFlashMessage();
                             </table>
                         </div>
                         
-                        <!-- Pagination -->
-                        <?php if ($total_pages > 1): ?>
-                            <div class="card-footer d-flex justify-content-between align-items-center" style="display: flex; justify-content: space-between; align-items: center; padding: 1rem; border-top: 1px solid var(--border-color); flex-wrap: wrap; gap: 1rem;">
-                                <div class="text-muted small">
-                                    Showing <?php echo $offset + 1; ?> to <?php echo min($offset + $limit, $total_rows); ?> of <?php echo $total_rows; ?> transactions.
-                                </div>
-                                <nav aria-label="Page navigation">
-                                    <ul class="pagination mb-0" style="display: flex; gap: 0.25rem; list-style: none; padding: 0; margin: 0;">
-                                        <?php if ($page > 1): ?>
-                                            <li class="page-item">
-                                                <a class="page-link btn btn-sm btn-outline-secondary" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $page - 1])); ?>" style="text-decoration: none;">
-                                                    <i class="fas fa-chevron-left"></i> Prev
-                                                </a>
-                                            </li>
-                                        <?php endif; ?>
-                                        
-                                        <?php
-                                        $start_page = max(1, $page - 2);
-                                        $end_page = min($total_pages, $page + 2);
-                                        for ($i = $start_page; $i <= $end_page; $i++):
-                                        ?>
-                                            <li class="page-item">
-                                                <a class="page-link btn btn-sm <?php echo $i === $page ? 'btn-primary' : 'btn-outline-secondary'; ?>" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $i])); ?>" style="text-decoration: none; font-weight: <?php echo $i === $page ? 'bold' : 'normal'; ?>;">
-                                                    <?php echo $i; ?>
-                                                </a>
-                                            </li>
-                                        <?php endfor; ?>
-
-                                        <?php if ($page < $total_pages): ?>
-                                            <li class="page-item">
-                                                <a class="page-link btn btn-sm btn-outline-secondary" href="?<?php echo http_build_query(array_merge($_GET, ['page' => $page + 1])); ?>" style="text-decoration: none;">
-                                                    Next <i class="fas fa-chevron-right"></i>
-                                                </a>
-                                            </li>
-                                        <?php endif; ?>
-                                    </ul>
-                                </nav>
+                        <?php if (count($transactions) >= 500): ?>
+                            <div class="card-footer text-center">
+                                <small class="text-muted">
+                                    <i class="fas fa-info-circle"></i>
+                                    Showing latest 500 transactions. Use filters to narrow down results.
+                                </small>
                             </div>
                         <?php endif; ?>
                     <?php endif; ?>
@@ -630,10 +645,143 @@ document.addEventListener('DOMContentLoaded', function(){
 </script>
 
 <style>
-/* Fix desktop width overflow caused by fixed sidebar */
+/* Custom color definitions for transactions */
+:root {
+    --accent-green-rgb: 46, 117, 89;
+    --accent-green: #2e7559;
+}
+[data-theme="dark"] {
+    --accent-green-rgb: 74, 222, 128;
+    --accent-green: #4ade80;
+}
+
+/* Stat card icon variations */
+.stat-icon.purple {
+    background-color: rgba(84, 19, 136, 0.1) !important;
+    color: var(--brand-primary) !important;
+}
+.stat-icon.blue {
+    background-color: rgba(0, 180, 216, 0.1) !important;
+    color: #00b4d8 !important;
+}
+.stat-icon.orange {
+    background-color: rgba(255, 159, 67, 0.15) !important;
+    color: #ff9f43 !important;
+}
+.stat-icon.green {
+    background-color: rgba(46, 117, 89, 0.15) !important;
+    color: #2e7559 !important;
+}
+
+[data-theme="dark"] .stat-icon.purple {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    color: #c084fc !important;
+}
+[data-theme="dark"] .stat-icon.blue {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    color: #38bdf8 !important;
+}
+[data-theme="dark"] .stat-icon.orange {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    color: #fb923c !important;
+}
+[data-theme="dark"] .stat-icon.green {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    color: #4ade80 !important;
+}
+
+/* Badge background colors for light theme */
+.badge-primary, .badge.badge-primary {
+    background-color: rgba(84, 19, 136, 0.1) !important;
+    color: var(--brand-primary) !important;
+}
+.badge-success, .badge.badge-success {
+    background-color: rgba(46, 117, 89, 0.1) !important;
+    color: #2e7559 !important;
+}
+.badge-warning, .badge.badge-warning {
+    background-color: rgba(255, 212, 0, 0.15) !important;
+    color: #a88d00 !important;
+}
+.badge-danger, .badge.badge-danger {
+    background-color: rgba(217, 3, 104, 0.1) !important;
+    color: #d90368 !important;
+}
+.badge-info, .badge.badge-info {
+    background-color: rgba(0, 180, 216, 0.1) !important;
+    color: #00b4d8 !important;
+}
+.badge-secondary, .badge.badge-secondary {
+    background-color: rgba(108, 117, 125, 0.1) !important;
+    color: #6c757d !important;
+}
+
+/* Badge background colors overrides for dark theme */
+[data-theme="dark"] .badge-primary, [data-theme="dark"] .badge.badge-primary {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    color: #c084fc !important;
+}
+[data-theme="dark"] .badge-success, [data-theme="dark"] .badge.badge-success {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    color: #4ade80 !important;
+}
+[data-theme="dark"] .badge-warning, [data-theme="dark"] .badge.badge-warning {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    color: #fbbf24 !important;
+}
+[data-theme="dark"] .badge-danger, [data-theme="dark"] .badge.badge-danger {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    color: #f87171 !important;
+}
+[data-theme="dark"] .badge-info, [data-theme="dark"] .badge.badge-info {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    color: #38bdf8 !important;
+}
+[data-theme="dark"] .badge-secondary, [data-theme="dark"] .badge.badge-secondary {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    color: #9ca3af !important;
+}
+
+/* Table cell text overrides */
+.table td strong {
+    color: var(--accent-green) !important;
+}
+[data-theme="dark"] .table td strong {
+    color: #4ade80 !important;
+}
+
+/* Table code tags */
+.table code {
+    background-color: var(--bg-secondary) !important;
+    color: var(--brand-primary) !important;
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.8rem;
+}
+[data-theme="dark"] .table code {
+    color: var(--text-primary) !important;
+    background-color: var(--bg-tertiary) !important;
+}
+
+/* Desktop grid rules for filter form layout */
 @media (min-width: 992px) {
-    .main-content {
-        max-width: calc(100% - 250px);
+    .filter-form .row {
+        display: flex;
+        flex-direction: row;
+        align-items: flex-end;
+        gap: 0.5rem;
+    }
+    .filter-form .col-md-2 {
+        flex: 1;
+        min-width: 150px;
+    }
+    .filter-form .col-md-3 {
+        flex: 1.5;
+        min-width: 200px;
+    }
+    .filter-form .col-md-1 {
+        flex: 0 0 60px;
+        max-width: 60px;
     }
 }
 
@@ -705,7 +853,7 @@ document.addEventListener('DOMContentLoaded', function(){
         padding: 1rem;
         margin-bottom: 1rem;
         background: var(--bg-primary);
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        box-shadow: 0 2px 4px rgba(46, 41, 78, 0.1);
         width: 100%;
         max-width: 100%;
     }
@@ -718,9 +866,8 @@ document.addEventListener('DOMContentLoaded', function(){
         text-align: left;
         width: 100%;
         max-width: 100%;
-        overflow-wrap: anywhere !important;
-        word-break: break-all !important;
-        white-space: normal !important;
+        overflow-wrap: anywhere;
+        word-break: break-word;
     }
     
     .mobile-responsive-table td:before {
@@ -735,13 +882,26 @@ document.addEventListener('DOMContentLoaded', function(){
         color: var(--text-muted);
         text-align: left;
     }
+    
+    .mobile-responsive-table td:first-child {
+        border-top: 0;
+        font-weight: bold;
+        background: var(--bg-secondary);
+        margin: -1rem -1rem 0.5rem -1rem;
+        padding: 0.75rem 1rem;
+        border-radius: 0.5rem 0.5rem 0 0;
+        text-align: center;
+    }
+    
+    .mobile-responsive-table td:first-child:before {
+        display: none;
+    }
 
     .mobile-responsive-table code {
-        display: inline-block !important;
-        max-width: 100% !important;
+        display: inline-block;
+        max-width: 100%;
         white-space: normal !important;
-        word-break: break-all !important;
-        overflow-wrap: anywhere !important;
+        word-break: break-all;
     }
 }
 
@@ -824,7 +984,8 @@ document.addEventListener('DOMContentLoaded', function(){
 
     <!-- IMMEDIATE Icon Fix for square placeholder issues -->
     <script src="../immediate_icon_fix.js"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
-
 

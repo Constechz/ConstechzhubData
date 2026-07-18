@@ -11,29 +11,6 @@ require_once __DIR__ . '/../config/config.php';
  */
 function getSeoSetting($setting_name, $default = '') {
     global $db;
-    static $settingsCache = null;
-
-    if ($settingsCache === null) {
-        $settingsCache = [];
-
-        try {
-            if ($db && ($db instanceof Database)) {
-                $result = $db->query("SELECT setting_name, setting_value FROM seo_settings");
-                if ($result) {
-                    while ($row = $result->fetch_assoc()) {
-                        $settingsCache[$row['setting_name']] = $row['setting_value'];
-                    }
-                    $result->free();
-                }
-            }
-        } catch (Exception $e) {
-            error_log("SEO Settings Cache Error: " . $e->getMessage());
-        }
-    }
-
-    if (array_key_exists($setting_name, $settingsCache)) {
-        return $settingsCache[$setting_name];
-    }
     
     try {
         // Ensure we have a valid database connection
@@ -142,140 +119,12 @@ function updateSeoSetting($setting_name, $setting_value, $description = null) {
 }
 
 /**
- * Ignore placeholder hostnames when resolving public URLs.
- */
-function isSeoPlaceholderUrl($url) {
-    if (!is_string($url) || trim($url) === '' || !filter_var($url, FILTER_VALIDATE_URL)) {
-        return false;
-    }
-
-    $host = strtolower((string) parse_url($url, PHP_URL_HOST));
-    if ($host === '') {
-        return false;
-    }
-
-    return in_array($host, ['yourdomain.com', 'www.yourdomain.com', 'example.com', 'www.example.com'], true);
-}
-
-/**
- * Resolve the most reliable public base URL for the current request.
- */
-function getSeoBaseUrl($preferred = '') {
-    $candidates = [];
-
-    if (function_exists('dbh_detect_site_url')) {
-        $detected = dbh_detect_site_url();
-        if (is_string($detected) && trim($detected) !== '') {
-            $candidates[] = trim($detected);
-        }
-    }
-
-    if (is_string($preferred) && trim($preferred) !== '') {
-        $candidates[] = trim($preferred);
-    }
-
-    if (defined('SITE_URL') && is_string(SITE_URL) && trim(SITE_URL) !== '') {
-        $candidates[] = trim((string) SITE_URL);
-    }
-
-    $settingSiteUrl = trim((string) getSeoSetting('site_url', ''));
-    if ($settingSiteUrl !== '') {
-        $candidates[] = $settingSiteUrl;
-    }
-
-    $placeholderCandidate = '';
-    foreach ($candidates as $candidate) {
-        if (!filter_var($candidate, FILTER_VALIDATE_URL)) {
-            continue;
-        }
-
-        if (!isSeoPlaceholderUrl($candidate)) {
-            return rtrim($candidate, '/');
-        }
-
-        if ($placeholderCandidate === '') {
-            $placeholderCandidate = rtrim($candidate, '/');
-        }
-    }
-
-    return $placeholderCandidate;
-}
-
-/**
- * Resolve a public asset URL from a relative path with a safe local fallback.
- */
-function getSeoAssetUrl($asset_path, $base_url = '') {
-    $normalized_path = ltrim(str_replace('\\', '/', (string) $asset_path), '/');
-    $project_root = realpath(__DIR__ . '/..');
-
-    if ($normalized_path === '') {
-        return '/';
-    }
-
-    if ($project_root) {
-        $local_file = $project_root . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $normalized_path);
-        if (!is_file($local_file)) {
-            return '/' . $normalized_path;
-        }
-    }
-
-    $resolved_base_url = getSeoBaseUrl($base_url);
-    if ($resolved_base_url !== '') {
-        return $resolved_base_url . '/' . $normalized_path;
-    }
-
-    return '/' . $normalized_path;
-}
-
-/**
- * Check whether a relative asset path exists inside the project root.
- */
-function seoLocalAssetExists($asset_path) {
-    $normalized_path = ltrim(str_replace('\\', '/', (string) $asset_path), '/');
-    $project_root = realpath(__DIR__ . '/..');
-
-    if ($normalized_path === '' || !$project_root) {
-        return false;
-    }
-
-    $local_file = $project_root . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $normalized_path);
-    return is_file($local_file);
-}
-
-/**
- * Resolve favicon URL from settings with a safe local fallback.
- */
-function getSeoFaviconUrl($site_url = '') {
-    $favicon_setting = trim((string) getSeoSetting('favicon_url', ''));
-    $fallback_relative = 'assets/images/icon-192.png';
-
-    if ($favicon_setting === '') {
-        $favicon_setting = $fallback_relative;
-    }
-
-    if (!filter_var($favicon_setting, FILTER_VALIDATE_URL)) {
-        $normalized_path = ltrim(str_replace('\\', '/', $favicon_setting), '/');
-        if ($normalized_path === '' || !seoLocalAssetExists($normalized_path)) {
-            $normalized_path = $fallback_relative;
-        }
-
-        return getSeoAssetUrl($normalized_path, $site_url);
-    }
-
-    if (isSeoPlaceholderUrl($favicon_setting)) {
-        return getSeoAssetUrl($fallback_relative, $site_url);
-    }
-
-    return $favicon_setting;
-}
-
-/**
  * Generate SEO meta tags
  */
 function generateSeoMeta($page_title = '', $page_description = '', $page_image = '', $page_url = '') {
-    $site_name = getSeoSetting('site_name', 'Constechzhub');
+    $site_name = getSeoSetting('site_name', defined('SITE_NAME') ? SITE_NAME : 'Constechzhub');
     $site_description = getSeoSetting('site_description', 'Your trusted partner for affordable data bundles');
-    $site_url = getSeoBaseUrl(getSeoSetting('site_url', ''));
+    $site_url = getSeoSetting('site_url', 'https://yourdomain.com');
     $default_image = getSeoSetting('seo_image', '/assets/images/seo-default.jpg');
     $twitter_handle = getSeoSetting('twitter_handle', '@databundlehub');
     $facebook_app_id = getSeoSetting('facebook_app_id', '');
@@ -284,13 +133,11 @@ function generateSeoMeta($page_title = '', $page_description = '', $page_image =
     $title = $page_title ? $page_title . ' - ' . $site_name : $site_name;
     $description = $page_description ?: $site_description;
     $image = $page_image ?: $default_image;
-    $request_uri = $_SERVER['REQUEST_URI'] ?? '/';
-    $url = $page_url ?: ($site_url !== '' ? $site_url . $request_uri : $request_uri);
-    $favicon_url = getSeoFaviconUrl($site_url);
-
+    $url = $page_url ?: $site_url . $_SERVER['REQUEST_URI'];
+    
     // Make image URL absolute
     if ($image && !filter_var($image, FILTER_VALIDATE_URL)) {
-        $image = getSeoAssetUrl($image, $site_url);
+        $image = rtrim($site_url, '/') . '/' . ltrim($image, '/');
     }
     
     $meta_tags = [
@@ -318,9 +165,8 @@ function generateSeoMeta($page_title = '', $page_description = '', $page_image =
         '<meta name="twitter:site" content="' . htmlspecialchars($twitter_handle) . '">',
         
         // Favicon
-        '<link rel="icon" type="image/png" href="' . htmlspecialchars($favicon_url) . '">',
-        '<link rel="shortcut icon" href="' . htmlspecialchars($favicon_url) . '">',
-        '<link rel="apple-touch-icon" href="' . htmlspecialchars($favicon_url) . '">'
+        '<link rel="icon" href="' . htmlspecialchars(getSeoSetting('favicon_url', '/favicon.ico')) . '">',
+        '<link rel="apple-touch-icon" href="' . htmlspecialchars($image) . '">'
     ];
     
     // Add Facebook App ID if available
@@ -380,7 +226,7 @@ function getAllSeoSettings() {
  * Generate JSON-LD structured data
  */
 function generateJsonLd($type = 'Organization') {
-    $site_name = getSeoSetting('site_name', 'Constechzhub');
+    $site_name = getSeoSetting('site_name', defined('SITE_NAME') ? SITE_NAME : 'Constechzhub');
     $site_description = getSeoSetting('site_description', '');
     $site_url = getSeoSetting('site_url', 'https://yourdomain.com');
     $site_image = getSeoSetting('seo_image', '/assets/images/seo-default.jpg');

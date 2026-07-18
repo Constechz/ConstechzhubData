@@ -111,7 +111,6 @@ $selected_customer_id = isset($_GET['customer_id']) ? (int)$_GET['customer_id'] 
 
 // Build customer list query (customers registered via this agent's store)
 $customers = [];
-$customers_by_id = [];
 $total_customers = 0;
 // Detect schema capabilities
 $conn = $db->getConnection();
@@ -209,11 +208,10 @@ try {
                         (SELECT COALESCE(SUM(t.amount),0) FROM transactions t WHERE t.user_id = u.id AND t.transaction_type = 'purchase' AND t.status = 'success') AS total_spent
                  FROM users u 
                  WHERE u.role = 'customer' AND u.agent_id = ? 
-                   AND (u.full_name LIKE ? OR u.email LIKE ? OR u.phone LIKE ?)
                  ORDER BY u.created_at DESC
                  LIMIT ? OFFSET ?"
             );
-            $stmt->bind_param('isssii', $agent_id, $like, $like, $like, $limit, $offset);
+            $stmt->bind_param('iii', $agent_id, $limit, $offset);
         }
     } else {
         if ($hasReferrals && $hasAgentIdCol) {
@@ -257,10 +255,7 @@ try {
     }
     $stmt->execute();
     $res = $stmt->get_result();
-    while ($row = $res->fetch_assoc()) {
-        $customers[] = $row;
-        $customers_by_id[(int) $row['id']] = $row;
-    }
+    while ($row = $res->fetch_assoc()) { $customers[] = $row; }
 } catch (Exception $e) {
     // Fail silently but show empty state
 }
@@ -268,62 +263,27 @@ try {
 // If a customer is selected, validate ownership and fetch their orders
 $selected_customer = null;
 $customer_orders = [];
-$selection_error = '';
 if ($selected_customer_id) {
-    if ($hasAgentIdCol && $hasReferrals) {
-        $stmt = $db->prepare("
-            SELECT u.id, u.full_name, u.email, u.phone, u.created_at
-            FROM users u
-            WHERE u.id = ? AND u.role = 'customer'
-              AND (u.agent_id = ? OR EXISTS (
-                    SELECT 1 FROM user_referrals ur
-                    WHERE ur.user_id = u.id AND ur.agent_id = ?
-              ))
-            LIMIT 1
-        ");
-        if ($stmt) {
-            $stmt->bind_param('iii', $selected_customer_id, $agent_id, $agent_id);
-            $stmt->execute();
-            $selected_customer = $stmt->get_result()->fetch_assoc();
-        }
-    } elseif ($hasAgentIdCol) {
-        $stmt = $db->prepare("
-            SELECT u.id, u.full_name, u.email, u.phone, u.created_at
-            FROM users u
-            WHERE u.id = ? AND u.role = 'customer' AND u.agent_id = ?
-            LIMIT 1
-        ");
-        if ($stmt) {
-            $stmt->bind_param('ii', $selected_customer_id, $agent_id);
-            $stmt->execute();
-            $selected_customer = $stmt->get_result()->fetch_assoc();
-        }
+    if ($hasReferrals && $hasAgentIdCol) {
+        $stmt = $db->prepare("SELECT u.id, u.full_name, u.email, u.phone, u.created_at FROM users u LEFT JOIN user_referrals ur ON ur.user_id = u.id WHERE u.id = ? AND u.role = 'customer' AND (u.agent_id = ? OR ur.agent_id = ?) LIMIT 1");
+        $stmt->bind_param('iii', $selected_customer_id, $agent_id, $agent_id);
     } elseif ($hasReferrals) {
-        $stmt = $db->prepare("
-            SELECT u.id, u.full_name, u.email, u.phone, u.created_at
-            FROM users u
-            WHERE u.id = ? AND u.role = 'customer'
-              AND EXISTS (
-                    SELECT 1 FROM user_referrals ur
-                    WHERE ur.user_id = u.id AND ur.agent_id = ?
-              )
-            LIMIT 1
-        ");
-        if ($stmt) {
-            $stmt->bind_param('ii', $selected_customer_id, $agent_id);
-            $stmt->execute();
-            $selected_customer = $stmt->get_result()->fetch_assoc();
-        }
+        $stmt = $db->prepare("SELECT u.id, u.full_name, u.email, u.phone, u.created_at FROM users u JOIN user_referrals ur ON ur.user_id = u.id WHERE u.id = ? AND u.role = 'customer' AND ur.agent_id = ? LIMIT 1");
+        $stmt->bind_param('ii', $selected_customer_id, $agent_id);
+    } else {
+        $stmt = $db->prepare("SELECT id, full_name, email, phone, created_at FROM users WHERE id = ? AND role = 'customer' AND agent_id = ? LIMIT 1");
+        $stmt->bind_param('ii', $selected_customer_id, $agent_id);
     }
+    $stmt->execute();
+    $selected_customer = $stmt->get_result()->fetch_assoc();
 
     if ($selected_customer) {
         $stmt = $db->prepare(
             "SELECT bo.id, bo.order_reference, bo.beneficiary_number, bo.amount, bo.status, bo.created_at,
-                    COALESCE(dp.name, CONCAT('Package #', bo.package_id)) AS package_name,
-                    COALESCE(n.name, 'Unknown') AS network
+                    dp.name AS package_name, n.name AS network
              FROM bundle_orders bo
-             LEFT JOIN data_packages dp ON dp.id = bo.package_id
-             LEFT JOIN networks n ON n.id = dp.network_id
+             JOIN data_packages dp ON dp.id = bo.package_id
+             JOIN networks n ON n.id = dp.network_id
              WHERE bo.user_id = ?
              ORDER BY bo.created_at DESC
              LIMIT 50"
@@ -332,41 +292,12 @@ if ($selected_customer_id) {
         $stmt->execute();
         $r = $stmt->get_result();
         while ($row = $r->fetch_assoc()) { $customer_orders[] = $row; }
-    } else {
-        // Fallback: if the customer exists in current list, allow selecting from list data.
-        if (isset($customers_by_id[$selected_customer_id])) {
-            $selected_customer = $customers_by_id[$selected_customer_id];
-
-            $stmt = $db->prepare(
-                "SELECT bo.id, bo.order_reference, bo.beneficiary_number, bo.amount, bo.status, bo.created_at,
-                        COALESCE(dp.name, CONCAT('Package #', bo.package_id)) AS package_name,
-                        COALESCE(n.name, 'Unknown') AS network
-                 FROM bundle_orders bo
-                 LEFT JOIN data_packages dp ON dp.id = bo.package_id
-                 LEFT JOIN networks n ON n.id = dp.network_id
-                 WHERE bo.user_id = ?
-                 ORDER BY bo.created_at DESC
-                 LIMIT 50"
-            );
-            $stmt->bind_param('i', $selected_customer_id);
-            $stmt->execute();
-            $r = $stmt->get_result();
-            while ($row = $r->fetch_assoc()) { $customer_orders[] = $row; }
-        } else {
-            $selection_error = 'Selected customer could not be loaded. They may not belong to your account.';
-        }
     }
 }
 
 $total_pages = max(1, (int)ceil($total_customers / $limit));
 
 $flash = getFlashMessage();
-$agent_wallet_balance = (float) getWalletBalance($agent_id);
-$csrf_token = $_SESSION['csrf_token'] ?? '';
-if (empty($csrf_token)) {
-    $csrf_token = bin2hex(random_bytes(32));
-    $_SESSION['csrf_token'] = $csrf_token;
-}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -385,7 +316,53 @@ if (empty($csrf_token)) {
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-        <?php renderAgentSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item">
+                    <a href="dashboard.php" class="nav-link">
+                        <i class="fas fa-home"></i>
+                        Dashboard
+                    </a>
+                </div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Users</div>
+                <div class="nav-item">
+                    <a href="customers.php" class="nav-link active">
+                        <i class="fas fa-user-friends"></i>
+                        Customers
+                    </a>
+                </div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Transaction</div>
+                <div class="nav-item">
+                    <a href="histories.php" class="nav-link">
+                        <i class="fas fa-history"></i>
+                        Histories
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="reference.php" class="nav-link">
+                        <i class="fas fa-search"></i>
+                        Reference
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="result-checker.php" class="nav-link">
+                        <i class="fas fa-award"></i>
+                        Result Checker
+                    </a>
+                </div>
+            </li>
+        </ul>
+                    <div class="nav-item">
+                        <a href="withdraw-profit.php" class="nav-link">
+                            <i class="fas fa-wallet"></i>
+                            Withdraw Profit
+                        </a>
+                    </div>
     </nav>
 
     <!-- Main Content -->
@@ -399,35 +376,13 @@ if (empty($csrf_token)) {
                     <div class="breadcrumb-item active">Customers</div>
                 </nav>
             </div>
-            <div class="header-actions" style="display:flex; align-items:center; gap:0.75rem;">
-                <button class="theme-toggle" onclick="toggleTheme()">
-                    <i class="fas fa-sun" id="theme-icon"></i>
-                </button>
-
-                <div class="user-dropdown">
-                    <button class="user-dropdown-toggle" onclick="toggleUserDropdown()">
-                        <div class="user-avatar">
-                            <i class="fas fa-user"></i>
-                        </div>
-                        <div>
-                            <div style="font-weight: 500;"><?php echo htmlspecialchars($current_user['full_name'] ?? 'Agent'); ?></div>
-                            <div style="font-size: 0.75rem; color: var(--text-muted);">Agent</div>
-                        </div>
-                        <i class="fas fa-chevron-down" style="margin-left: 0.5rem;"></i>
-                    </button>
-
-                    <div class="user-dropdown-menu" id="userDropdown">
-                        <a href="profile.php" class="dropdown-item">
-                            <i class="fas fa-user"></i> Profile
-                        </a>
-                        <hr style="margin: 0.5rem 0; border: none; border-top: 1px solid var(--border-color);">
-                        <a href="../logout.php" class="dropdown-item">
-                            <i class="fas fa-sign-out-alt"></i> Logout
-                        </a>
-                    </div>
-                </div>
+            <div class="header-actions">
+                <button class="theme-toggle" onclick="toggleTheme()"><i class="fas fa-sun" id="theme-icon"></i></button>
             </div>
         </header>
+
+<?php echo renderNotificationSlides('agents'); ?>
+
 
         <div class="dashboard-content">
             <div class="page-title">
@@ -481,25 +436,8 @@ if (empty($csrf_token)) {
                                     </thead>
                                     <tbody>
                                         <?php foreach ($customers as $c): ?>
-                                        <?php
-                                            $view_params = [];
-                                            if ($q !== '') {
-                                                $view_params['q'] = $q;
-                                            }
-                                            $view_params['page'] = $page;
-                                            $view_params['customer_id'] = (int) $c['id'];
-                                            $view_url = 'customers.php?' . http_build_query($view_params);
-                                            $is_selected = $selected_customer_id === (int) $c['id'];
-                                        ?>
                                         <tr>
-                                            <td>
-                                                <a href="<?php echo htmlspecialchars($view_url); ?>" style="font-weight:600; color: var(--text-primary); text-decoration: none;">
-                                                    <?php echo htmlspecialchars($c['full_name']); ?>
-                                                </a>
-                                                <?php if ($is_selected): ?>
-                                                    <span class="badge badge-info" style="margin-left:.35rem;">Selected</span>
-                                                <?php endif; ?>
-                                            </td>
+                                            <td><?php echo htmlspecialchars($c['full_name']); ?></td>
                                             <td>
                                                 <div style="display:flex; flex-direction:column;">
                                                     <span><?php echo htmlspecialchars($c['email']); ?></span>
@@ -511,10 +449,7 @@ if (empty($csrf_token)) {
                                             <td><?php echo date('Y-m-d', strtotime($c['created_at'])); ?></td>
                                             <td>
                                                 <div style="display: flex; gap: 0.25rem;">
-                                                    <button class="btn btn-success btn-sm topup-btn" data-customer-id="<?php echo (int)$c['id']; ?>" data-customer-name="<?php echo htmlspecialchars($c['full_name']); ?>" title="Top Up Customer">
-                                                        <i class="fas fa-wallet"></i> Top Up
-                                                    </button>
-                                                    <a class="btn btn-outline btn-sm" href="<?php echo htmlspecialchars($view_url); ?>">
+                                                    <a class="btn btn-outline btn-sm" href="customers.php?customer_id=<?php echo (int)$c['id']; ?>">
                                                         <i class="fas fa-eye"></i> View
                                                     </a>
                                                     <form method="post" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete this customer? This action cannot be undone and will remove all their data.')">
@@ -561,29 +496,6 @@ if (empty($csrf_token)) {
                         </h3>
                     </div>
                     <div class="widget-body">
-                        <form method="GET" action="" style="display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin-bottom: 1rem;">
-                            <?php if ($q !== ''): ?>
-                                <input type="hidden" name="q" value="<?php echo htmlspecialchars($q); ?>">
-                            <?php endif; ?>
-                            <input type="hidden" name="page" value="<?php echo (int) $page; ?>">
-                            <select name="customer_id" class="form-control" style="min-width: 260px;">
-                                <option value="">Select customer...</option>
-                                <?php foreach ($customers as $c): ?>
-                                    <option value="<?php echo (int) $c['id']; ?>" <?php echo ($selected_customer_id === (int) $c['id']) ? 'selected' : ''; ?>>
-                                        <?php echo htmlspecialchars($c['full_name']); ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
-                            <button type="submit" class="btn btn-primary btn-sm">
-                                <i class="fas fa-eye"></i> Load Orders
-                            </button>
-                        </form>
-
-                        <?php if ($selection_error !== ''): ?>
-                            <div class="alert alert-warning" style="margin-bottom: 1rem;">
-                                <?php echo htmlspecialchars($selection_error); ?>
-                            </div>
-                        <?php endif; ?>
                         <?php if (!$selected_customer): ?>
                             <div class="empty-state">
                                 <i class="fas fa-receipt"></i>
@@ -660,20 +572,6 @@ function updateThemeIcon(theme) {
     const icon = document.getElementById('theme-icon');
     if (icon) icon.className = theme === 'dark' ? 'fas fa-sun' : 'fas fa-moon';
 }
-function toggleUserDropdown() {
-    const dropdown = document.getElementById('userDropdown');
-    if (dropdown) {
-        dropdown.classList.toggle('show');
-    }
-}
-document.addEventListener('click', function(event) {
-    const dropdown = document.getElementById('userDropdown');
-    const toggle = document.querySelector('.user-dropdown-toggle');
-
-    if (dropdown && toggle && !toggle.contains(event.target)) {
-        dropdown.classList.remove('show');
-    }
-});
 
 document.addEventListener('DOMContentLoaded', function() {
     initTheme();
@@ -686,177 +584,9 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 </script>
-    <!-- Top Up Modal -->
-    <div id="topupModal" class="modal" style="display:none;">
-        <div class="modal-content" style="max-width:480px;">
-            <div class="modal-header">
-                <h3><i class="fas fa-wallet"></i> Top Up Customer Wallet</h3>
-                <button type="button" class="modal-close" onclick="closeTopupModal()">&times;</button>
-            </div>
-            <form id="topupForm" onsubmit="return submitTopup(event)">
-                <input type="hidden" name="csrf_token" value="<?php echo $csrf_token; ?>">
-                <input type="hidden" id="topup_customer_id" name="customer_id" value="">
-                <div class="modal-body">
-                    <div id="topupInfo" style="margin-bottom:1rem;padding:0.75rem;background:var(--bg-secondary);border-radius:0.5rem;border:1px solid var(--border-color);">
-                        <strong>Customer:</strong> <span id="topupCustomerName"></span>
-                    </div>
-                    <div style="margin-bottom:1rem;padding:0.75rem;background:var(--bg-secondary);border-radius:0.5rem;border:1px solid var(--border-color);">
-                        <strong>Your Wallet Balance:</strong> <?php echo formatCurrency($agent_wallet_balance); ?>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label" for="topup_amount">Amount (<?php echo CURRENCY; ?>) *</label>
-                        <input type="number" id="topup_amount" class="form-control" step="0.01" min="0.01" max="<?php echo max(0, $agent_wallet_balance); ?>" placeholder="Enter amount" required>
-                        <small class="text-muted">Enter the amount to credit the customer's wallet.</small>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label" for="topup_note">Note (optional)</label>
-                        <input type="text" id="topup_note" class="form-control" placeholder="e.g. Manual top-up">
-                    </div>
-                    <div id="topupError" style="display:none;" class="alert alert-danger"></div>
-                    <div id="topupSuccess" style="display:none;" class="alert alert-success"></div>
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" onclick="closeTopupModal()">Cancel</button>
-                    <button type="submit" class="btn btn-success" id="topupSubmitBtn">
-                        <i class="fas fa-check"></i> Confirm Top Up
-                    </button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <style>
-    .modal {
-        position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%;
-        background-color: rgba(0,0,0,0.5); backdrop-filter: blur(4px);
-    }
-    .modal-content {
-        background-color: var(--bg-primary); margin: 10% auto; border-radius: 12px;
-        width: 90%; max-width: 480px; box-shadow: 0 10px 25px rgba(0,0,0,0.2);
-    }
-    [data-theme="dark"] .modal-content {
-        background-color: var(--bg-primary,#1a202c);
-    }
-    .modal-header {
-        padding: 1.5rem 1.5rem 0; display: flex; justify-content: space-between;
-        align-items: center; border-bottom: 1px solid var(--border-color); margin-bottom: 1rem;
-    }
-    .modal-header h3 { margin: 0; color: var(--text-color); }
-    .modal-close { background:none; border:none; font-size:1.5rem; cursor:pointer; color:var(--text-muted); }
-    .modal-body { padding: 0 1.5rem 1rem; }
-    .modal-footer { padding: 1rem 1.5rem 1.5rem; display:flex; justify-content:flex-end; gap:1rem; border-top:1px solid var(--border-color); }
-    .form-group { margin-bottom: 1rem; }
-    .form-label { display:block; margin-bottom:0.5rem; font-weight:500; color:var(--text-primary); font-size:0.875rem; }
-    .btn-success { background-color:#10b981; color:white; border:1px solid #059669; }
-    .btn-success:hover { background-color:#059669; }
-    [data-theme="dark"] .btn-success { background-color:#059669; border-color:#047857; }
-    [data-theme="dark"] .btn-success:hover { background-color:#047857; }
-    </style>
-
-    <script>
-    function openTopupModal(customerId, customerName) {
-        document.getElementById('topup_customer_id').value = customerId;
-        document.getElementById('topupCustomerName').textContent = customerName;
-        document.getElementById('topup_amount').value = '';
-        document.getElementById('topup_note').value = '';
-        document.getElementById('topupError').style.display = 'none';
-        document.getElementById('topupSuccess').style.display = 'none';
-        document.getElementById('topupModal').style.display = 'block';
-        document.getElementById('topup_amount').focus();
-    }
-
-    function closeTopupModal() {
-        document.getElementById('topupModal').style.display = 'none';
-    }
-
-    function submitTopup(event) {
-        event.preventDefault();
-        var btn = document.getElementById('topupSubmitBtn');
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span> Processing...';
-
-        var errorDiv = document.getElementById('topupError');
-        var successDiv = document.getElementById('topupSuccess');
-        errorDiv.style.display = 'none';
-        successDiv.style.display = 'none';
-
-        var customerId = document.getElementById('topup_customer_id').value;
-        var amount = document.getElementById('topup_amount').value;
-        var note = document.getElementById('topup_note').value;
-        var csrf = document.querySelector('input[name="csrf_token"]').value;
-
-        if (!customerId || !amount || parseFloat(amount) <= 0) {
-            errorDiv.textContent = 'Please enter a valid amount.';
-            errorDiv.style.display = 'block';
-            btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-check"></i> Confirm Top Up';
-            return;
-        }
-
-        var formData = new FormData();
-        formData.append('action', 'agent_to_customer');
-        formData.append('customer_id', customerId);
-        formData.append('amount', amount);
-        formData.append('note', note);
-        formData.append('csrf_token', csrf);
-
-        fetch('../api/manual_topup.php', {
-            method: 'POST',
-            headers: {
-                'X-CSRF-TOKEN': csrf
-            },
-            body: new URLSearchParams(formData)
-        })
-        .then(function(res) { return res.json(); })
-        .then(function(data) {
-            if (data.status === 'success') {
-                successDiv.innerHTML = '<i class="fas fa-check-circle"></i> ' + data.message + '<br><small>Ref: ' + data.reference + '</small>';
-                successDiv.style.display = 'block';
-                btn.disabled = false;
-                btn.innerHTML = '<i class="fas fa-check"></i> Top Up Completed';
-                setTimeout(function() { location.reload(); }, 2000);
-            } else {
-                errorDiv.textContent = data.message || 'Top up failed. Please try again.';
-                errorDiv.style.display = 'block';
-                btn.disabled = false;
-                btn.innerHTML = '<i class="fas fa-check"></i> Confirm Top Up';
-            }
-        })
-        .catch(function(err) {
-            errorDiv.textContent = 'Network error. Please try again.';
-            errorDiv.style.display = 'block';
-            btn.disabled = false;
-            btn.innerHTML = '<i class="fas fa-check"></i> Confirm Top Up';
-            console.error(err);
-        });
-
-        return false;
-    }
-
-    document.addEventListener('click', function(event) {
-        var btn = event.target.closest('.topup-btn');
-        if (btn) {
-            event.preventDefault();
-            openTopupModal(btn.dataset.customerId, btn.dataset.customerName);
-        }
-    });
-
-    document.addEventListener('keydown', function(event) {
-        if (event.key === 'Escape') {
-            closeTopupModal();
-        }
-    });
-
-    window.addEventListener('click', function(event) {
-        var modal = document.getElementById('topupModal');
-        if (event.target === modal) {
-            closeTopupModal();
-        }
-    });
-    </script>
-
     <!-- IMMEDIATE Icon Fix for square placeholder issues -->
     <script src="../immediate_icon_fix.js"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
-

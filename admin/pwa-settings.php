@@ -18,8 +18,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $app_name = sanitize($_POST['app_name'] ?? '');
             $app_short_name = sanitize($_POST['app_short_name'] ?? '');
             $app_description = sanitize($_POST['app_description'] ?? '');
-            $theme_color = sanitize($_POST['theme_color'] ?? '#6366f1');
-            $background_color = sanitize($_POST['background_color'] ?? '#ffffff');
+            $theme_color = sanitize($_POST['theme_color'] ?? '#541388');
+            $background_color = sanitize($_POST['background_color'] ?? '#F1E9DA');
             $display_mode = sanitize($_POST['display_mode'] ?? 'standalone');
             $orientation = sanitize($_POST['orientation'] ?? 'portrait');
             
@@ -135,8 +135,8 @@ if (!$pwa) {
         'app_name' => 'Constechzhub',
         'app_short_name' => 'CTZH',
         'app_description' => 'Affordable data bundles for all networks',
-        'theme_color' => '#6366f1',
-        'background_color' => '#ffffff',
+        'theme_color' => '#541388',
+        'background_color' => '#F1E9DA',
         'display_mode' => 'standalone',
         'orientation' => 'portrait',
         'icon_192' => null,
@@ -166,7 +166,35 @@ if (!isset($_SESSION['csrf_token'])) {
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-                    <?php renderAdminSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Management</div>
+                <div class="nav-item"><a href="packages.php" class="nav-link"><i class="fas fa-box"></i> Data Packages</a></div>
+                <div class="nav-item"><a href="afa-registration.php" class="nav-link"><i class="fas fa-user-check"></i> AFA Registration</a></div>
+                <div class="nav-item"><a href="users.php" class="nav-link"><i class="fas fa-users"></i> Users</a></div>
+                <div class="nav-item"><a href="agents.php" class="nav-link"><i class="fas fa-user-tie"></i> Agents</a></div>
+            
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Analytics</div>
+                <div class="nav-item"><a href="transactions.php" class="nav-link"><i class="fas fa-history"></i> Transactions</a></div>
+                <div class="nav-item"><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></div>
+                <div class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item"><a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> System Settings</a></div>
+                <div class="nav-item"><a href="email-broadcast.php" class="nav-link"><i class="fas fa-paper-plane"></i> Email Broadcasts</a></div>
+                <div class="nav-item"><a href="system-reset.php" class="nav-link"><i class="fas fa-broom"></i> System Reset</a></div>
+                <div class="nav-item"><a href="pwa-settings.php" class="nav-link active"><i class="fas fa-mobile-alt"></i> PWA Settings</a></div>
+                <div class="nav-item"><a href="sms-settings.php" class="nav-link"><i class="fas fa-sms"></i> SMS Settings</a></div>
+            </li>
+        </ul>
                 <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
     </nav>
 
@@ -426,7 +454,7 @@ if (!isset($_SESSION['csrf_token'])) {
                 <div class="widget-content">
                     <div style="display: flex; gap: 2rem; align-items: center;">
                         <div style="flex-shrink: 0;">
-                            <div style="width: 80px; height: 80px; border-radius: 16px; background: <?php echo htmlspecialchars($pwa['background_color']); ?>; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(0,0,0,0.15);">
+                            <div style="width: 80px; height: 80px; border-radius: 16px; background: <?php echo htmlspecialchars($pwa['background_color']); ?>; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 12px rgba(46, 41, 78, 0.15);">
                                 <?php if (!empty($pwa['icon_192'])): ?>
                                     <img src="../uploads/pwa/<?php echo htmlspecialchars($pwa['icon_192']); ?>" 
                                          alt="App Icon" 
@@ -445,7 +473,7 @@ if (!isset($_SESSION['csrf_token'])) {
                                 <?php echo htmlspecialchars($pwa['app_description']); ?>
                             </p>
                             <div style="display: flex; gap: 0.5rem; align-items: center;">
-                                <span style="background: <?php echo htmlspecialchars($pwa['theme_color']); ?>; color: white; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">
+                                <span style="background: <?php echo htmlspecialchars($pwa['theme_color']); ?>; color: #F1E9DA; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">
                                     <?php echo strtoupper($pwa['display_mode']); ?>
                                 </span>
                                 <span style="color: var(--text-muted); font-size: 0.75rem;">
@@ -490,6 +518,7 @@ document.addEventListener('click', function(event) {
     <script src="../immediate_icon_fix.js"></script>
 </body>
 </html>
+
 
 
 

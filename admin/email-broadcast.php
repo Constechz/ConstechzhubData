@@ -121,35 +121,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             $success_message = "Queue processed. {$result['sent']} sent, {$result['failed']} failed.";
         }
-    } elseif (isset($_POST['test_broadcast'])) {
-        $test_recipient = trim((string) ($_POST['test_recipient'] ?? ($current_user['email'] ?? '')));
-        $subject = trim((string) ($_POST['subject'] ?? ''));
-        $message = trim((string) ($_POST['message'] ?? ''));
-        $allowHtml = isset($_POST['allow_html']);
-
-        if (!validateEmail($test_recipient)) {
-            $error_message = 'Invalid test recipient email address.';
-        } elseif ($subject === '') {
-            $error_message = 'Subject is required for test email.';
-        } elseif ($message === '') {
-            $error_message = 'Message is required for test email.';
-        } elseif (!$smtpReady) {
-            $error_message = 'SMTP is not configured. Cannot send test email.';
-        } else {
-            // Process basic placeholders for the test
-            $processedMessage = str_replace(
-                ['{{name}}', '{{role}}', '{{site}}', '{{site_name}}'],
-                ['Test User', 'admin', getSiteName(), getSiteName()],
-                $message
-            );
-            
-            $result = sendEmail($test_recipient, '[TEST] ' . $subject, $processedMessage, strip_tags($processedMessage), 'broadcast_test');
-            if ($result) {
-                $success_message = "Test email sent successfully to {$test_recipient}.";
-            } else {
-                $error_message = 'Failed to send test email. Check your SMTP settings.';
-            }
-        }
     } elseif (!$smtpReady) {
         $error_message = 'SMTP is not enabled or configured. Please update SMTP settings first.';
     } else {
@@ -352,49 +323,49 @@ require_once '../includes/admin_header.php';
 
     .email-broadcast-page .card {
         border-radius: 0.9rem;
-        border: 1px solid var(--border-color, #e5e7eb);
-        box-shadow: 0 10px 22px rgba(15, 23, 42, 0.06);
+        border: 1px solid var(--border-color, #F1E9DA);
+        box-shadow: 0 10px 22px rgba(46, 41, 78, 0.06);
     }
 
     .email-broadcast-page .card-header {
-        background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(16, 185, 129, 0.08));
-        border-bottom: 1px solid var(--border-color, #e5e7eb);
+        background: linear-gradient(135deg, rgba(84, 19, 136, 0.08), rgba(46, 41, 78, 0.08));
+        border-bottom: 1px solid var(--border-color, #F1E9DA);
     }
 
     [data-theme="dark"] .email-broadcast-page .card-header {
-        background: linear-gradient(135deg, rgba(59, 130, 246, 0.18), rgba(16, 185, 129, 0.12));
+        background: linear-gradient(135deg, rgba(84, 19, 136, 0.18), rgba(46, 41, 78, 0.12));
     }
 
     .email-broadcast-page h1,
     .email-broadcast-page h5 {
-        color: var(--text-primary, #111827);
+        color: var(--text-primary, #2E294E);
     }
 
     .email-broadcast-page .text-muted {
-        color: var(--text-muted, #6b7280) !important;
+        color: var(--text-muted, #541388) !important;
     }
 
     [data-theme="dark"] .email-broadcast-page .text-muted {
-        color: #a0aec0 !important;
+        color: #F1E9DA !important;
     }
 
     .email-broadcast-page .table {
         border-radius: 0.8rem;
         overflow: hidden;
-        background: var(--bg-secondary, #ffffff);
+        background: var(--bg-secondary, #F1E9DA);
     }
 
     .email-broadcast-page .table thead th {
         text-transform: uppercase;
         font-size: 0.75rem;
         letter-spacing: 0.05em;
-        color: var(--text-muted, #6b7280);
-        background: rgba(15, 23, 42, 0.04);
+        color: var(--text-muted, #541388);
+        background: rgba(46, 41, 78, 0.04);
     }
 
     [data-theme="dark"] .email-broadcast-page .table thead th {
-        background: rgba(148, 163, 184, 0.12);
-        color: #e2e8f0;
+        background: rgba(241, 233, 218, 0.12);
+        color: #F1E9DA;
     }
 
     .email-broadcast-page .table tbody tr {
@@ -402,40 +373,74 @@ require_once '../includes/admin_header.php';
     }
 
     .email-broadcast-page .table tbody tr:hover {
-        background: rgba(59, 130, 246, 0.06);
+        background: rgba(84, 19, 136, 0.06);
     }
 
     [data-theme="dark"] .email-broadcast-page .table {
-        background: #0f172a;
-        color: #e2e8f0;
+        background: #2E294E;
+        color: #F1E9DA;
     }
 
     [data-theme="dark"] .email-broadcast-page .table tbody td,
     [data-theme="dark"] .email-broadcast-page .table tbody th {
-        color: #e2e8f0;
+        color: #F1E9DA;
     }
 
     [data-theme="dark"] .email-broadcast-page .table tbody tr {
-        border-color: rgba(148, 163, 184, 0.2);
+        border-color: rgba(241, 233, 218, 0.2);
     }
 
     [data-theme="dark"] .email-broadcast-page .table tbody tr:hover {
-        background: rgba(59, 130, 246, 0.18);
+        background: rgba(84, 19, 136, 0.18);
     }
 
     [data-theme="dark"] .email-broadcast-page .table .text-success {
-        color: #22c55e !important;
+        color: #8ef5b5 !important;
+        font-weight: 700;
     }
 
     [data-theme="dark"] .email-broadcast-page .table .text-danger {
-        color: #f87171 !important;
+        color: #ff86bf !important;
+        font-weight: 700;
+    }
+
+    /* Improve status badge contrast in dark mode */
+    [data-theme="dark"] .email-broadcast-page .broadcast-table .badge {
+        border: 1px solid rgba(241, 233, 218, 0.26);
+        font-weight: 600;
+        color: #f1e9da !important;
+    }
+
+    [data-theme="dark"] .email-broadcast-page .broadcast-table .badge.bg-success {
+        background-color: rgba(24, 160, 88, 0.45) !important;
+        color: #eafff3 !important;
+    }
+
+    [data-theme="dark"] .email-broadcast-page .broadcast-table .badge.bg-danger {
+        background-color: rgba(217, 3, 104, 0.45) !important;
+        color: #ffe6f2 !important;
+    }
+
+    [data-theme="dark"] .email-broadcast-page .broadcast-table .badge.bg-warning {
+        background-color: rgba(255, 212, 0, 0.42) !important;
+        color: #2e294e !important;
+    }
+
+    [data-theme="dark"] .email-broadcast-page .broadcast-table .badge.bg-secondary {
+        background-color: rgba(241, 233, 218, 0.24) !important;
+        color: #f1e9da !important;
+    }
+
+    [data-theme="dark"] .email-broadcast-page .broadcast-table .badge.bg-primary {
+        background-color: rgba(84, 19, 136, 0.56) !important;
+        color: #f1e9da !important;
     }
 
     .rich-editor {
         margin-top: 0.75rem;
-        border: 1px solid #e5e7eb;
+        border: 1px solid #F1E9DA;
         border-radius: 0.5rem;
-        background: #ffffff;
+        background: #F1E9DA;
     }
 
     .editor-toolbar {
@@ -443,8 +448,8 @@ require_once '../includes/admin_header.php';
         flex-wrap: wrap;
         gap: 0.35rem;
         padding: 0.5rem;
-        border-bottom: 1px solid #e5e7eb;
-        background: #f9fafb;
+        border-bottom: 1px solid #F1E9DA;
+        background: #F1E9DA;
     }
 
     .editor-surface {
@@ -507,46 +512,45 @@ require_once '../includes/admin_header.php';
         }
 
         .email-broadcast-page .broadcast-table tr {
-            background: linear-gradient(180deg, rgba(255,255,255,0.98), rgba(248,250,252,0.96));
-            border: 1px solid #e5e7eb;
+            background: linear-gradient(180deg, rgba(241, 233, 218, 0.98), rgba(241, 233, 218, 0.96));
+            border: 1px solid #F1E9DA;
             border-radius: 1rem;
             padding: 0.85rem 0.95rem;
             margin-bottom: 1rem;
-            box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+            box-shadow: 0 12px 24px rgba(46, 41, 78, 0.08);
         }
 
         [data-theme="dark"] .email-broadcast-page .broadcast-table tr {
-            background: linear-gradient(180deg, rgba(15,23,42,0.98), rgba(2,6,23,0.98));
-            border-color: rgba(148, 163, 184, 0.25);
+            background: linear-gradient(180deg, rgba(46, 41, 78, 0.98), rgba(46, 41, 78, 0.98));
+            border-color: rgba(241, 233, 218, 0.25);
         }
 
         .email-broadcast-page .broadcast-table td {
             display: flex;
             flex-direction: column;
             gap: 0.4rem;
-            align-items: flex-start;
+            align-items: center;
             padding: 0.6rem 0;
             border: 0;
             font-size: 0.85rem;
             word-break: break-word;
             overflow-wrap: anywhere;
-            border-bottom: 1px solid rgba(148, 163, 184, 0.2);
-            text-align: left;
-            white-space: normal;
+            border-bottom: 1px solid rgba(241, 233, 218, 0.2);
+            text-align: center;
         }
 
         .email-broadcast-page .broadcast-table td::before {
             content: attr(data-label);
             font-weight: 600;
-            color: #6b7280;
+            color: #541388;
             font-size: 0.72rem;
             text-transform: uppercase;
             letter-spacing: 0.06em;
-            text-align: left;
+            text-align: center;
         }
 
         [data-theme="dark"] .email-broadcast-page .broadcast-table td::before {
-            color: #cbd5f5;
+            color: #F1E9DA;
         }
 
         .email-broadcast-page .broadcast-table td:last-child {
@@ -556,11 +560,11 @@ require_once '../includes/admin_header.php';
         .email-broadcast-page .broadcast-table td[data-label="Subject"] {
             font-size: 1rem;
             font-weight: 700;
-            color: var(--text-primary, #111827);
+            color: var(--text-primary, #2E294E);
         }
 
         [data-theme="dark"] .email-broadcast-page .broadcast-table td[data-label="Subject"] {
-            color: #f1f5f9;
+            color: #F1E9DA;
         }
 
         .email-broadcast-page .broadcast-table td[data-label="Status"] .badge {
@@ -568,7 +572,6 @@ require_once '../includes/admin_header.php';
             border-radius: 999px;
             font-size: 0.75rem;
             letter-spacing: 0.04em;
-            align-self: flex-start;
         }
 
         .email-broadcast-page .broadcast-table td[data-label="Total"],
@@ -576,10 +579,9 @@ require_once '../includes/admin_header.php';
         .email-broadcast-page .broadcast-table td[data-label="Failed"] {
             display: inline-flex;
             flex-direction: row;
-            align-items: flex-start;
+            align-items: center;
             gap: 0.5rem;
-            justify-content: flex-start;
-            text-align: left;
+            justify-content: center;
         }
 
         .email-broadcast-page .broadcast-table td[data-label="Total"]::before,
@@ -589,13 +591,13 @@ require_once '../includes/admin_header.php';
         }
 
         .email-broadcast-page .broadcast-table td[data-label="Actions"] {
-            align-items: flex-start;
+            align-items: center;
         }
 
         .email-broadcast-page .broadcast-table td[data-label="Actions"] form {
             width: 100%;
             display: flex;
-            justify-content: flex-start;
+            justify-content: center;
         }
 
         .email-broadcast-page .broadcast-table td[data-label="Actions"] .btn {
@@ -624,7 +626,7 @@ require_once '../includes/admin_header.php';
                 <?php echo $smtpReady ? 'SMTP Ready' : 'SMTP Not Ready'; ?>
             </span>
             <?php if (!$smtpReady): ?>
-                <div class="small text-muted">Configure SMTP in Settings → SMTP Email Settings.</div>
+                <div class="small text-muted">Configure SMTP in Settings â†’ SMTP Email Settings.</div>
             <?php endif; ?>
         </div>
     </div>
@@ -684,7 +686,7 @@ require_once '../includes/admin_header.php';
                             <button type="button" class="btn btn-sm btn-light" data-cmd="bold"><strong>B</strong></button>
                             <button type="button" class="btn btn-sm btn-light" data-cmd="italic"><em>I</em></button>
                             <button type="button" class="btn btn-sm btn-light" data-cmd="underline"><u>U</u></button>
-                            <button type="button" class="btn btn-sm btn-light" data-cmd="insertUnorderedList">&bull; List</button>
+                            <button type="button" class="btn btn-sm btn-light" data-cmd="insertUnorderedList">â€¢ List</button>
                             <button type="button" class="btn btn-sm btn-light" data-cmd="insertOrderedList">1. List</button>
                             <button type="button" class="btn btn-sm btn-light" data-link="1">Link</button>
                             <button type="button" class="btn btn-sm btn-light" data-cmd="removeFormat">Clear</button>
@@ -723,22 +725,11 @@ require_once '../includes/admin_header.php';
                     </div>
                 </div>
 
-                <div class="compose-actions mt-4 d-flex flex-wrap justify-content-between align-items-center gap-3">
-                    <div class="d-flex align-items-center gap-2">
-                        <button type="submit" class="btn btn-primary">
-                            <i class="fas fa-paper-plane me-1"></i> Send Broadcast
-                        </button>
-                    </div>
-                    
-                    <div class="test-email-box d-flex align-items-center gap-2 p-2 border rounded bg-light">
-                        <div class="input-group input-group-sm" style="max-width: 300px;">
-                            <span class="input-group-text"><i class="fas fa-envelope"></i></span>
-                            <input type="email" name="test_recipient" class="form-control" placeholder="Test email address" value="<?php echo htmlspecialchars($current_user['email'] ?? ''); ?>">
-                        </div>
-                        <button type="submit" name="test_broadcast" class="btn btn-outline-secondary btn-sm">
-                            <i class="fas fa-flask me-1"></i> Send Test
-                        </button>
-                    </div>
+                <div class="compose-actions mt-4">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-paper-plane me-1"></i> Send Broadcast
+                    </button>
+                    <small class="text-muted">Messages are sent immediately using your SMTP settings.</small>
                 </div>
             </form>
         </div>

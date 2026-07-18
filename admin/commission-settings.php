@@ -14,35 +14,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $action = $_POST['action'] ?? '';
         
-        if ($action === 'save_agent_commissions') {
-            $program_enabled = isset($_POST['program_enabled']) ? '1' : '0';
-            $start_at_input = trim((string) ($_POST['start_at'] ?? ''));
-            $start_at = '';
-            if ($start_at_input !== '') {
-                $timestamp = strtotime($start_at_input);
-                if ($timestamp === false) {
-                    $error = 'Please provide a valid commission start date and time.';
-                } else {
-                    $start_at = date('Y-m-d H:i:s', $timestamp);
-                }
-            }
-
-            $data_rate = round(max(0, (float) ($_POST['data_rate_per_gb'] ?? 0)), 2);
-            $checker_rate = round(max(0, (float) ($_POST['checker_rate_per_card'] ?? 0)), 2);
-            $afa_rate = round(max(0, (float) ($_POST['afa_rate_per_order'] ?? 0)), 2);
-
-            if ($error === '') {
-                $save_ok = saveSetting('agent_commission_program_enabled', $program_enabled, 'Enable the agent commission program')
-                    && saveSetting('agent_commission_start_at', $start_at, 'Commission start date and time')
-                    && saveSetting('agent_commission_data_enabled', isset($_POST['data_enabled']) ? '1' : '0', 'Enable fixed data bundle commission for agents')
-                    && saveSetting('agent_commission_data_rate_per_gb', (string) $data_rate, 'Agent commission amount per 1GB data')
-                    && saveSetting('agent_commission_checker_enabled', isset($_POST['checker_enabled']) ? '1' : '0', 'Enable fixed result checker commission for agents')
-                    && saveSetting('agent_commission_checker_rate_per_card', (string) $checker_rate, 'Agent commission amount per result checker card')
-                    && saveSetting('agent_commission_afa_enabled', isset($_POST['afa_enabled']) ? '1' : '0', 'Enable fixed AFA registration commission for agents')
-                    && saveSetting('agent_commission_afa_rate_per_order', (string) $afa_rate, 'Agent commission amount per AFA registration order');
-
-                if ($save_ok) {
-                    $success = 'Agent commission settings updated successfully.';
+        if ($action === 'update_commission') {
+            $network_id = intval($_POST['network_id']);
+            $commission_rate = floatval($_POST['commission_rate']);
+            $min_commission = floatval($_POST['min_commission'] ?? 0);
+            $max_commission = !empty($_POST['max_commission']) ? floatval($_POST['max_commission']) : null;
+            $is_active = isset($_POST['is_active']) ? 1 : 0;
+            
+            if ($commission_rate < 0 || $commission_rate > 100) {
+                $error = 'Commission rate must be between 0% and 100%.';
+            } else {
+                $stmt = $db->prepare("
+                    INSERT INTO commission_settings (network_id, package_type, commission_rate, min_commission, max_commission, is_active) 
+                    VALUES (?, 'data', ?, ?, ?, ?)
+                    ON DUPLICATE KEY UPDATE 
+                    commission_rate = VALUES(commission_rate),
+                    min_commission = VALUES(min_commission),
+                    max_commission = VALUES(max_commission),
+                    is_active = VALUES(is_active)
+                ");
+                $stmt->bind_param("idddi", $network_id, $commission_rate, $min_commission, $max_commission, $is_active);
+                
+                if ($stmt->execute()) {
+                    $success = 'Commission settings updated successfully!';
                 } else {
                     $error = 'Failed to update commission settings.';
                 }
@@ -51,107 +45,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-$agent_commission_settings = function_exists('getAgentCommissionSettings')
-    ? getAgentCommissionSettings()
-    : [
-        'program_enabled' => false,
-        'start_at' => '',
-        'active_now' => false,
-        'data_enabled' => false,
-        'data_rate_per_gb' => 0.0,
-        'checker_enabled' => false,
-        'checker_rate_per_card' => 0.0,
-        'afa_enabled' => false,
-        'afa_rate_per_order' => 0.0,
-    ];
+// Get all networks with commission settings
+$stmt = $db->prepare("
+    SELECT n.id, n.name, n.color,
+           COALESCE(cs.commission_rate, 5.00) as commission_rate,
+           COALESCE(cs.min_commission, 0.00) as min_commission,
+           cs.max_commission,
+           COALESCE(cs.is_active, 1) as is_active
+    FROM networks n
+    LEFT JOIN commission_settings cs ON n.id = cs.network_id AND cs.package_type = 'data'
+    ORDER BY n.name
+");
+$stmt->execute();
+$networks = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
 
-$program_start_value = '';
-if (!empty($agent_commission_settings['start_at'])) {
-    $timestamp = strtotime((string) $agent_commission_settings['start_at']);
-    if ($timestamp !== false) {
-        $program_start_value = date('Y-m-d\TH:i', $timestamp);
-    }
-}
-
-$commission_services = [
-    [
-        'label' => 'Data Bundles',
-        'rate_label' => 'Amount per 1GB',
-        'rate_name' => 'data_rate_per_gb',
-        'enabled_name' => 'data_enabled',
-        'enabled' => $agent_commission_settings['data_enabled'],
-        'rate' => $agent_commission_settings['data_rate_per_gb'],
-        'example' => '5GB order earns 5 × rate.',
-        'icon' => 'fa-signal',
-        'color' => '#2563eb',
-    ],
-    [
-        'label' => 'Result Checkers',
-        'rate_label' => 'Amount per card',
-        'rate_name' => 'checker_rate_per_card',
-        'enabled_name' => 'checker_enabled',
-        'enabled' => $agent_commission_settings['checker_enabled'],
-        'rate' => $agent_commission_settings['checker_rate_per_card'],
-        'example' => '3 cards earn 3 × rate.',
-        'icon' => 'fa-id-card',
-        'color' => '#7c3aed',
-    ],
-    [
-        'label' => 'AFA Registration',
-        'rate_label' => 'Amount per order',
-        'rate_name' => 'afa_rate_per_order',
-        'enabled_name' => 'afa_enabled',
-        'enabled' => $agent_commission_settings['afa_enabled'],
-        'rate' => $agent_commission_settings['afa_rate_per_order'],
-        'example' => '1 registration earns 1 × rate.',
-        'icon' => 'fa-user-check',
-        'color' => '#059669',
-    ],
-];
-
-$commission_stats = [
-    'total_agents' => 0,
-    'data_commission' => 0,
-    'checker_commission' => 0,
-    'afa_commission' => 0,
-];
-
-$stmt = $db->prepare("SELECT COUNT(*) AS total_agents FROM users WHERE role = 'agent'");
-if ($stmt && $stmt->execute()) {
-    $row = $stmt->get_result()->fetch_assoc();
-    $commission_stats['total_agents'] = (int) ($row['total_agents'] ?? 0);
-    $stmt->close();
-}
-
-if (function_exists('ensureAgentCommissionTables')) {
-    ensureAgentCommissionTables();
-}
-
-if (function_exists('dbh_table_exists') && dbh_table_exists('agent_commissions')) {
-    $result = $db->query("
-        SELECT source_type, COALESCE(SUM(amount), 0) AS total
-        FROM agent_commissions
-        WHERE status = 'earned'
-        GROUP BY source_type
-    ");
-    if ($result) {
-        while ($row = $result->fetch_assoc()) {
-            $sourceType = strtolower(trim((string) ($row['source_type'] ?? '')));
-            $total = (float) ($row['total'] ?? 0);
-            if ($sourceType === 'data') {
-                $commission_stats['data_commission'] = $total;
-            } elseif ($sourceType === 'checker') {
-                $commission_stats['checker_commission'] = $total;
-            } elseif ($sourceType === 'afa') {
-                $commission_stats['afa_commission'] = $total;
-            }
-        }
-    }
-}
-
-$commission_stats['total_commission_earned'] = $commission_stats['data_commission']
-    + $commission_stats['checker_commission']
-    + $commission_stats['afa_commission'];
+// Get commission statistics
+$stmt = $db->prepare("
+    SELECT 
+        COUNT(DISTINCT t.user_id) as total_agents,
+        SUM(t.commission_earned) as total_commission_earned,
+        SUM(CASE WHEN t.commission_status = 'liquidated' THEN t.commission_earned ELSE 0 END) as total_liquidated,
+        SUM(CASE WHEN t.commission_status = 'pending' THEN t.commission_earned ELSE 0 END) as total_pending
+    FROM transactions t 
+    WHERE t.commission_earned > 0
+");
+$stmt->execute();
+$commission_stats = $stmt->get_result()->fetch_assoc();
 
 // Generate CSRF token
 if (!isset($_SESSION['csrf_token'])) {
@@ -290,7 +209,39 @@ if (!isset($_SESSION['csrf_token'])) {
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-                    <?php renderAdminSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Management</div>
+                <div class="nav-item"><a href="packages.php" class="nav-link"><i class="fas fa-box"></i> Data Packages</a></div>
+                <div class="nav-item"><a href="afa-registration.php" class="nav-link"><i class="fas fa-user-check"></i> AFA Registration</a></div>
+                <div class="nav-item"><a href="users.php" class="nav-link"><i class="fas fa-users"></i> Users</a></div>
+                <div class="nav-item"><a href="agents.php" class="nav-link"><i class="fas fa-user-tie"></i> Agents</a></div>
+            
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Analytics</div>
+                <div class="nav-item"><a href="transactions.php" class="nav-link"><i class="fas fa-history"></i> Transactions</a></div>
+                <div class="nav-item"><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></div>
+                <div class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item"><a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> System Settings</a></div>
+                <div class="nav-item"><a href="email-broadcast.php" class="nav-link"><i class="fas fa-paper-plane"></i> Email Broadcasts</a></div>
+                <div class="nav-item"><a href="system-reset.php" class="nav-link"><i class="fas fa-broom"></i> System Reset</a></div>
+                <div class="nav-item"><a href="commission-settings.php" class="nav-link active"><i class="fas fa-percentage"></i> Commission Settings</a></div>
+                <div class="nav-item"><a href="commission-payout-settings.php" class="nav-link"><i class="fas fa-calendar-alt"></i> Payout Settings</a></div>
+                <div class="nav-item"><a href="commission-liquidations.php" class="nav-link"><i class="fas fa-money-check-alt"></i> Liquidations</a></div>
+                <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
+                <div class="nav-item"><a href="commission-payouts.php" class="nav-link"><i class="fas fa-wallet"></i> Manual Payouts</a></div>
+                <div class="nav-item"><a href="sms-settings.php" class="nav-link"><i class="fas fa-sms"></i> SMS Settings</a></div>
+            </li>
+        </ul>
     </nav>
 
     <!-- Main Content -->
@@ -340,7 +291,7 @@ if (!isset($_SESSION['csrf_token'])) {
         <div class="dashboard-content">
             <div class="page-title">
                 <h1>Commission Settings</h1>
-                <p class="page-subtitle">Turn the commission program on or off, choose when it starts, and set fixed earning amounts for data, checkers, and AFA orders.</p>
+                <p class="page-subtitle">Configure commission rates, payout schedules, and minimum earnings thresholds.</p>
             </div>
 
             <div class="widget" style="margin-bottom: 1rem;">
@@ -349,14 +300,12 @@ if (!isset($_SESSION['csrf_token'])) {
                 </div>
                 <div class="widget-body" style="color: var(--text-muted);">
                     <ol style="margin: 0 0 0.75rem 1.25rem;">
-                        <li>Commission is only recorded when the master program switch is on.</li>
-                        <li>No order before the configured start date is counted.</li>
-                        <li>Data bundles use a fixed amount per 1GB and multiply by the bundle size.</li>
-                        <li>Result checkers use a fixed amount per checker card.</li>
-                        <li>AFA registrations use a fixed amount per submitted order.</li>
-                        <li>If a service is inactive, no commission is recorded for that service.</li>
+                        <li>Set a commission rate per network (percentage of the sale).</li>
+                        <li>Min commission is the lowest amount an agent can earn per order.</li>
+                        <li>Max commission caps the payout per order (leave blank for no cap).</li>
+                        <li>Inactive networks earn no commission.</li>
                     </ol>
-                    <div>Examples: <strong>5GB = 5 × rate</strong>, <strong>3 checkers = 3 × rate</strong>, <strong>1 AFA order = 1 × rate</strong>.</div>
+                    <div>Formula: <strong>commission = clamp(rate% ?? sale, min, max)</strong></div>
                 </div>
             </div>
 
@@ -384,22 +333,22 @@ if (!isset($_SESSION['csrf_token'])) {
                 <div class="stat-card">
                     <div class="stat-icon"><i class="fas fa-coins text-warning"></i></div>
                     <div class="stat-content">
-                        <div class="stat-value"><?php echo CURRENCY . number_format($commission_stats['total_commission_earned'] ?? 0, 2); ?></div>
+                        <div class="stat-value">???<?php echo number_format($commission_stats['total_commission_earned'] ?? 0, 2); ?></div>
                         <div class="stat-label">Total Commission Earned</div>
                     </div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-icon"><i class="fas fa-check-circle text-success"></i></div>
                     <div class="stat-content">
-                        <div class="stat-value"><?php echo CURRENCY . number_format($commission_stats['data_commission'] ?? 0, 2); ?></div>
-                        <div class="stat-label">Data Commission</div>
+                        <div class="stat-value">???<?php echo number_format($commission_stats['total_liquidated'] ?? 0, 2); ?></div>
+                        <div class="stat-label">Total Liquidated</div>
                     </div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-icon"><i class="fas fa-toggle-on text-primary"></i></div>
+                    <div class="stat-icon"><i class="fas fa-clock text-primary"></i></div>
                     <div class="stat-content">
-                        <div class="stat-value"><?php echo !empty($agent_commission_settings['program_enabled']) ? 'On' : 'Off'; ?></div>
-                        <div class="stat-label">Program Status</div>
+                        <div class="stat-value">???<?php echo number_format($commission_stats['total_pending'] ?? 0, 2); ?></div>
+                        <div class="stat-label">Pending Commission</div>
                     </div>
                 </div>
             </div>
@@ -407,80 +356,65 @@ if (!isset($_SESSION['csrf_token'])) {
             <!-- Commission Settings by Network -->
             <div class="widget">
                 <div class="widget-header">
-                    <h3 class="widget-title">Agent Service Commission</h3>
-                    <p class="widget-subtitle">Set the master start date and one fixed commission rule per service.</p>
+                    <h3 class="widget-title">Network Commission Rates</h3>
+                    <p class="widget-subtitle">Configure commission rates for each network.</p>
                 </div>
                 <div class="widget-content">
-                    <form method="post">
-                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($_SESSION['csrf_token']); ?>">
-                        <input type="hidden" name="action" value="save_agent_commissions">
-                    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin-bottom: 1.25rem;">
-                        <div style="padding: 1rem; border: 1px solid var(--border-color); border-radius: 12px; background: var(--bg-secondary);">
-                            <label class="checkbox-label" style="margin: 0 0 0.5rem 0;">
-                                <input type="checkbox" name="program_enabled" <?php echo !empty($agent_commission_settings['program_enabled']) ? 'checked' : ''; ?>>
-                                <span class="checkmark"></span>
-                                Enable Commission Program
-                            </label>
-                            <div style="font-size: 0.875rem; color: var(--text-muted);">
-                                When off, no new commissions are recorded even if service rates are set.
-                            </div>
-                        </div>
-                        <div style="padding: 1rem; border: 1px solid var(--border-color); border-radius: 12px; background: var(--bg-secondary);">
-                            <label for="start_at" class="form-label" style="margin-bottom: 0.5rem;">Commission Start Date/Time</label>
-                            <input type="datetime-local" id="start_at" name="start_at" class="form-control" value="<?php echo htmlspecialchars($program_start_value); ?>">
-                            <div style="font-size: 0.875rem; color: var(--text-muted); margin-top: 0.5rem;">
-                                Leave blank to start immediately when the program is enabled.
-                            </div>
-                        </div>
-                    </div>
                     <div class="table-responsive">
                         <table class="table commission-table">
                             <thead>
                                 <tr>
-                                    <th>Service</th>
-                                    <th>Rule</th>
-                                    <th>Commission Amount (<?php echo htmlspecialchars(CURRENCY); ?>)</th>
-                                    <th>Example</th>
+                                    <th>Network</th>
+                                    <th>Commission Rate (%)</th>
+                                    <th>Min Commission (???)</th>
+                                    <th>Max Commission (???)</th>
                                     <th>Status</th>
                                     <th>Actions</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                <?php foreach ($commission_services as $service): ?>
+                                <?php foreach ($networks as $network): ?>
                                 <tr>
-                                    <td data-label="Service">
+                                    <td data-label="Network">
                                         <div class="commission-network">
-                                            <span class="network-dot" style="background: <?php echo htmlspecialchars($service['color']); ?>;"></span>
-                                            <span><i class="fas <?php echo htmlspecialchars($service['icon']); ?>"></i> <?php echo htmlspecialchars($service['label']); ?></span>
+                                            <span class="network-dot" style="background: <?php echo htmlspecialchars($network['color']); ?>;"></span>
+                                            <?php echo htmlspecialchars($network['name']); ?>
                                         </div>
                                     </td>
-                                    <td data-label="Rule">
-                                        <?php echo htmlspecialchars($service['rate_label']); ?>
+                                    <td data-label="Commission Rate (%)">
+                                        <form method="post" class="commission-form">
+                                            <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
+                                            <input type="hidden" name="action" value="update_commission">
+                                            <input type="hidden" name="network_id" value="<?php echo $network['id']; ?>">
+                                            <input type="number" name="commission_rate" value="<?php echo $network['commission_rate']; ?>"
+                                                   step="0.01" min="0" max="100" class="form-control commission-input">
                                     </td>
-                                    <td data-label="Commission Amount">
-                                        <input type="number" name="<?php echo htmlspecialchars($service['rate_name']); ?>"
-                                               value="<?php echo number_format((float) $service['rate'], 2, '.', ''); ?>"
+                                    <td data-label="Min Commission">
+                                        <input type="number" name="min_commission" value="<?php echo $network['min_commission']; ?>"
                                                step="0.01" min="0" class="form-control commission-input">
                                     </td>
-                                    <td data-label="Example"><?php echo htmlspecialchars($service['example']); ?></td>
+                                    <td data-label="Max Commission">
+                                        <input type="number" name="max_commission" value="<?php echo $network['max_commission']; ?>"
+                                               step="0.01" min="0" class="form-control commission-input" placeholder="No limit">
+                                    </td>
                                     <td data-label="Status">
                                         <label class="checkbox-label" style="margin: 0;">
-                                            <input type="checkbox" name="<?php echo htmlspecialchars($service['enabled_name']); ?>" <?php echo !empty($service['enabled']) ? 'checked' : ''; ?>>
+                                            <input type="checkbox" name="is_active" <?php echo $network['is_active'] ? 'checked' : ''; ?>>
                                             <span class="checkmark"></span>
                                             Active
                                         </label>
                                     </td>
                                     <td data-label="Actions" class="commission-actions">
                                         <button type="submit" class="btn btn-sm btn-primary">
-                                            <i class="fas fa-save"></i> Save All
+                                            <i class="fas fa-save"></i> Update
                                         </button>
+                                        </form>
                                     </td>
                                 </tr>
                                 <?php endforeach; ?>
                             </tbody>
                         </table>
                     </div>
-                    </form>
                 </div>
             </div>
 
@@ -493,41 +427,41 @@ if (!isset($_SESSION['csrf_token'])) {
                     <div class="info-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem;">
                         <div class="info-item" style="padding: 1rem; background: var(--bg-secondary); border-radius: 8px; border: 1px solid var(--border-color);">
                             <div style="display: flex; align-items: center; margin-bottom: 0.5rem;">
-                                <i class="fas fa-signal" style="color: var(--primary-color); margin-right: 0.5rem;"></i>
-                                <h4 style="margin: 0;">Data Bundle Commission</h4>
+                                <i class="fas fa-percentage" style="color: var(--primary-color); margin-right: 0.5rem;"></i>
+                                <h4 style="margin: 0;">Commission Rate</h4>
                             </div>
                             <p style="margin: 0; color: var(--text-secondary); font-size: 0.875rem;">
-                                Set one amount per 1GB. A 10GB order earns 10 times that amount.
+                                Percentage of transaction amount earned as commission by agents.
                             </p>
                         </div>
                         
                         <div class="info-item" style="padding: 1rem; background: var(--bg-secondary); border-radius: 8px; border: 1px solid var(--border-color);">
                             <div style="display: flex; align-items: center; margin-bottom: 0.5rem;">
-                                <i class="fas fa-id-card" style="color: var(--success-color); margin-right: 0.5rem;"></i>
-                                <h4 style="margin: 0;">Checker Commission</h4>
+                                <i class="fas fa-arrow-up" style="color: var(--success-color); margin-right: 0.5rem;"></i>
+                                <h4 style="margin: 0;">Minimum Commission</h4>
                             </div>
                             <p style="margin: 0; color: var(--text-secondary); font-size: 0.875rem;">
-                                Set one amount per checker card. Quantity purchased multiplies the commission.
+                                Minimum commission amount guaranteed per transaction.
                             </p>
                         </div>
                         
                         <div class="info-item" style="padding: 1rem; background: var(--bg-secondary); border-radius: 8px; border: 1px solid var(--border-color);">
                             <div style="display: flex; align-items: center; margin-bottom: 0.5rem;">
-                                <i class="fas fa-user-check" style="color: var(--warning-color); margin-right: 0.5rem;"></i>
-                                <h4 style="margin: 0;">AFA Registration Commission</h4>
+                                <i class="fas fa-arrow-down" style="color: var(--warning-color); margin-right: 0.5rem;"></i>
+                                <h4 style="margin: 0;">Maximum Commission</h4>
                             </div>
                             <p style="margin: 0; color: var(--text-secondary); font-size: 0.875rem;">
-                                Set one amount per registration order. Toggle off to stop recording AFA commission.
+                                Maximum commission cap per transaction (optional).
                             </p>
                         </div>
                     </div>
                     
                     <div style="margin-top: 2rem; padding: 1rem; background: var(--info-bg); border-radius: 8px; border-left: 4px solid var(--info-color);">
                         <h4 style="margin-bottom: 0.5rem; color: var(--info-color);">
-                            <i class="fas fa-info-circle"></i> Fixed Commission Formula
+                            <i class="fas fa-info-circle"></i> Commission Calculation
                         </h4>
                         <p style="margin: 0; color: var(--text-secondary);">
-                            Data = bundle GB × data rate, Checkers = card quantity × checker rate, AFA = order count × AFA rate.
+                            Commission = max(min_commission, min(transaction_amount ?? commission_rate / 100, max_commission))
                         </p>
                     </div>
                 </div>

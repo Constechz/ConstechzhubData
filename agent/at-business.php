@@ -10,25 +10,24 @@ requireRole('agent');
 
 $current_user = getCurrentUser();
 $wallet_balance = getWalletBalance($current_user['id']);
-ensureDataPackageStockStatusColumn();
-$at_logo_png = dbh_asset('assets/images/airtel-tigo-logo.png');
-$paystack_direct_enabled = isPaymentGatewayEnabled('paystack');
-$agent_bundle_paystack_init_endpoint = '../api/agent_bundle_paystack_init.php';
+
+$enabled_gateways = getEnabledPaymentGateways();
+$enabled_gateways = array_values(array_filter($enabled_gateways, function ($name) {
+    return in_array($name, ['paystack', 'moolre'], true);
+}));
 
 // Get AT packages with agent pricing (allow multiple packages but prevent duplicates)
 $at_packages = [];
 $stmt = $db->prepare("
     SELECT dp.id, dp.name, dp.data_size, dp.validity_days, dp.package_type, dp.agent_commission, dp.description,
-           COALESCE(dp.stock_status, 'in_stock') AS stock_status,
            COALESCE(pp_agent.price, pp_customer.price, dp.price) as effective_price
     FROM data_packages dp 
     LEFT JOIN networks n ON n.id = dp.network_id 
     LEFT JOIN package_pricing pp_agent ON pp_agent.package_id = dp.id AND pp_agent.user_type = 'agent'
     LEFT JOIN package_pricing pp_customer ON pp_customer.package_id = dp.id AND pp_customer.user_type = 'customer'
-    WHERE n.name = 'AT' AND dp.status = 'active'
-      AND COALESCE(dp.stock_status, 'in_stock') = 'in_stock'
+    WHERE n.name = 'AT' AND dp.status = 'active' 
     GROUP BY dp.id, dp.name, dp.data_size, dp.validity_days, dp.package_type, dp.agent_commission, dp.description,
-             COALESCE(dp.stock_status, 'in_stock'), COALESCE(pp_agent.price, pp_customer.price, dp.price)
+             COALESCE(pp_agent.price, pp_customer.price, dp.price)
     ORDER BY COALESCE(pp_agent.price, pp_customer.price, dp.price) ASC
 ");
 $stmt->execute();
@@ -94,13 +93,17 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'purchase') {
             LEFT JOIN package_pricing pp_agent ON pp_agent.package_id = dp.id AND pp_agent.user_type = 'agent'
             LEFT JOIN package_pricing pp_customer ON pp_customer.package_id = dp.id AND pp_customer.user_type = 'customer'
             WHERE dp.id = ? AND n.name = 'AT' AND dp.status = 'active'
-              AND COALESCE(dp.stock_status, 'in_stock') = 'in_stock'
         ");
         $stmt->bind_param("i", $package_id);
         $stmt->execute();
         $package_result = $stmt->get_result();
         
         if ($package = $package_result->fetch_assoc()) {
+            $payment_method = strtolower(trim((string) ($_POST['payment_method'] ?? 'wallet')));
+            if (!in_array($payment_method, ['wallet', 'paystack', 'moolre'], true)) {
+                $payment_method = 'wallet';
+            }
+
             if ($payment_method === 'wallet') {
                 // Check wallet balance using effective price
                 $price_to_use = $package['effective_price'] > 0 ? $package['effective_price'] : $package['price'];
@@ -108,11 +111,8 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'purchase') {
                     $error = 'Insufficient wallet balance. Please top up your wallet.';
                 } else {
                     $network_id = 2; // AT network ID
-                    $endpoint_type = detectEndpointTypeForPackage(
-                        $package['name'] ?? '',
-                        $package['data_size'] ?? '',
-                        $package['package_type'] ?? ''
-                    );
+                    $endpoint_type = (strpos(strtolower($package['name']), 'bigtime') !== false ||
+                                     strpos(strtolower($package['name']), 'big time') !== false) ? 'bigtime' : 'regular';
                     $availability = checkNetworkProviderAvailability($network_id, $endpoint_type);
                     if (!$availability['available']) {
                         $error = $availability['message'];
@@ -136,9 +136,11 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'purchase') {
                     } else {
                     $bundle_orders_auto_increment = true;
                     $transactions_auto_increment = true;
+                    $commissions_auto_increment = true;
                     if (function_exists('dbh_ensure_auto_increment')) {
                         $bundle_orders_auto_increment = dbh_ensure_auto_increment('bundle_orders');
                         $transactions_auto_increment = dbh_ensure_auto_increment('transactions');
+                        $commissions_auto_increment = dbh_ensure_auto_increment('commissions');
                     }
                     
                     $db->getConnection()->begin_transaction();
@@ -163,7 +165,7 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'purchase') {
                             $stmt->execute();
                             $order_id = $manual_order_id;
                         }
-
+                        
                         // Create transaction
                         $transaction_ref = generateReference('TXN');
                         $description = "AT " . $package['data_size'] . " bundle purchase for " . $formatted_phone;
@@ -191,32 +193,26 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'purchase') {
                         $stmt->bind_param("ii", $transaction_id, $order_id);
                         $stmt->execute();
                         
-                        // Deduct from wallet using correct price
-                        if (!updateWalletBalance($current_user['id'], $price_to_use, 'debit', $order_reference, $description)) {
-                            throw new Exception('Insufficient wallet balance');
-                        }
+                        // Deduct from wallet
+                        updateWalletBalance($current_user['id'], $price_to_use, 'debit', $transaction_ref, $description);
                         
                         // Call API provider to deliver the bundle
                         require_once '../includes/api_providers.php';
                         
-                        // Convert data size to GB for API call
                         // Convert data size to GB for API call
                         require_once '../includes/volume_converter.php';
                         $volume_gb = extractVolumeGB($package['data_size']);
                         $network_id = 2; // AT network ID
                         
                         // Determine endpoint type
-                        $endpoint_type = detectEndpointTypeForPackage(
-                            $package['name'] ?? '',
-                            $package['data_size'] ?? '',
-                            $package['package_type'] ?? ''
-                        );
+                        $endpoint_type = (strpos(strtolower($package['name']), 'bigtime') !== false || 
+                                         strpos(strtolower($package['name']), 'big time') !== false) ? 'bigtime' : 'regular';
                         
                         $api_result = processBundlePurchase($order_id, $network_id, $formatted_phone, $volume_gb, $endpoint_type);
                         
                         if ($api_result['success']) {
-                            // Update order status to processing
-                            $stmt = $db->prepare("UPDATE bundle_orders SET status = 'processing', api_response = ?, provider_reference = ? WHERE id = ?");
+                            // Update order status to delivered
+                            $stmt = $db->prepare("UPDATE bundle_orders SET status = 'delivered', api_response = ?, provider_reference = ?, delivered_at = NOW() WHERE id = ?");
                             $api_response_json = json_encode($api_result);
                             $provider_ref = $api_result['reference'] ?? '';
                             $stmt->bind_param("ssi", $api_response_json, $provider_ref, $order_id);
@@ -229,27 +225,31 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'purchase') {
                             $stmt->execute();
                             
                             // Refund wallet
-                            updateWalletBalance($current_user['id'], $price_to_use, 'credit', $order_reference . '_REFUND', 'Refund: ' . $api_result['error']);
+                            updateWalletBalance($current_user['id'], $price_to_use, 'credit', $transaction_ref . '_REFUND', 'Refund: ' . $api_result['error']);
                             throw new Exception('API delivery failed: ' . $api_result['error']);
                         }
-
-                        $commission_amount = function_exists('calculateAgentDataCommissionAmount')
-                            ? calculateAgentDataCommissionAmount($package['data_size'] ?? '', 1)
-                            : 0.0;
-
-                        if ($commission_amount > 0 && function_exists('recordAgentCommission')) {
-                            recordAgentCommission([
-                                'agent_id' => (int) $current_user['id'],
-                                'source_type' => 'data',
-                                'source_id' => (int) $order_id,
-                                'source_reference' => (string) $order_reference,
-                                'amount' => $commission_amount,
-                                'quantity' => 1,
-                                'rate_snapshot' => function_exists('getAgentCommissionSettings') ? (float) (getAgentCommissionSettings()['data_rate_per_gb'] ?? 0) : null,
-                                'notes' => 'AT ' . ($package['data_size'] ?? 'bundle') . ' for ' . $formatted_phone,
-                            ]);
+                        
+                        // Calculate and record commission
+                        $commission_amount = ($price_to_use * $package['agent_commission']) / 100;
+                        if ($commission_amount > 0) {
+                            if ($commissions_auto_increment) {
+                                $stmt = $db->prepare("
+                                    INSERT INTO commissions (agent_id, order_id, amount, status) 
+                                    VALUES (?, ?, ?, 'pending')
+                                ");
+                                $stmt->bind_param("iid", $current_user['id'], $order_id, $commission_amount);
+                                $stmt->execute();
+                            } else {
+                                $manual_commission_id = dbh_generate_next_id('commissions');
+                                $stmt = $db->prepare("
+                                    INSERT INTO commissions (id, agent_id, order_id, amount, status) 
+                                    VALUES (?, ?, ?, ?, 'pending')
+                                ");
+                                $stmt->bind_param("iiid", $manual_commission_id, $current_user['id'], $order_id, $commission_amount);
+                                $stmt->execute();
+                            }
                         }
-
+                        
                         $db->getConnection()->commit();
 
                         sendAdminDataOrderNotification([
@@ -263,29 +263,8 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'purchase') {
                             'package_name' => $package['data_size'] . ' - ' . ($package['validity_days'] ? $package['validity_days'] . ' days' : 'N/A'),
                             'amount' => $price_to_use,
                             'payment_method' => 'wallet',
-                            'status' => 'processing',
+                            'status' => 'delivered',
                             'agent_id' => (int) $current_user['id'],
-                            'source' => 'agent_dashboard_at'
-                        ]);
-
-                        $buyer_previous_balance = getWalletBalance($current_user['id']) + $price_to_use;
-                        $buyer_current_balance = getWalletBalance($current_user['id']);
-
-                        sendUserOrderNotification([
-                            'order_type' => 'data',
-                            'order_reference' => $order_reference,
-                            'order_id' => $order_id,
-                            'user_id' => (int) $current_user['id'],
-                            'customer_name' => $current_user['full_name'] ?? '',
-                            'customer_email' => $current_user['email'] ?? '',
-                            'beneficiary_number' => $formatted_phone,
-                            'network_name' => 'AT',
-                            'package_name' => $package['data_size'] . ' - ' . ($package['validity_days'] ? $package['validity_days'] . ' days' : 'N/A'),
-                            'amount' => $price_to_use,
-                            'payment_method' => 'wallet',
-                            'status' => 'processing',
-                            'previous_balance' => $buyer_previous_balance,
-                            'current_balance' => $buyer_current_balance,
                             'source' => 'agent_dashboard_at'
                         ]);
                         
@@ -296,7 +275,7 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'purchase') {
                         $display_phone = (strlen($formatted_phone) == 12 && substr($formatted_phone, 0, 3) == '233') 
                             ? '0' . substr($formatted_phone, 3) 
                             : $formatted_phone;
-                        $success = 'Order submitted successfully and is now processing. It will update automatically once it confirms delivery.';
+                        $success = "Bundle purchase successful! {$package['data_size']} has been sent to {$display_phone}";
 
                         // Clear form fields after a successful order for a fresh entry
                         $_POST = [];
@@ -315,11 +294,43 @@ if ($_POST && isset($_POST['action']) && $_POST['action'] === 'purchase') {
                     }
                 }
             } else {
-                // Ensure proper payment method validation - no Paystack references
-                if (empty($payment_method)) {
-                    $error = 'Payment method is required. Please select "Pay with Wallet".';
+                // Direct payment checkout
+                if (!isPaymentGatewayEnabled($payment_method)) {
+                    $error = 'Selected payment gateway is currently unavailable.';
                 } else {
-                    $error = 'Invalid payment method selected. Only wallet payment is supported.';
+                    $formatted_phone = formatPhone($phone_number);
+                    if (function_exists('findRecentGuestBundleTransaction')) {
+                        $recent_txn = findRecentGuestBundleTransaction($current_user['id'], $package_id, $formatted_phone, $price_to_use, 180);
+                        if ($recent_txn) {
+                            $tx_status = strtolower(trim((string) ($recent_txn['status'] ?? '')));
+                            if ($tx_status === 'pending' || $tx_status === 'processing') {
+                                $error = 'A similar payment is already in progress. Please complete it before starting another one.';
+                            }
+                        }
+                    }
+                    
+                    if (empty($error)) {
+                        $init_error = '';
+                        $auth_url = initializeGatewayBundlePurchase(
+                            $current_user['id'],
+                            $current_user['email'],
+                            $package_id,
+                            $formatted_phone,
+                            $price_to_use,
+                            $price_to_use,
+                            0,
+                            '',
+                            $payment_method,
+                            $init_error
+                        );
+                        
+                        if ($auth_url) {
+                            header('Location: ' . $auth_url);
+                            exit();
+                        } else {
+                            $error = $init_error ?: 'Failed to initialize gateway payment.';
+                        }
+                    }
                 }
             }
         } else {
@@ -344,8 +355,8 @@ if ($flash) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AT Business - <?php echo SITE_NAME; ?></title>
-    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>">
-    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>"">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>"">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>">
     <script>
         // Initialize theme immediately before body loads to prevent flicker
@@ -356,351 +367,8 @@ if ($flash) {
             document.documentElement.setAttribute('data-theme', theme);
         })();
     </script>
-<style>
-.at-business-page {
-    background: #f3f4f6;
-}
-
-.at-business-page .dashboard-content {
-    padding: 1.5rem;
-}
-
-.at-business-page .at-business-shell {
-    max-width: 1140px;
-    margin: 0 auto;
-}
-
-.at-business-page .at-business-header {
-    margin-bottom: 1.5rem;
-}
-
-.at-business-page .at-business-header h1 {
-    margin: 0 0 0.35rem;
-    color: #1f2937;
-    font-size: clamp(1.75rem, 3vw, 2.4rem);
-}
-
-.at-business-page .at-business-header p {
-    margin: 0;
-    color: #6b7280;
-}
-
-.at-business-page .at-package-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 1.4rem;
-    margin-bottom: 1.75rem;
-}
-
-.at-business-page .at-package-card {
-    background: #ffffff;
-    border-radius: 24px;
-    padding: 1.25rem 1.3rem 1.35rem;
-    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
-    border: 1px solid rgba(15, 23, 42, 0.04);
-    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
-    text-align: center;
-}
-
-.at-business-page .at-package-card:hover,
-.at-business-page .at-package-card.is-selected {
-    transform: translateY(-2px);
-    box-shadow: 0 22px 46px rgba(15, 23, 42, 0.12);
-    border-color: rgba(47, 128, 237, 0.28);
-}
-
-.at-business-page .at-package-card-top {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.9rem;
-    margin-bottom: 1.15rem;
-    text-align: center;
-}
-
-.at-business-page .at-package-logo {
-    width: 54px;
-    height: 54px;
-    object-fit: contain;
-    flex: 0 0 auto;
-}
-
-.at-business-page .at-package-copy {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    min-width: 0;
-    text-align: center;
-    width: 100%;
-}
-
-.at-business-page .at-package-size {
-    margin: 0;
-    color: #1f2937;
-    font-size: clamp(1.35rem, 2vw, 2rem);
-    font-weight: 800;
-    line-height: 1;
-}
-
-.at-business-page .at-package-price {
-    margin-top: 0.35rem;
-    color: #17733b;
-    font-size: 1.05rem;
-    font-weight: 800;
-    line-height: 1.1;
-}
-
-.at-business-page .at-package-select {
-    width: 100%;
-    min-height: 44px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    border-radius: 14px;
-    background: #8B5CF6;
-    color: #ffffff;
-    font-size: 1rem;
-    font-weight: 800;
-    cursor: pointer;
-    transition: background 0.18s ease, transform 0.18s ease;
-    text-align: center;
-}
-
-.at-business-page .at-package-select:hover {
-    background: #7C3AED;
-}
-
-.at-business-page .at-package-select:focus-visible {
-    outline: 3px solid rgba(139, 92, 246, 0.28);
-    outline-offset: 2px;
-}
-
-.at-business-page .at-purchase-panel {
-    background: #ffffff;
-    border-radius: 24px;
-    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);
-    border: 1px solid rgba(15, 23, 42, 0.04);
-    overflow: hidden;
-}
-
-.at-business-page .at-purchase-panel .widget,
-.at-business-page .at-purchase-panel .widget-header,
-.at-business-page .at-purchase-panel .widget-body {
-    background: transparent;
-    border: none;
-    box-shadow: none;
-}
-
-.at-business-page .at-purchase-panel .widget-header {
-    padding: 1.2rem 1.3rem 0.75rem;
-}
-
-.at-business-page .at-purchase-panel .widget-body {
-    padding: 0 1.3rem 1.3rem;
-}
-
-.at-business-page .at-selected-package {
-    display: flex;
-    align-items: center;
-    gap: 0.8rem;
-    padding: 0.9rem 1rem;
-    border-radius: 18px;
-    background: #eff6ff;
-    border: 1px solid rgba(31, 63, 134, 0.1);
-    margin-bottom: 1rem;
-}
-
-.at-business-page .at-selected-package img {
-    width: 42px;
-    height: 42px;
-    object-fit: contain;
-}
-
-.at-business-page .at-selected-package strong,
-.at-business-page .at-selected-package span {
-    display: block;
-}
-
-.at-business-page .at-selected-package strong {
-    color: #1f2937;
-    font-size: 1rem;
-}
-
-.at-business-page .at-selected-package span {
-    color: #17733b;
-    font-weight: 700;
-}
-
-.at-business-page .at-hidden-select {
-    display: none;
-}
-
-.at-business-page.at-checkout-modal-open {
-    overflow: hidden;
-}
-
-.at-business-page .at-checkout-modal {
-    position: fixed;
-    inset: 0;
-    display: none;
-    align-items: center;
-    justify-content: center;
-    padding: 1rem;
-    z-index: 1200;
-}
-
-.at-business-page .at-checkout-modal.is-open {
-    display: flex;
-}
-
-.at-business-page .at-checkout-modal__backdrop {
-    position: absolute;
-    inset: 0;
-    background: rgba(15, 23, 42, 0.62);
-}
-
-.at-business-page .at-checkout-modal__dialog {
-    position: relative;
-    width: min(560px, 100%);
-    max-height: calc(100vh - 2rem);
-    overflow: auto;
-    z-index: 1;
-}
-
-.at-business-page .at-checkout-modal__header {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 1rem;
-    margin-bottom: 0.9rem;
-    color: var(--text-primary);
-}
-
-.at-business-page .at-checkout-modal__eyebrow {
-    margin-bottom: 0.25rem;
-    color: #7c3aed;
-    font-size: 0.78rem;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-}
-
-.at-business-page .at-checkout-modal__header h2 {
-    margin: 0;
-    color: var(--text-primary);
-    font-size: 1.3rem;
-}
-
-.at-business-page .at-checkout-modal__header p {
-    margin: 0.2rem 0 0;
-    color: var(--text-secondary);
-    font-size: 0.92rem;
-}
-
-.at-business-page .at-checkout-modal__close {
-    border: none;
-    background: rgba(124, 58, 237, 0.12);
-    color: #7c3aed;
-    width: 40px;
-    height: 40px;
-    border-radius: 999px;
-    font-size: 1.5rem;
-    line-height: 1;
-    cursor: pointer;
-}
-
-.at-business-page .at-checkout-status {
-    display: none;
-    margin-bottom: 1rem;
-}
-
-.at-business-page .at-payment-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-}
-
-.at-business-page .at-payment-actions .btn {
-    width: 100%;
-}
-
-html[data-theme="dark"] .at-business-page .at-checkout-modal__dialog,
-html[data-theme="dark"] .at-business-page .at-purchase-panel {
-    background: #0f172a;
-    border-color: #334155;
-    box-shadow: 0 22px 48px rgba(2, 6, 23, 0.55);
-}
-
-html[data-theme="dark"] .at-business-page .at-purchase-panel .widget-title,
-html[data-theme="dark"] .at-business-page .at-checkout-modal__header h2,
-html[data-theme="dark"] .at-business-page .at-business-header h1,
-html[data-theme="dark"] .at-business-page .at-selected-package strong,
-html[data-theme="dark"] .at-business-page .form-label,
-html[data-theme="dark"] .at-business-page .widget-body p {
-    color: #f8fafc;
-}
-
-html[data-theme="dark"] .at-business-page .at-business-header p,
-html[data-theme="dark"] .at-business-page .at-checkout-modal__header p,
-html[data-theme="dark"] .at-business-page .form-help {
-    color: #cbd5e1;
-}
-
-html[data-theme="dark"] .at-business-page .at-selected-package {
-    background: #172554;
-    border-color: rgba(96, 165, 250, 0.28);
-}
-
-html[data-theme="dark"] .at-business-page .at-selected-package span {
-    color: #86efac;
-}
-
-html[data-theme="dark"] .at-business-page #phone_number {
-    background: #2a1246;
-    border-color: #6d28d9;
-    color: #f8fafc;
-}
-
-html[data-theme="dark"] .at-business-page #phone_number::placeholder {
-    color: #c4b5fd;
-}
-
-html[data-theme="dark"] .at-business-page #phone_number:focus {
-    border-color: #8b5cf6;
-    box-shadow: 0 0 0 0.2rem rgba(139, 92, 246, 0.22);
-}
-
-html[data-theme="dark"] .at-business-page #payWithPaystackBtn.btn-outline {
-    background: #1e293b;
-    border-color: #475569;
-    color: #f8fafc;
-}
-
-html[data-theme="dark"] .at-business-page #payWithPaystackBtn.btn-outline:hover {
-    background: #334155;
-    color: #f8fafc;
-}
-
-html[data-theme="dark"] .at-business-page .at-checkout-modal__close {
-    background: rgba(139, 92, 246, 0.18);
-    color: #e9d5ff;
-}
-
-@media (max-width: 640px) {
-    .at-business-page .dashboard-content {
-        padding: 1rem;
-    }
-
-    .at-business-page .at-package-grid {
-        grid-template-columns: 1fr;
-        gap: 1rem;
-    }
-}
-</style>
 </head>
-<body class="at-business-page">
+<body>
     <div class="dashboard-wrapper">
         <!-- Sidebar -->
         <nav class="sidebar">
@@ -708,7 +376,79 @@ html[data-theme="dark"] .at-business-page .at-checkout-modal__close {
                 <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
             </div>
             
-            <?php renderAgentSidebar(); ?>
+            <ul class="sidebar-nav">
+                <li class="nav-section">
+                    <div class="nav-section-title">Dashboard</div>
+                    <div class="nav-item">
+                        <a href="dashboard.php" class="nav-link">
+                            <i class="fas fa-home"></i>
+                            Dashboard
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Services</div>
+                    <div class="nav-item">
+                        <a href="at-business.php" class="nav-link active">
+                            <i class="fas fa-mobile-alt"></i>
+                            AT Business
+                        </a>
+                    </div>
+                <div class="nav-item">
+                    <a href="mtn-business.php" class="nav-link">
+                        <i class="fas fa-mobile-alt"></i>
+                        MTN Business
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="afa-registration.php" class="nav-link">
+                        <i class="fas fa-user-check"></i>
+                        AFA Registration
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="bulk-mtn.php" class="nav-link">
+                        <i class="fas fa-layer-group"></i>
+                        Bulk MTN
+                    </a>
+                </div>
+                    <div class="nav-item">
+                        <a href="result-checker.php" class="nav-link">
+                            <i class="fas fa-award"></i>
+                            Result Checker
+                        </a>
+                    </div>
+                <div class="nav-item">
+                    <a href="telecel-business.php" class="nav-link">
+                        <i class="fas fa-signal"></i>
+                        Telecel Business
+                    </a>
+                </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Transaction</div>
+                <div class="nav-item">
+                    <a href="histories.php" class="nav-link">
+                        <i class="fas fa-history"></i>
+                        Histories
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="reference.php" class="nav-link">
+                        <i class="fas fa-search"></i>
+                        Reference
+                    </a>
+                </div>
+            </li>
+            </ul>
+                    <div class="nav-item">
+                        <a href="withdraw-profit.php" class="nav-link">
+                            <i class="fas fa-wallet"></i>
+                            Withdraw Profit
+                        </a>
+                    </div>
         </nav>
         
         <!-- Main Content -->
@@ -766,51 +506,19 @@ html[data-theme="dark"] .at-business-page .at-checkout-modal__close {
             
             <!-- Dashboard Content -->
             <div class="dashboard-content">
-                <div class="at-business-shell">
-                    <div class="at-business-header">
-                        <h1>AT iShare Bundles</h1>
-                        <p>Click Buy Now on any package to open the checkout popup and complete the purchase.</p>
-                    </div>
-
-                    <?php if ($success): ?>
-                        <div class="alert alert-success" style="margin-bottom: 1rem;">
-                            <?php echo htmlspecialchars($success); ?>
-                        </div>
-                    <?php endif; ?>
-
-                    <div class="at-package-grid" id="atPackageGrid">
-                        <?php foreach ($at_packages as $package): ?>
-                            <?php
-                                $isSelectedPackage = (isset($_POST['package_id']) && (int) $_POST['package_id'] === (int) $package['id']);
-                                $displayPackageSize = formatBundleDisplaySize($package['data_size'] ?? $package['name']);
-                                $packageLabel = 'AT ' . $displayPackageSize;
-                            ?>
-                            <article class="at-package-card <?php echo $isSelectedPackage ? 'is-selected' : ''; ?>" data-package-id="<?php echo (int) $package['id']; ?>" data-package-price="<?php echo htmlspecialchars((string) $package['effective_price']); ?>" data-package-label="<?php echo htmlspecialchars($packageLabel); ?>">
-                                <div class="at-package-card-top">
-                                    <img class="at-package-logo" src="<?php echo htmlspecialchars($at_logo_png); ?>" alt="AT logo">
-                                    <div class="at-package-copy">
-                                        <h2 class="at-package-size"><?php echo htmlspecialchars($displayPackageSize); ?></h2>
-                                        <div class="at-package-price"><?php echo formatCurrency($package['effective_price']); ?></div>
-                                    </div>
-                                </div>
-                                <button type="button" class="at-package-select" data-select-package="<?php echo (int) $package['id']; ?>">Buy Now</button>
-                            </article>
-                        <?php endforeach; ?>
-                    </div>
+                <!-- Page Header -->
+                <div style="text-align: center; margin-bottom: 3rem;">
+                    <h1 style="font-size: 2.5rem; margin-bottom: 1rem; color: var(--text-primary);">AT iShare Bundles</h1>
+                    <p style="color: var(--text-secondary); margin-bottom: 2rem;">
+                        Share with your loved ones. Huge data volumes for downloads and live streaming. Advanced bundles for your business.
+                    </p>
+                    <button class="btn btn-outline" style="padding: 0.75rem 2rem;">
+                        Read More
+                    </button>
+                </div>
                 
-                    <!-- Purchase Form -->
-                    <div id="purchaseModal" class="at-checkout-modal<?php echo ($error && !empty($_POST['package_id'])) ? ' is-open' : ''; ?>" aria-hidden="<?php echo ($error && !empty($_POST['package_id'])) ? 'false' : 'true'; ?>">
-                    <div class="at-checkout-modal__backdrop" data-close-purchase-modal="1"></div>
-                    <div class="at-checkout-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="atCheckoutTitle">
-                    <div class="at-checkout-modal__header">
-                        <div>
-                            <div class="at-checkout-modal__eyebrow">AT Checkout</div>
-                            <h2 id="atCheckoutTitle">Complete Purchase</h2>
-                            <p>Enter the beneficiary number and choose how you want to pay.</p>
-                        </div>
-                        <button type="button" class="at-checkout-modal__close" id="purchaseModalCloseBtn" aria-label="Close checkout">&times;</button>
-                    </div>
-                    <div class="at-purchase-panel">
+                <!-- Purchase Form -->
+                <div style="max-width: 600px; margin: 0 auto;">
                     <div class="widget">
                         <div class="widget-header" style="display: flex; justify-content: space-between; align-items: center;">
                             <h3 class="widget-title">BUY AT BUNDLES</h3>
@@ -825,29 +533,14 @@ html[data-theme="dark"] .at-business-page .at-checkout-modal__close {
                                 </div>
                             <?php endif; ?>
                             
+                            <?php if ($success): ?>
+                                <div class="alert alert-success">
+                                    <?php echo htmlspecialchars($success); ?>
+                                </div>
+                            <?php endif; ?>
+                            
                             <form method="POST" action="" id="purchaseForm">
                                 <input type="hidden" name="action" value="purchase">
-                                <input type="hidden" name="payment_method" id="payment_method" value="wallet">
-                                <div class="at-selected-package" id="selectedPackageSummary" <?php echo empty($_POST['package_id']) ? 'style="display:none;"' : ''; ?>>
-                                    <img src="<?php echo htmlspecialchars($at_logo_png); ?>" alt="AT logo">
-                                    <div>
-                                        <strong id="selectedPackageLabel"><?php
-                                            $selectedPackageLabel = 'Choose a package above';
-                                            $selectedPackagePrice = '';
-                                            foreach ($at_packages as $package) {
-                                                if (isset($_POST['package_id']) && (int) $_POST['package_id'] === (int) $package['id']) {
-                                                    $selectedPackageLabel = 'AT ' . formatBundleDisplaySize($package['data_size'] ?? $package['name']);
-                                                    $selectedPackagePrice = formatCurrency($package['effective_price']);
-                                                    break;
-                                                }
-                                            }
-                                            echo htmlspecialchars($selectedPackageLabel);
-                                        ?></strong>
-                                        <span id="selectedPackagePrice"><?php echo htmlspecialchars($selectedPackagePrice); ?></span>
-                                    </div>
-                                </div>
-
-                                <div id="atCheckoutClientError" class="alert alert-danger at-checkout-status"></div>
                                 
                                 <div class="form-group">
                                     <label for="phone_number" class="form-label">
@@ -869,52 +562,49 @@ html[data-theme="dark"] .at-business-page .at-checkout-modal__close {
                                     <label for="package_id" class="form-label">
                                         SELECT MENU <span style="color: var(--accent-red);">*</span>
                                     </label>
-                                    <select class="form-control form-select at-hidden-select" id="package_id" name="package_id" required>
+                                    <select class="form-control form-select" id="package_id" name="package_id" required>
                                         <option value="">Select package</option>
                                         <?php foreach ($at_packages as $package): ?>
                                             <option 
                                                 value="<?php echo $package['id']; ?>" 
-                                            data-price="<?php echo $package['effective_price']; ?>"
-                                            <?php echo (isset($_POST['package_id']) && $_POST['package_id'] == $package['id']) ? 'selected' : ''; ?>
-                                        >
-                                                AT <?php echo htmlspecialchars(formatBundleDisplaySize($package['data_size'] ?? $package['name'])); ?> - <?php echo formatCurrency($package['effective_price']); ?>
+                                                data-price="<?php echo $package['effective_price']; ?>"
+                                                <?php echo (isset($_POST['package_id']) && $_POST['package_id'] == $package['id']) ? 'selected' : ''; ?>
+                                            >
+                                                AT <?php echo $package['data_size']; ?> - <?php echo formatCurrency($package['effective_price']); ?>
                                             </option>
                                         <?php endforeach; ?>
                                     </select>
                                 </div>
                                 
                                 <div class="form-group">
-                                    <p style="margin-bottom: 1rem;">
-                                        Available Balance: 
-                                        <span style="color: var(--accent-green); font-weight: 600;">
-                                            <?php echo formatCurrency($wallet_balance); ?>
-                                        </span>
-                                    </p>
+                                    <label for="payment_method" class="form-label">
+                                        PAYMENT METHOD <span style="color: var(--accent-red);">*</span>
+                                    </label>
+                                    <select class="form-control form-select" id="payment_method" name="payment_method" required>
+                                        <option value="wallet">Wallet Balance (<?php echo formatCurrency($wallet_balance); ?>)</option>
+                                        <?php foreach ($enabled_gateways as $gateway): ?>
+                                            <option value="<?php echo htmlspecialchars($gateway); ?>"><?php echo ucfirst(htmlspecialchars($gateway)); ?></option>
+                                        <?php endforeach; ?>
+                                    </select>
                                 </div>
                                 
-                                <div class="form-group at-payment-actions">
+                                <div class="form-group">
                                     <button 
                                         type="submit" 
                                         class="btn btn-primary" 
-                                        id="payWithWalletBtn"
+                                        style="width: 100%;"
+                                        id="submitBtn"
                                     >
-                                        Pay with Wallet
+                                        Process Order
                                     </button>
-                                    <?php if ($paystack_direct_enabled): ?>
-                                        <button type="button" class="btn btn-outline" id="payWithPaystackBtn">
-                                            Pay with Paystack
-                                        </button>
-                                    <?php endif; ?>
                                 </div>
                             </form>
                         </div>
                     </div>
                 </div>
-                </div>
-                </div>
                 
                 <!-- Bulk Upload Modal -->
-                <div id="bulkUploadModal" class="modal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5);">
+                <div id="bulkUploadModal" class="modal" style="display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(46, 41, 78, 0.5);">
                     <div class="modal-content" style="max-width: 600px; margin: 5% auto; background: var(--card-bg); border-radius: 12px; padding: 2rem; position: relative;">
                         <span class="close" onclick="closeBulkUploadModal()" style="position: absolute; top: 1rem; right: 1.5rem; font-size: 1.5rem; cursor: pointer; color: var(--text-muted);">&times;</span>
                         
@@ -962,8 +652,6 @@ html[data-theme="dark"] .at-business-page .at-checkout-modal__close {
     
     <script>
         const agentCurrency = <?php echo json_encode(CURRENCY); ?>;
-        const agentBundlePaystackEnabled = <?php echo $paystack_direct_enabled ? 'true' : 'false'; ?>;
-        const agentBundlePaystackInitEndpoint = <?php echo json_encode($agent_bundle_paystack_init_endpoint); ?>;
 
         function ensureOrderConfirmModal() {
             if (window.__orderConfirmModalState) return window.__orderConfirmModalState;
@@ -986,16 +674,16 @@ html[data-theme="dark"] .at-business-page .at-checkout-modal__close {
                     .order-confirm-backdrop {
                         position: absolute;
                         inset: 0;
-                        background: rgba(15, 23, 42, 0.55);
+                        background: rgba(46, 41, 78, 0.55);
                     }
                     .order-confirm-dialog {
                         position: relative;
                         width: min(520px, 100%);
-                        background: var(--card-bg, #fff);
-                        border: 1px solid var(--border-color, #d1d5db);
+                        background: var(--card-bg, #F1E9DA);
+                        border: 1px solid var(--border-color, #F1E9DA);
                         border-radius: 14px;
-                        box-shadow: 0 20px 45px rgba(15, 23, 42, 0.25);
-                        color: var(--text-primary, #111827);
+                        box-shadow: 0 20px 45px rgba(46, 41, 78, 0.25);
+                        color: var(--text-primary, #2E294E);
                         overflow: hidden;
                     }
                     .order-confirm-header {
@@ -1005,12 +693,12 @@ html[data-theme="dark"] .at-business-page .at-checkout-modal__close {
                     }
                     .order-confirm-subtitle {
                         padding: 0 1.2rem;
-                        color: var(--text-muted, #6b7280);
+                        color: var(--text-muted, #541388);
                         font-size: 0.9rem;
                     }
                     .order-confirm-details {
                         margin: 0.9rem 1.2rem 0;
-                        border: 1px solid var(--border-color, #e5e7eb);
+                        border: 1px solid var(--border-color, #F1E9DA);
                         border-radius: 10px;
                         overflow: hidden;
                     }
@@ -1019,11 +707,11 @@ html[data-theme="dark"] .at-business-page .at-checkout-modal__close {
                         justify-content: space-between;
                         gap: 1rem;
                         padding: 0.7rem 0.85rem;
-                        border-bottom: 1px solid var(--border-color, #e5e7eb);
+                        border-bottom: 1px solid var(--border-color, #F1E9DA);
                         font-size: 0.92rem;
                     }
                     .order-confirm-row:last-child { border-bottom: none; }
-                    .order-confirm-row span:first-child { color: var(--text-muted, #6b7280); }
+                    .order-confirm-row span:first-child { color: var(--text-muted, #541388); }
                     .order-confirm-row span:last-child { font-weight: 600; text-align: right; word-break: break-word; }
                     .order-confirm-actions {
                         display: flex;
@@ -1032,30 +720,30 @@ html[data-theme="dark"] .at-business-page .at-checkout-modal__close {
                         padding: 1rem 1.2rem 1.1rem;
                     }
                     html[data-theme="dark"] .order-confirm-modal .order-confirm-backdrop {
-                        background: rgba(2, 6, 23, 0.72);
+                        background: rgba(46, 41, 78, 0.72);
                     }
                     html[data-theme="dark"] .order-confirm-modal .order-confirm-dialog {
-                        background: #0f172a;
-                        border-color: #334155;
-                        color: #f8fafc;
+                        background: #2E294E;
+                        border-color: #2E294E;
+                        color: #F1E9DA;
                     }
                     html[data-theme="dark"] .order-confirm-modal .order-confirm-header,
                     html[data-theme="dark"] .order-confirm-modal .order-confirm-row span:last-child {
-                        color: #f8fafc;
+                        color: #F1E9DA;
                     }
                     html[data-theme="dark"] .order-confirm-modal .order-confirm-subtitle,
                     html[data-theme="dark"] .order-confirm-modal .order-confirm-row span:first-child {
-                        color: #cbd5e1;
+                        color: #F1E9DA;
                     }
                     html[data-theme="dark"] .order-confirm-modal .order-confirm-details,
                     html[data-theme="dark"] .order-confirm-modal .order-confirm-row {
-                        border-color: #334155;
+                        border-color: #2E294E;
                     }
                     html[data-theme="dark"] .order-confirm-modal .btn.btn-secondary,
                     html[data-theme="dark"] .order-confirm-modal .btn.btn-outline {
-                        background: #1e293b;
-                        border-color: #475569;
-                        color: #f8fafc;
+                        background: #2E294E;
+                        border-color: #2E294E;
+                        color: #F1E9DA;
                     }
                 `;
                 document.head.appendChild(style);
@@ -1089,9 +777,6 @@ html[data-theme="dark"] .at-business-page .at-checkout-modal__close {
             };
 
             function close(result) {
-                if (document.activeElement && state.modal.contains(document.activeElement)) {
-                    document.activeElement.blur();
-                }
                 state.modal.classList.remove('show');
                 state.modal.setAttribute('aria-hidden', 'true');
                 if (state.resolver) {
@@ -1140,11 +825,7 @@ html[data-theme="dark"] .at-business-page .at-checkout-modal__close {
 
                 state.modal.classList.add('show');
                 state.modal.setAttribute('aria-hidden', 'false');
-                setTimeout(function() { 
-                    if (state.modal.classList.contains('show')) {
-                        state.okBtn.focus(); 
-                    }
-                }, 50);
+                setTimeout(function() { state.okBtn.focus(); }, 0);
                 return new Promise(function(resolve) {
                     state.resolver = resolve;
                 });
@@ -1214,299 +895,77 @@ html[data-theme="dark"] .at-business-page .at-checkout-modal__close {
                 console.log('Mobile toggle or sidebar not found:', { mobileToggle, sidebar }); // Debug log
             }
             
-            // Checkout modal and form handling
+            // Form validation
             const purchaseForm = document.getElementById('purchaseForm');
-            const packageSelect = document.getElementById('package_id');
-            const packageCards = Array.from(document.querySelectorAll('.at-package-card'));
-            const selectedPackageSummary = document.getElementById('selectedPackageSummary');
-            const selectedPackageLabelEl = document.getElementById('selectedPackageLabel');
-            const selectedPackagePriceEl = document.getElementById('selectedPackagePrice');
-            const purchaseModal = document.getElementById('purchaseModal');
-            const purchaseModalCloseBtn = document.getElementById('purchaseModalCloseBtn');
-            const purchaseModalBackdrop = purchaseModal ? purchaseModal.querySelector('[data-close-purchase-modal="1"]') : null;
-            const phoneInput = document.getElementById('phone_number');
-            const payWithWalletBtn = document.getElementById('payWithWalletBtn');
-            const payWithPaystackBtn = document.getElementById('payWithPaystackBtn');
-            const paymentMethodInput = document.getElementById('payment_method');
-            const checkoutClientError = document.getElementById('atCheckoutClientError');
-            const walletBalance = <?php echo json_encode((float) $wallet_balance); ?>;
-            const reopenCheckoutOnLoad = <?php echo ($error && !empty($_POST['package_id'])) ? 'true' : 'false'; ?>;
-            const submittedPackageId = <?php echo (int) ($_POST['package_id'] ?? 0); ?>;
-
-            function setAtCheckoutError(message, type) {
-                if (!checkoutClientError) return;
-                if (!message) {
-                    checkoutClientError.style.display = 'none';
-                    checkoutClientError.textContent = '';
-                    checkoutClientError.className = 'alert alert-danger at-checkout-status';
-                    return;
-                }
-
-                checkoutClientError.style.display = 'block';
-                checkoutClientError.textContent = message;
-                checkoutClientError.className = 'alert alert-' + (type || 'danger') + ' at-checkout-status';
-            }
-
-            function setCheckoutButtonsLoading(isLoading, activeButton) {
-                [payWithWalletBtn, payWithPaystackBtn].forEach(function(button) {
-                    if (!button) return;
-                    if (!button.dataset.defaultText) {
-                        button.dataset.defaultText = button.innerHTML;
-                    }
-
-                    button.disabled = !!isLoading;
-                    if (isLoading && activeButton === button) {
-                        button.innerHTML = '<span class="spinner"></span> Processing...';
-                    } else if (!isLoading) {
-                        button.innerHTML = button.dataset.defaultText;
-                    }
-                });
-            }
-
-            function syncSelectedPackageCard(packageId) {
-                packageCards.forEach(function(card) {
-                    card.classList.toggle('is-selected', String(card.dataset.packageId) === String(packageId));
-                });
-
-                if (!packageSelect) return;
-                const selectedOption = packageSelect.options[packageSelect.selectedIndex];
-                if (!selectedOption || !selectedOption.value) {
-                    if (selectedPackageSummary) selectedPackageSummary.style.display = 'none';
-                    return;
-                }
-
-                if (selectedPackageSummary) selectedPackageSummary.style.display = '';
-                if (selectedPackageLabelEl) {
-                    selectedPackageLabelEl.textContent = selectedOption.textContent.split(' - ')[0].trim();
-                }
-                if (selectedPackagePriceEl) {
-                    selectedPackagePriceEl.textContent = agentCurrency + Number(selectedOption.dataset.price || 0).toFixed(2);
-                }
-            }
-
-            function openPurchaseModal(packageId, options) {
-                if (!purchaseModal) return;
-                const config = options || {};
-
-                if (packageSelect && packageId) {
-                    packageSelect.value = String(packageId);
-                }
-                syncSelectedPackageCard(packageSelect ? packageSelect.value : packageId);
-
-                if (paymentMethodInput) {
-                    paymentMethodInput.value = 'wallet';
-                }
-                if (config.clearError !== false) {
-                    setAtCheckoutError('', 'danger');
-                }
-
-                purchaseModal.classList.add('is-open');
-                purchaseModal.setAttribute('aria-hidden', 'false');
-                document.body.classList.add('at-checkout-modal-open');
-
-                if (phoneInput && config.focus !== false) {
-                    window.setTimeout(function() {
-                        if (purchaseModal.classList.contains('is-open')) {
-                            phoneInput.focus();
-                            phoneInput.select();
-                        }
-                    }, 50);
-                }
-            }
-
-            function closePurchaseModal() {
-                if (!purchaseModal) return;
-                if (document.activeElement && purchaseModal.contains(document.activeElement)) {
-                    document.activeElement.blur();
-                }
-                purchaseModal.classList.remove('is-open');
-                purchaseModal.setAttribute('aria-hidden', 'true');
-                document.body.classList.remove('at-checkout-modal-open');
-                setCheckoutButtonsLoading(false);
-            }
-
-            function getSelectedAtPackageDetails(requireWalletFunds) {
-                const phoneNumber = phoneInput ? phoneInput.value : '';
-                const packageId = packageSelect ? packageSelect.value : '';
-
-                if (!phoneNumber || !packageId) {
-                    setAtCheckoutError('Please fill in all required fields.', 'danger');
-                    return null;
-                }
-
-                const localPhone = normalizeAtLocalPhone(phoneNumber);
-                if (!isAtLocalPhone(localPhone)) {
-                    setAtCheckoutError('Use AirtelTigo numbers only (026/027/056/057) and 10 digits.', 'danger');
-                    if (phoneInput) {
-                        phoneInput.focus();
-                        phoneInput.select();
-                    }
-                    return null;
-                }
-
-                const selectedOption = document.querySelector('#package_id option:checked');
-                const packagePrice = parseFloat((selectedOption && selectedOption.dataset.price) || '0');
-                if (!selectedOption || !selectedOption.value || Number.isNaN(packagePrice) || packagePrice <= 0) {
-                    setAtCheckoutError('Please select a valid package before continuing.', 'danger');
-                    return null;
-                }
-
-                if (requireWalletFunds && packagePrice > walletBalance) {
-                    setAtCheckoutError('Insufficient wallet balance. Please top up your wallet or use Paystack.', 'danger');
-                    return null;
-                }
-
-                return {
-                    localPhone: localPhone,
-                    packageId: packageId,
-                    packageLabel: selectedOption.textContent.trim(),
-                    packagePrice: packagePrice
-                };
-            }
-
-            async function startAgentPaystackCheckout() {
-                if (!agentBundlePaystackEnabled) {
-                    setAtCheckoutError('Paystack checkout is currently unavailable.', 'danger');
-                    return;
-                }
-                if (!purchaseForm || !paymentMethodInput) return;
-
-                setAtCheckoutError('', 'danger');
-                paymentMethodInput.value = 'paystack';
-                const checkout = getSelectedAtPackageDetails(false);
-                if (!checkout) {
-                    paymentMethodInput.value = 'wallet';
-                    return;
-                }
-
-                const confirmed = await openOrderConfirmModal({
-                    title: 'Continue to Paystack',
-                    subtitle: 'You will be redirected to Paystack to complete this order.',
-                    confirmText: 'Continue to Payment',
-                    details: [
-                        { label: 'Network', value: 'AT' },
-                        { label: 'Package', value: checkout.packageLabel },
-                        { label: 'Recipient', value: checkout.localPhone },
-                        { label: 'Amount', value: agentCurrency + checkout.packagePrice.toFixed(2) }
-                    ]
-                });
-
-                if (!confirmed) {
-                    paymentMethodInput.value = 'wallet';
-                    return;
-                }
-
-                setCheckoutButtonsLoading(true, payWithPaystackBtn);
-
-                try {
-                    const response = await fetch(agentBundlePaystackInitEndpoint, {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Accept': 'application/json'
-                        },
-                        credentials: 'same-origin',
-                        body: JSON.stringify({
-                            package_id: parseInt(checkout.packageId, 10),
-                            beneficiary_number: checkout.localPhone,
-                            csrf_token: (purchaseForm.querySelector('input[name="csrf_token"]') || {}).value || '',
-                            gateway: 'paystack'
-                        })
-                    });
-
-                    const result = await response.json().catch(function() {
-                        return null;
-                    });
-
-                    if (!response.ok || !result || result.status !== 'success' || !result.data || !result.data.authorization_url) {
-                        const message = result && result.message ? result.message : 'Unable to initialize Paystack checkout right now.';
-                        throw new Error(message);
-                    }
-
-                    window.location.href = result.data.authorization_url;
-                } catch (error) {
-                    setCheckoutButtonsLoading(false);
-                    paymentMethodInput.value = 'wallet';
-                    setAtCheckoutError(error.message || 'Unable to initialize Paystack checkout right now.', 'danger');
-                }
-            }
-
-            packageCards.forEach(function(card) {
-                const trigger = card.querySelector('[data-select-package]');
-                if (!trigger || !packageSelect) return;
-
-                trigger.addEventListener('click', function() {
-                    openPurchaseModal(this.dataset.selectPackage);
-                });
-            });
-
-            if (packageSelect) {
-                packageSelect.addEventListener('change', function() {
-                    syncSelectedPackageCard(this.value);
-                });
-                syncSelectedPackageCard(packageSelect.value);
-            }
-
-            if (purchaseModalCloseBtn) {
-                purchaseModalCloseBtn.addEventListener('click', closePurchaseModal);
-            }
-            if (purchaseModalBackdrop) {
-                purchaseModalBackdrop.addEventListener('click', closePurchaseModal);
-            }
-            document.addEventListener('keydown', function(event) {
-                if (event.key === 'Escape' && purchaseModal && purchaseModal.classList.contains('is-open')) {
-                    closePurchaseModal();
-                }
-            });
-
-            if (payWithWalletBtn && paymentMethodInput) {
-                payWithWalletBtn.addEventListener('click', function() {
-                    paymentMethodInput.value = 'wallet';
-                });
-            }
-
             if (purchaseForm) {
                 purchaseForm.addEventListener('submit', function(e) {
-                    e.preventDefault();
-                    if (paymentMethodInput) {
-                        paymentMethodInput.value = 'wallet';
-                    }
-                    setAtCheckoutError('', 'danger');
-
-                    const checkout = getSelectedAtPackageDetails(true);
-                    if (!checkout) {
+                    const phoneNumber = document.getElementById('phone_number').value;
+                    const packageId = document.getElementById('package_id').value;
+                    const walletBalance = <?php echo $wallet_balance; ?>;
+                    
+                    if (!phoneNumber || !packageId) {
+                        e.preventDefault();
+                        alert('Please fill in all required fields');
                         return;
                     }
 
+                    const localPhone = normalizeAtLocalPhone(phoneNumber);
+                    if (!isAtLocalPhone(localPhone)) {
+                        e.preventDefault();
+                        alert('Use AirtelTigo numbers only (026/027/056/057) and 10 digits.');
+                        return;
+                    }
+                    
+                    // Get selected package price
+                    const selectedOption = document.querySelector('#package_id option:checked');
+                    const packagePrice = parseFloat(selectedOption.dataset.price || 0);
+                    const paymentMethodSelect = document.getElementById('payment_method');
+                    const paymentMethod = paymentMethodSelect ? paymentMethodSelect.value : 'wallet';
+                    
+                    if (paymentMethod === 'wallet' && packagePrice > walletBalance) {
+                        e.preventDefault();
+                        alert('Insufficient wallet balance. Please top up your wallet.');
+                        return;
+                    }
+
+                    const packageLabel = selectedOption ? selectedOption.textContent.trim() : 'Selected package';
+                    e.preventDefault();
+                    
+                    // Ensure payment_method is set correctly
+                    if (!purchaseForm.querySelector('[name="payment_method"]')) {
+                        // Create hidden payment method input if button-based submission fails
+                        const paymentMethodInput = document.createElement('input');
+                        paymentMethodInput.type = 'hidden';
+                        paymentMethodInput.name = 'payment_method';
+                        paymentMethodInput.value = 'wallet';
+                        purchaseForm.appendChild(paymentMethodInput);
+                    }
+                    
                     openOrderConfirmModal({
                         title: 'Confirm AT Purchase',
                         subtitle: 'Review the order details before submitting.',
                         confirmText: 'Submit Order',
                         details: [
                             { label: 'Network', value: 'AT' },
-                            { label: 'Package', value: checkout.packageLabel },
-                            { label: 'Recipient', value: checkout.localPhone },
-                            { label: 'Amount', value: agentCurrency + checkout.packagePrice.toFixed(2) }
+                            { label: 'Package', value: packageLabel },
+                            { label: 'Recipient', value: localPhone },
+                            { label: 'Payment Method', value: paymentMethod.charAt(0).toUpperCase() + paymentMethod.slice(1) },
+                            { label: 'Amount', value: agentCurrency + packagePrice.toFixed(2) }
                         ]
                     }).then(function(confirmed) {
                         if (!confirmed) return;
-                        setCheckoutButtonsLoading(true, payWithWalletBtn);
+                        const btn = document.getElementById('payWithWalletBtn');
+                        if (btn) {
+                            btn.disabled = true;
+                            btn.innerHTML = '<span class="spinner"></span> Processing...';
+                        }
                         purchaseForm.submit();
                     });
                 });
             }
-
-            if (payWithPaystackBtn) {
-                payWithPaystackBtn.addEventListener('click', function() {
-                    startAgentPaystackCheckout();
-                });
-            }
-
-            if (reopenCheckoutOnLoad && submittedPackageId) {
-                openPurchaseModal(submittedPackageId, { clearError: false, focus: false });
-            }
             
             // Phone number formatting
+            const phoneInput = document.getElementById('phone_number');
             if (phoneInput) {
                 phoneInput.addEventListener('input', function(e) {
                     let value = e.target.value.replace(/\D/g, ''); // Remove non-digits
@@ -1705,9 +1164,7 @@ html[data-theme="dark"] .at-business-page .at-checkout-modal__close {
     <!-- IMMEDIATE Icon Fix for square placeholder issues -->
     <script src="../immediate_icon_fix.js"></script>
 
-<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/phone-paste.js')); ?>"></script>
 <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
-
 

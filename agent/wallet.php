@@ -10,27 +10,8 @@ requireRole('agent');
 $current_user = getCurrentUser();
 $wallet_balance = getWalletBalance($current_user['id']);
 $active_gateway = getActivePaymentGateway();
-$enabled_gateways = getEnabledPaymentGateways();
-$enabled_gateways = array_values(array_filter($enabled_gateways, function ($gateway) {
-    return in_array($gateway, ['paystack', 'moolre'], true);
-}));
-if (empty($enabled_gateways)) {
-    $enabled_gateways = ['paystack'];
-}
-if (!in_array($active_gateway, $enabled_gateways, true)) {
-    $active_gateway = $enabled_gateways[0];
-}
-$gateway_labels = [
-    'paystack' => 'Paystack',
-    'moolre' => 'Moolre'
-];
-$gateway_init_endpoints = [
-    'paystack' => '../api/paystack_init.php',
-    'moolre' => '../api/moolre_init.php'
-];
-$gateway_label = $gateway_labels[$active_gateway] ?? ucfirst($active_gateway);
-$gateway_init_endpoint = $gateway_init_endpoints[$active_gateway] ?? '../api/paystack_init.php';
-$has_gateway_choice = count($enabled_gateways) > 1;
+$gateway_label = $active_gateway === 'moolre' ? 'Moolre' : 'Paystack';
+$gateway_init_endpoint = $active_gateway === 'moolre' ? '../api/moolre_init.php' : '../api/paystack_init.php';
 
 // Get wallet transactions
 $wallet_transactions = [];
@@ -47,24 +28,6 @@ $stmt->execute();
 $result = $stmt->get_result();
 while ($row = $result->fetch_assoc()) {
     $wallet_transactions[] = $row;
-}
-
-$pending_paystack_topups = [];
-$stmt = $db->prepare("
-    SELECT reference, amount, description, created_at
-    FROM transactions
-    WHERE user_id = ?
-      AND transaction_type = 'topup'
-      AND payment_method = 'paystack'
-      AND status = 'pending'
-    ORDER BY created_at DESC
-    LIMIT 5
-");
-$stmt->bind_param("i", $current_user['id']);
-$stmt->execute();
-$result = $stmt->get_result();
-while ($row = $result->fetch_assoc()) {
-    $pending_paystack_topups[] = $row;
 }
 
 $error = '';
@@ -94,7 +57,7 @@ if ($flash) {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Wallet - <?php echo SITE_NAME; ?></title>
-    <?php if (in_array('moolre', $enabled_gateways, true)): ?>
+    <?php if ($active_gateway === 'moolre'): ?>
         <link rel="preconnect" href="https://api.moolre.com">
         <link rel="dns-prefetch" href="https://api.moolre.com">
         <link rel="preconnect" href="https://pos.moolre.com">
@@ -112,7 +75,79 @@ if ($flash) {
                 <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
             </div>
             
-            <?php renderAgentSidebar(); ?>
+            <ul class="sidebar-nav">
+                <li class="nav-section">
+                    <div class="nav-section-title">Dashboard</div>
+                    <div class="nav-item">
+                        <a href="dashboard.php" class="nav-link">
+                            <i class="fas fa-home"></i>
+                            Dashboard
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Services</div>
+                    <div class="nav-item">
+                        <a href="at-business.php" class="nav-link">
+                            <i class="fas fa-mobile-alt"></i>
+                            AT Business
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="mtn-business.php" class="nav-link">
+                            <i class="fas fa-mobile-alt"></i>
+                            MTN Business
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="bulk-mtn.php" class="nav-link">
+                            <i class="fas fa-layer-group"></i>
+                            Bulk MTN
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="result-checker.php" class="nav-link">
+                            <i class="fas fa-award"></i>
+                            Result Checker
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="at-bigtime.php" class="nav-link">
+                            <i class="fas fa-clock"></i>
+                            AT Big Time Bundles
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Transaction</div>
+                    <div class="nav-item">
+                        <a href="transactions.php" class="nav-link">
+                            <i class="fas fa-money-bill-wave"></i>
+                            Transactions
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="histories.php" class="nav-link">
+                            <i class="fas fa-history"></i>
+                            Data Histories
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="reference.php" class="nav-link">
+                            <i class="fas fa-search"></i>
+                            Reference
+                        </a>
+                    </div>
+                </li>
+            </ul>
+                    <div class="nav-item">
+                        <a href="withdraw-profit.php" class="nav-link">
+                            <i class="fas fa-wallet"></i>
+                            Withdraw Profit
+                        </a>
+                    </div>
         </nav>
         
         <!-- Main Content -->
@@ -163,6 +198,9 @@ if ($flash) {
                     </div>
                 </div>
             </header>
+
+<?php echo renderNotificationSlides('agents'); ?>
+
             
             <!-- Dashboard Content -->
             <div class="dashboard-content">
@@ -203,62 +241,6 @@ if ($flash) {
                                     <?php echo htmlspecialchars($success); ?>
                                 </div>
                             <?php endif; ?>
-
-                            <?php if (!empty($pending_paystack_topups)): ?>
-                                <div class="alert alert-warning" id="pendingPaystackAlert" style="margin-bottom: 1.5rem;">
-                                    <div style="display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; flex-wrap: wrap;">
-                                        <div>
-                                            <strong>Verify Missing Payment</strong>
-                                            <div style="margin-top: 0.35rem;">
-                                                If Paystack debited you but your wallet was not credited, the system can recheck your pending Paystack top-up automatically.
-                                            </div>
-                                        </div>
-                                        <button type="button" class="btn btn-outline verify-missing-payment-btn" id="verifyLatestPendingPaymentBtn" data-reference="<?php echo htmlspecialchars($pending_paystack_topups[0]['reference']); ?>">
-                                            <i class="fas fa-sync-alt"></i> Verify Latest Payment
-                                        </button>
-                                    </div>
-                                    <div class="form-group" style="margin-top: 1rem; margin-bottom: 0;">
-                                        <label for="latestPendingPaystackReference" class="form-label">Latest Pending Paystack Reference</label>
-                                        <input
-                                            type="text"
-                                            id="latestPendingPaystackReference"
-                                            class="form-control"
-                                            value="<?php echo htmlspecialchars($pending_paystack_topups[0]['reference']); ?>"
-                                            readonly
-                                        >
-                                        <small class="text-muted">This field is filled automatically from pending Paystack top-ups created on this agent account.</small>
-                                    </div>
-                                    <div class="table-responsive" style="margin-top: 1rem;">
-                                        <table class="table">
-                                            <thead>
-                                                <tr>
-                                                    <th>Reference</th>
-                                                    <th>Amount</th>
-                                                    <th>Started</th>
-                                                    <th>Action</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                <?php foreach ($pending_paystack_topups as $pending_topup): ?>
-                                                    <tr>
-                                                        <td><code><?php echo htmlspecialchars($pending_topup['reference']); ?></code></td>
-                                                        <td><?php echo formatCurrency((float) $pending_topup['amount']); ?></td>
-                                                        <td><small class="text-muted"><?php echo date('M j, Y g:i A', strtotime($pending_topup['created_at'])); ?></small></td>
-                                                        <td>
-                                                            <button type="button" class="btn btn-outline verify-missing-payment-btn" data-reference="<?php echo htmlspecialchars($pending_topup['reference']); ?>">
-                                                                Verify Missing Payment
-                                                            </button>
-                                                        </td>
-                                                    </tr>
-                                                <?php endforeach; ?>
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                    <div id="verifyMissingPaymentStatus" class="text-muted" style="margin-top: 0.75rem;">
-                                        Pending references shown here were initiated from this agent account only.
-                                    </div>
-                                </div>
-                            <?php endif; ?>
                             
                             <!-- Payment Method Selection -->
                             <div class="payment-method-selection" id="paymentMethodSelection">
@@ -269,7 +251,7 @@ if ($flash) {
                                             <i class="fas fa-credit-card"></i>
                                         </div>
                                         <div class="method-details">
-                                            <h5>Online Payment</h5>
+                                            <h5><?php echo htmlspecialchars($gateway_label); ?> Payment</h5>
                                             <p>Pay instantly with card, bank transfer, or mobile money</p>
                                         </div>
                                         <div class="method-status">
@@ -296,21 +278,6 @@ if ($flash) {
                                 <form method="POST" action="" id="topupForm">
                                     <input type="hidden" name="action" value="topup">
                                     <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrf_token); ?>">
-                                    <?php if ($has_gateway_choice): ?>
-                                        <div class="form-group">
-                                            <label for="gatewayChoice" class="form-label">Payment Gateway</label>
-                                            <select id="gatewayChoice" name="gateway_choice" class="form-control" required>
-                                                <?php foreach ($enabled_gateways as $gateway): ?>
-                                                    <option value="<?php echo htmlspecialchars($gateway); ?>" <?php echo $gateway === $active_gateway ? 'selected' : ''; ?>>
-                                                        <?php echo htmlspecialchars($gateway_labels[$gateway] ?? ucfirst($gateway)); ?>
-                                                    </option>
-                                                <?php endforeach; ?>
-                                            </select>
-                                            <small class="text-muted">Choose your preferred gateway for this top-up.</small>
-                                        </div>
-                                    <?php else: ?>
-                                        <input type="hidden" id="gatewayChoice" name="gateway_choice" value="<?php echo htmlspecialchars($active_gateway); ?>">
-                                    <?php endif; ?>
                                     
                                     <div class="form-group">
                                         <label for="amount" class="form-label">Amount (<?php echo CURRENCY; ?>)</label>
@@ -401,10 +368,10 @@ if ($flash) {
                                 </div>
                                 <h4 style="margin-bottom: 1rem;">Quick Top-up</h4>
                                 <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(80px, 1fr)); gap: 0.5rem;">
-                                    <button class="btn btn-outline quick-topup" data-amount="10" style="padding: 0.5rem;">GH₵ 10</button>
-                                    <button class="btn btn-outline quick-topup" data-amount="20" style="padding: 0.5rem;">GH₵ 20</button>
-                                    <button class="btn btn-outline quick-topup" data-amount="50" style="padding: 0.5rem;">GH₵ 50</button>
-                                    <button class="btn btn-outline quick-topup" data-amount="100" style="padding: 0.5rem;">GH₵ 100</button>
+                                    <button class="btn btn-outline quick-topup" data-amount="10" style="padding: 0.5rem;"><?php echo CURRENCY; ?> 10</button>
+                                    <button class="btn btn-outline quick-topup" data-amount="20" style="padding: 0.5rem;"><?php echo CURRENCY; ?> 20</button>
+                                    <button class="btn btn-outline quick-topup" data-amount="50" style="padding: 0.5rem;"><?php echo CURRENCY; ?> 50</button>
+                                    <button class="btn btn-outline quick-topup" data-amount="100" style="padding: 0.5rem;"><?php echo CURRENCY; ?> 100</button>
                                 </div>
                             </div>
                         </div>
@@ -486,11 +453,11 @@ if ($flash) {
         .payment-method-card:hover {
             border-color: var(--primary-color);
             transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 12px rgba(46, 41, 78, 0.1);
         }
         .payment-method-card.selected {
             border-color: var(--primary-color);
-            background-color: var(--primary-color-light, rgba(0,123,255,0.1));
+            background-color: var(--primary-color-light, rgba(84, 19, 136, 0.1));
         }
         .method-icon {
             font-size: 2rem;
@@ -518,7 +485,7 @@ if ($flash) {
             margin-top: 2rem;
         }
         .payment-details {
-            background: var(--widget-bg, #f8f9fa);
+            background: var(--widget-bg, #F1E9DA);
             border: 1px solid var(--border-color);
             border-radius: 8px;
             padding: 1.5rem;
@@ -527,17 +494,17 @@ if ($flash) {
         
         /* Dark mode specific styling */
         [data-theme="dark"] .payment-details {
-            background: var(--widget-bg, #2a2a2a);
-            border: 1px solid var(--border-color, #444);
-            color: var(--text-color, #f0f0f0);
+            background: var(--widget-bg, #2E294E);
+            border: 1px solid var(--border-color, #2E294E);
+            color: var(--text-color, #F1E9DA);
         }
         
         [data-theme="dark"] .detail-label {
-            color: var(--text-color, #f0f0f0);
+            color: var(--text-color, #F1E9DA);
         }
         
         [data-theme="dark"] .detail-value {
-            color: var(--primary-color, #4dabf7);
+            color: var(--primary-color, #F1E9DA);
         }
         .payment-detail-item {
             display: flex;
@@ -570,173 +537,10 @@ if ($flash) {
 
     <script>
         const activeGateway = '<?php echo $active_gateway; ?>';
-        const enabledGateways = <?php echo json_encode($enabled_gateways); ?>;
-        const gatewayLabels = <?php echo json_encode($gateway_labels); ?>;
-        const gatewayInitUrls = <?php echo json_encode($gateway_init_endpoints); ?>;
-        const pendingPaystackTopups = <?php echo json_encode($pending_paystack_topups); ?>;
-        const csrfToken = '<?php echo htmlspecialchars($csrf_token, ENT_QUOTES); ?>';
-        const gatewayChoiceSelect = document.getElementById('gatewayChoice');
-        const latestPendingPaystackReferenceInput = document.getElementById('latestPendingPaystackReference');
-        const verifyMissingPaymentStatus = document.getElementById('verifyMissingPaymentStatus');
-        const verifyMissingPaymentButtons = Array.from(document.querySelectorAll('.verify-missing-payment-btn'));
-        const pendingPaystackReferenceSet = new Set(pendingPaystackTopups.map(item => String(item.reference || '')));
-        let availableMethods = {
-            paystack: enabledGateways.includes('paystack'),
-            moolre: enabledGateways.includes('moolre'),
-            gateway: enabledGateways.length > 0,
-            topup_request: true
-        };
+        const gatewayLabel = '<?php echo htmlspecialchars($gateway_label); ?>';
+        const gatewayInitUrl = '<?php echo $gateway_init_endpoint; ?>';
+        let availableMethods = { [activeGateway]: true, topup_request: true };
         let selectedMethod = null;
-
-        function getSelectedGateway() {
-            if (gatewayChoiceSelect && gatewayChoiceSelect.value) {
-                return gatewayChoiceSelect.value;
-            }
-            return activeGateway;
-        }
-
-        function getGatewayLabel(gateway) {
-            return gatewayLabels[gateway] || gateway || 'Gateway';
-        }
-
-        function getGatewayInitUrl(gateway) {
-            return gatewayInitUrls[gateway] || gatewayInitUrls[activeGateway] || '';
-        }
-
-        function updateGatewayButtonLabel() {
-            const btn = document.getElementById('topupBtn');
-            if (!btn) return;
-            const selectedGateway = getSelectedGateway();
-            btn.innerHTML = '<i class="fas fa-credit-card"></i> Pay with ' + getGatewayLabel(selectedGateway);
-        }
-
-        function setVerifyMissingPaymentStatus(message, isError = false) {
-            if (!verifyMissingPaymentStatus) {
-                return;
-            }
-            verifyMissingPaymentStatus.textContent = message;
-            verifyMissingPaymentStatus.style.color = isError ? 'var(--accent-red)' : 'var(--text-muted)';
-        }
-
-        function setLatestPendingReference(reference) {
-            if (!latestPendingPaystackReferenceInput) {
-                return;
-            }
-            latestPendingPaystackReferenceInput.value = String(reference || '').trim();
-        }
-
-        function setVerifyButtonsBusy(reference, isBusy) {
-            verifyMissingPaymentButtons.forEach(function(button) {
-                const buttonReference = String(button.dataset.reference || '');
-                if (reference !== '' && buttonReference !== reference) {
-                    return;
-                }
-                if (isBusy) {
-                    button.dataset.originalHtml = button.dataset.originalHtml || button.innerHTML;
-                    button.disabled = true;
-                    button.innerHTML = '<span class="spinner"></span> Verifying...';
-                } else {
-                    button.disabled = false;
-                    if (button.dataset.originalHtml) {
-                        button.innerHTML = button.dataset.originalHtml;
-                    }
-                }
-            });
-        }
-
-        async function verifyMissingPayment(reference, options = {}) {
-            reference = String(reference || '').trim();
-            if (!reference) {
-                setVerifyMissingPaymentStatus('No pending Paystack reference was found to verify.', true);
-                return;
-            }
-            if (!pendingPaystackReferenceSet.has(reference)) {
-                setVerifyMissingPaymentStatus('Only pending references created from this agent account can be verified here.', true);
-                return;
-            }
-
-            const isAutomatic = !!options.automatic;
-            setVerifyButtonsBusy(reference, true);
-            setLatestPendingReference(reference);
-            setVerifyMissingPaymentStatus(
-                isAutomatic
-                    ? 'Checking your latest Paystack payment automatically...'
-                    : 'Verifying your Paystack payment...'
-            );
-
-            try {
-                const res = await fetch('../api/verify_missing_paystack_payment.php', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRF-Token': csrfToken
-                    },
-                    cache: 'no-store',
-                    body: JSON.stringify({
-                        reference: reference,
-                        csrf_token: csrfToken
-                    })
-                });
-                const data = await res.json();
-
-                if (!res.ok || !data || data.status !== 'success') {
-                    const message = data && data.message ? data.message : 'Unable to verify this payment right now.';
-                    throw new Error(message);
-                }
-
-                if (data.next_url) {
-                    sessionStorage.setItem('agentPendingPaystackReference', reference);
-                    window.location.href = data.next_url;
-                    return;
-                }
-
-                if (data.transaction_status === 'pending') {
-                    setVerifyMissingPaymentStatus(data.message || 'This payment is still pending on Paystack. If you just paid, wait a moment and try again.');
-                } else if (data.transaction_status === 'failed') {
-                    setVerifyMissingPaymentStatus(data.message || 'Paystack reported this transaction as unsuccessful.', true);
-                    sessionStorage.removeItem('agentPendingPaystackReference');
-                } else if (data.transaction_status === 'success') {
-                    setVerifyMissingPaymentStatus(data.message || 'Payment was already processed.');
-                    sessionStorage.removeItem('agentPendingPaystackReference');
-                    if (data.redirect_path) {
-                        window.location.href = '<?php echo SITE_URL; ?>' + data.redirect_path;
-                    } else {
-                        window.location.reload();
-                    }
-                    return;
-                } else {
-                    setVerifyMissingPaymentStatus(data.message || 'Verification completed, but the payment is not yet ready to be credited.');
-                }
-            } catch (err) {
-                setVerifyMissingPaymentStatus(err.message || 'Unable to verify this payment right now.', true);
-            } finally {
-                setVerifyButtonsBusy(reference, false);
-            }
-        }
-
-        function initializeMissingPaymentVerification() {
-            if (!verifyMissingPaymentButtons.length) {
-                sessionStorage.removeItem('agentPendingPaystackReference');
-                return;
-            }
-
-            verifyMissingPaymentButtons.forEach(function(button) {
-                button.dataset.originalHtml = button.innerHTML;
-                button.addEventListener('click', function() {
-                    verifyMissingPayment(button.dataset.reference || '');
-                });
-            });
-
-            const storedReference = String(sessionStorage.getItem('agentPendingPaystackReference') || '').trim();
-            const latestReference = pendingPaystackTopups.length > 0 ? String(pendingPaystackTopups[0].reference || '') : '';
-            const referenceToVerify = pendingPaystackReferenceSet.has(storedReference) ? storedReference : latestReference;
-
-            if (referenceToVerify) {
-                setLatestPendingReference(referenceToVerify);
-                sessionStorage.setItem('agentPendingPaystackReference', referenceToVerify);
-                verifyMissingPayment(referenceToVerify, { automatic: true });
-            }
-        }
         
         // Load available payment methods
         async function loadPaymentMethods() {
@@ -757,32 +561,21 @@ if ($flash) {
                 const data = await res.json();
                 console.log('Payment methods response:', data);
                 if (data.status === 'success') {
-                    availableMethods = data.payment_methods || {};
-                    availableMethods.gateway = !!(availableMethods.paystack || availableMethods.moolre);
+                    availableMethods = data.payment_methods;
                     console.log('Available methods:', availableMethods);
                     updateMethodAvailability();
                 } else {
                     console.error('Failed to load payment methods:', data.message);
                     // Use defaults if API fails but user is authenticated
                     console.log('Using default payment methods as fallback');
-                    availableMethods = {
-                        paystack: enabledGateways.includes('paystack'),
-                        moolre: enabledGateways.includes('moolre'),
-                        gateway: enabledGateways.length > 0,
-                        topup_request: true
-                    };
+                    availableMethods = { [activeGateway]: true, topup_request: true };
                     updateMethodAvailability();
                 }
             } catch (err) {
                 console.error('Failed to load payment methods:', err);
                 // Use defaults if API fails but user appears to be authenticated
                 console.log('Using default payment methods due to error:', err.message);
-                availableMethods = {
-                    paystack: enabledGateways.includes('paystack'),
-                    moolre: enabledGateways.includes('moolre'),
-                    gateway: enabledGateways.length > 0,
-                    topup_request: true
-                };
+                availableMethods = { [activeGateway]: true, topup_request: true };
                 updateMethodAvailability();
             }
         }
@@ -801,7 +594,7 @@ if ($flash) {
             gatewayCard.classList.remove('disabled');
             topupCard.classList.remove('disabled');
             
-            if (!availableMethods.gateway) {
+            if (!availableMethods[activeGateway]) {
                 console.log('Disabling gateway method');
                 gatewayCard.classList.add('disabled');
             }
@@ -810,23 +603,8 @@ if ($flash) {
                 console.log('Disabling topup request method');
                 topupCard.classList.add('disabled');
             }
-
-            if (gatewayChoiceSelect) {
-                Array.from(gatewayChoiceSelect.options).forEach(function(option) {
-                    const gateway = String(option.value || '');
-                    const enabled = !!availableMethods[gateway];
-                    option.disabled = !enabled;
-                });
-                if (gatewayChoiceSelect.options[gatewayChoiceSelect.selectedIndex] && gatewayChoiceSelect.options[gatewayChoiceSelect.selectedIndex].disabled) {
-                    const fallback = Array.from(gatewayChoiceSelect.options).find(function(option) { return !option.disabled; });
-                    if (fallback) {
-                        gatewayChoiceSelect.value = fallback.value;
-                    }
-                }
-                updateGatewayButtonLabel();
-            }
             
-            console.log('Method availability updated. Gateway enabled:', availableMethods.gateway, 'Topup enabled:', availableMethods.topup_request);
+            console.log('Method availability updated. Gateway enabled:', availableMethods[activeGateway], 'Topup enabled:', availableMethods.topup_request);
         }
         
         function selectPaymentMethod(method) {
@@ -842,7 +620,7 @@ if ($flash) {
             }
             
             // Check if method card is disabled
-            const methodCardId = method === 'gateway' ? 'gatewayMethod' : 'topupRequestMethod';
+            const methodCardId = method === activeGateway ? 'gatewayMethod' : 'topupRequestMethod';
             const methodCard = document.getElementById(methodCardId);
             if (!methodCard) {
                 console.error('Method card not found:', methodCardId);
@@ -873,7 +651,7 @@ if ($flash) {
             }
             
             // Show appropriate form
-            if (method === 'gateway') {
+            if (method === activeGateway) {
                 console.log('Showing gateway form');
                 const gatewayForm = document.getElementById('gatewayForm');
                 if (gatewayForm) {
@@ -938,7 +716,7 @@ if ($flash) {
                     e.preventDefault();
                     e.stopPropagation();
                     console.log('Gateway card clicked');
-                    selectPaymentMethod('gateway');
+                    selectPaymentMethod(activeGateway);
                 });
                 console.log('Gateway card event listener added');
             } else {
@@ -1041,11 +819,6 @@ if ($flash) {
         document.addEventListener('DOMContentLoaded', function() {
             console.log('=== Agent Wallet DOM Content Loaded ===');
             initTheme();
-            if (gatewayChoiceSelect) {
-                gatewayChoiceSelect.addEventListener('change', updateGatewayButtonLabel);
-            }
-            updateGatewayButtonLabel();
-            initializeMissingPaymentVerification();
             loadPaymentMethods();
             initializeEventHandlers();
             
@@ -1062,7 +835,7 @@ if ($flash) {
             document.querySelectorAll('.quick-topup').forEach(button => {
                 button.addEventListener('click', function() {
                     const amount = this.dataset.amount;
-                    if (selectedMethod === 'gateway') {
+                    if (selectedMethod === activeGateway) {
                         document.getElementById('amount').value = amount;
                     } else if (selectedMethod === 'topup_request') {
                         document.getElementById('requestAmount').value = amount;
@@ -1091,36 +864,24 @@ if ($flash) {
             btn.innerHTML = '<span class="spinner"></span> Redirecting...';
             
             try {
-                const selectedGateway = getSelectedGateway();
-                const gatewayInitUrl = getGatewayInitUrl(selectedGateway);
-                if (!gatewayInitUrl) {
-                    alert('No payment gateway endpoint is configured.');
-                    btn.disabled = false;
-                    updateGatewayButtonLabel();
-                    return;
-                }
-
                 const res = await fetch(gatewayInitUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ amount: amount, type: 'agent_wallet_topup', gateway: selectedGateway })
+                    body: JSON.stringify({ amount: amount, type: 'agent_wallet_topup' })
                 });
                 const data = await res.json();
                 
                 if (data.status === 'success' && data.data && data.data.authorization_url) {
-                    if (selectedGateway === 'paystack' && data.data.reference) {
-                        sessionStorage.setItem('agentPendingPaystackReference', data.data.reference);
-                    }
                     window.location.href = data.data.authorization_url;
                 } else {
                     alert(data.message || 'Failed to initialize payment.');
                     btn.disabled = false;
-                    updateGatewayButtonLabel();
+                    btn.innerHTML = '<i class="fas fa-credit-card"></i> Pay with ' + gatewayLabel;
                 }
             } catch (err) {
                 alert('Network error. Please try again.');
                 btn.disabled = false;
-                updateGatewayButtonLabel();
+                btn.innerHTML = '<i class="fas fa-credit-card"></i> Pay with ' + gatewayLabel;
             }
         });
         
@@ -1189,8 +950,9 @@ if ($flash) {
     </script>
     <!-- IMMEDIATE Icon Fix for square placeholder issues -->
     <script src="../immediate_icon_fix.js"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
-
 
 

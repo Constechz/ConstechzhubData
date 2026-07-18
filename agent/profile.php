@@ -166,7 +166,64 @@ $store = $stmt->get_result()->fetch_assoc();
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-        <?php renderAgentSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-item">
+                <a class="nav-link" href="dashboard.php">
+                    <i class="fas fa-home"></i> Dashboard
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="wallet.php">
+                    <i class="fas fa-wallet"></i> Wallet
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="customers.php">
+                    <i class="fas fa-users"></i> Customers
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="commission.php">
+                    <i class="fas fa-percentage"></i> Commission
+                </a>
+            </li>
+        <li class="nav-item"><a class="nav-link" href="withdraw-profit.php"><i class="fas fa-wallet"></i> Withdraw Profit</a></li>
+            <li class="nav-item">
+                <a class="nav-link" href="histories.php">
+                    <i class="fas fa-history"></i> History
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="pricing.php">
+                    <i class="fas fa-tags"></i> Pricing
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="result-checker.php">
+                    <i class="fas fa-award"></i> Result Checker
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="support.php">
+                    <i class="fas fa-life-ring"></i> Support
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="api-access.php">
+                    <i class="fas fa-code"></i> API Access
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link" href="settings.php">
+                    <i class="fas fa-cog"></i> Settings
+                </a>
+            </li>
+            <li class="nav-item">
+                <a class="nav-link active" href="profile.php">
+                    <i class="fas fa-user"></i> Profile
+                </a>
+            </li>
+        </ul>
     </nav>
 
     <!-- Main Content -->
@@ -201,6 +258,9 @@ $store = $stmt->get_result()->fetch_assoc();
                 </div>
             </div>
         </header>
+
+<?php echo renderNotificationSlides('agents'); ?>
+
         
         <!-- Dashboard Content -->
         <div class="dashboard-content">
@@ -350,13 +410,13 @@ $store = $stmt->get_result()->fetch_assoc();
             </div>
             
             <!-- Delete Account Section -->
-            <div class="card" style="margin-top: 2rem; border-color: #dc3545;">
-                <div class="card-header" style="background-color: #f8d7da; border-bottom-color: #dc3545;">
-                    <h5 style="color: #721c24; margin: 0;"><i class="fas fa-exclamation-triangle"></i> Danger Zone</h5>
+            <div class="card" style="margin-top: 2rem; border-color: #D90368;">
+                <div class="card-header" style="background-color: #F1E9DA; border-bottom-color: #D90368;">
+                    <h5 style="color: #2E294E; margin: 0;"><i class="fas fa-exclamation-triangle"></i> Danger Zone</h5>
                 </div>
                 <div class="card-body">
-                    <h6 style="color: #dc3545;">Delete Account</h6>
-                    <p style="color: #6c757d; margin-bottom: 1rem;">Once you delete your account, there is no going back. This will remove all your customers, orders, and data.</p>
+                    <h6 style="color: #D90368;">Delete Account</h6>
+                    <p style="color: #541388; margin-bottom: 1rem;">Once you delete your account, there is no going back. This will remove all your customers, orders, and data.</p>
                     <button type="button" class="btn btn-danger" onclick="showDeleteAccountModal()">
                         <i class="fas fa-trash"></i> Delete Account
                     </button>
@@ -370,8 +430,8 @@ $store = $stmt->get_result()->fetch_assoc();
 <div class="modal fade" id="deleteAccountModal" tabindex="-1" style="display: none;">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header" style="border-bottom-color: #dc3545;">
-                <h5 class="modal-title" style="color: #dc3545;"><i class="fas fa-exclamation-triangle"></i> Delete Account</h5>
+            <div class="modal-header" style="border-bottom-color: #D90368;">
+                <h5 class="modal-title" style="color: #D90368;"><i class="fas fa-exclamation-triangle"></i> Delete Account</h5>
                 <button type="button" class="btn-close" onclick="hideDeleteAccountModal()"></button>
             </div>
             <div class="modal-body">
@@ -544,10 +604,10 @@ $store = $stmt->get_result()->fetch_assoc();
         }
     }
 </script>
-    <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/phone-paste.js')); ?>"></script>
     <!-- IMMEDIATE Icon Fix for square placeholder issues -->
     <script src="../immediate_icon_fix.js"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
-
 

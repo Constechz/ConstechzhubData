@@ -243,8 +243,8 @@ style.textContent = `
         position: absolute;
         top: 50%;
         transform: translateY(-50%);
-        background: rgba(0, 0, 0, 0.7);
-        color: white;
+        background: rgba(46, 41, 78, 0.7);
+        color: #F1E9DA;
         padding: 0.5rem;
         border-radius: 50%;
         font-size: 0.8rem;

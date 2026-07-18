@@ -14,7 +14,49 @@ define('DB_PASS', 'your_db_password'); // Your database password from hosting pr
 define('DB_NAME', 'your_database_name'); // Your database name (e.g., ereddaco_bigdata)
 
 // Site Configuration - UPDATE FOR YOUR LIVE DOMAIN
-define('SITE_NAME', 'Constechzhub');
+if (!function_exists('dbh_resolve_site_name')) {
+    function dbh_resolve_site_name($fallback = 'Constechzhub') {
+        $fallback = trim((string) $fallback);
+        if ($fallback === '') {
+            $fallback = 'Constechzhub';
+        }
+
+        if (!class_exists('mysqli')) {
+            return $fallback;
+        }
+
+        $conn = @new mysqli(DB_HOST, DB_USER, DB_PASS, DB_NAME);
+        if (!$conn || $conn->connect_errno) {
+            return $fallback;
+        }
+
+        $resolved = '';
+        try {
+            $queries = [
+                "SELECT setting_value FROM seo_settings WHERE setting_name = 'site_name' LIMIT 1",
+                "SELECT setting_value FROM settings WHERE setting_key = 'site_name' LIMIT 1",
+            ];
+
+            foreach ($queries as $sql) {
+                $result = @$conn->query($sql);
+                if ($result && $row = $result->fetch_assoc()) {
+                    $value = trim((string) ($row['setting_value'] ?? ''));
+                    if ($value !== '') {
+                        $resolved = $value;
+                        break;
+                    }
+                }
+            }
+        } catch (Throwable $e) {
+            $resolved = '';
+        }
+
+        @$conn->close();
+        return $resolved !== '' ? $resolved : $fallback;
+    }
+}
+
+define('SITE_NAME', dbh_resolve_site_name('Constechzhub'));
 define('SITE_URL', 'https://yourdomain.com'); // Your live domain URL
 define('ADMIN_EMAIL', 'admin@yourdomain.com'); // Your admin email
 
@@ -32,21 +74,19 @@ $__DEFAULT_MOOLRE_WEBHOOK_SECRET = '';
 $__DEFAULT_PAYMENT_GATEWAY = 'paystack';
 
 // Theme Colors
-define('DARK_BG', '#1C1C1C');
-define('PRIMARY_COLOR', '#E63B2C');
-define('SECONDARY_COLOR', '#EA796E');
-define('SUCCESS_COLOR', '#73ED3F');
-define('BRAND_COLOR', '#8B5CF6');
+define('DARK_BG', '#2E294E');
+define('PRIMARY_COLOR', '#D90368');
+define('SECONDARY_COLOR', '#FFD400');
+define('SUCCESS_COLOR', '#541388');
+define('BRAND_COLOR', '#541388');
 
 // User Roles
 define('ROLE_ADMIN', 'admin');
-define('ROLE_SUPER_ADMIN', 'super_admin');
 define('ROLE_AGENT', 'agent');
 define('ROLE_CUSTOMER', 'customer');
-define('ROLE_VIP', 'vip');
 
 // Default Currency
-define('CURRENCY', 'GH₵');
+define('CURRENCY', 'GH' . "\u{20B5}");
 define('CURRENCY_CODE', 'GHS');
 
 // File Upload Settings
@@ -80,12 +120,6 @@ if (function_exists('ensureOrderIssueTables')) {
 if (function_exists('ensurePaymentGatewaySchema')) {
     ensurePaymentGatewaySchema();
 }
-if (function_exists('ensurePricingProfilesSchema')) {
-    ensurePricingProfilesSchema();
-}
-if (function_exists('ensureAccountTypeSchema')) {
-    ensureAccountTypeSchema();
-}
 
 // Helper function to get current user
 function getCurrentUser() {
@@ -106,31 +140,40 @@ function getCurrentUser() {
     }
     $result = $stmt->get_result();
     
-    $user = $result->fetch_assoc();
-    if ($user && function_exists('dbhNormalizeUserDisplayName')) {
-        $user = dbhNormalizeUserDisplayName($user);
-    }
-
-    return $user ?: null;
+    return $result->fetch_assoc() ?: null;
 }
 
 // Helper function to get dynamic site name from SEO settings
-function getSiteName($default = 'Constechzhub') {
+function getSiteName($default = SITE_NAME) {
     global $db;
     
     try {
-        $stmt = $db->prepare("SELECT setting_value FROM seo_settings WHERE setting_name = 'site_name'");
+        $stmt = $db->prepare("SELECT setting_value FROM seo_settings WHERE setting_name = 'site_name' LIMIT 1");
         $stmt->execute();
         $result = $stmt->get_result();
         
         if ($row = $result->fetch_assoc()) {
-            return $row['setting_value'] ?: $default;
+            $name = trim((string) ($row['setting_value'] ?? ''));
+            if ($name !== '') {
+                return $name;
+            }
         }
-        
-        return $default;
+
+        $stmt = $db->prepare("SELECT setting_value FROM settings WHERE setting_key = 'site_name' LIMIT 1");
+        if ($stmt && $stmt->execute()) {
+            $result = $stmt->get_result();
+            if ($row = $result->fetch_assoc()) {
+                $name = trim((string) ($row['setting_value'] ?? ''));
+                if ($name !== '') {
+                    return $name;
+                }
+            }
+        }
+
+        return $default ?: SITE_NAME;
     } catch (Exception $e) {
         error_log("Site Name Error: " . $e->getMessage());
-        return $default;
+        return $default ?: SITE_NAME;
     }
 }
 
@@ -230,3 +273,4 @@ try {
     if (!defined('PAYMENT_GATEWAY_ACTIVE')) define('PAYMENT_GATEWAY_ACTIVE', $__DEFAULT_PAYMENT_GATEWAY);
 }
 ?>
+

@@ -1,6 +1,7 @@
 <?php
 require_once '../config/config.php';
 require_once '../includes/email.php';
+require_once '../includes/mnotify_sms.php';
 
 if (function_exists('ensureTopupSettingsTable')) {
     ensureTopupSettingsTable();
@@ -101,7 +102,6 @@ function sendTopupRequestNotification($requestId, $recipientEmail, $recipientPho
     
     $emailSent = false;
     $smsSent = false;
-    $emailError = '';
     
     // Email notification
     $subject = "New Topup Request - " . $requestData['request_id'];
@@ -120,21 +120,37 @@ function sendTopupRequestNotification($requestId, $recipientEmail, $recipientPho
     ";
     
     try {
-        if (!empty($recipientEmail) && sendEmail($recipientEmail, $subject, $message)) {
+        if (sendEmail($recipientEmail, $subject, $message)) {
             $emailSent = true;
         }
-        if (empty($recipientEmail)) {
-            $emailError = 'Recipient email not found';
+    } catch (Exception $e) {
+        error_log("Email notification failed: " . $e->getMessage());
+    }
+    
+    // SMS notification (if enabled)
+    try {
+        // Check if SMS is enabled for topup notifications (mNotify with legacy fallback)
+        $smsProviderEnabled = getSMSSetting('mnotify_enabled', getSMSSetting('kivalo_enabled', '0')) === '1';
+        $smsEnabled = $smsProviderEnabled &&
+                      getSMSSetting('sms_notifications_enabled', '0') === '1' && 
+                      getSMSSetting('sms_notification_topup_request', '1') === '1';
+        
+        if ($smsEnabled && !empty($recipientPhone)) {
+            $smsMessage = "New topup request #{$requestData['request_id']} for \${$requestData['amount']} from {$requestData['user_email']}. Please review and process. - " . SITE_NAME;
+            
+            $smsResult = sendSMS($recipientPhone, $smsMessage, 'general');
+            if ($smsResult['success']) {
+                $smsSent = true;
+            }
         }
     } catch (Exception $e) {
-        $emailError = $e->getMessage();
-        error_log("Email notification failed: " . $e->getMessage());
+        error_log("SMS notification failed: " . $e->getMessage());
     }
     
     // Log notification attempts
     $stmt = $db->prepare("INSERT INTO topup_request_notifications (request_id, notification_type, recipient_email, recipient_phone, status, sms_sent, error_message) VALUES (?, 'email', ?, ?, ?, ?, ?)");
     $emailStatus = $emailSent ? 'sent' : 'failed';
-    $errorMsg = $emailSent ? '' : ($emailError !== '' ? $emailError : 'Failed to send email');
+    $errorMsg = $emailSent ? '' : 'Failed to send email';
     $smsSentInt = $smsSent ? 1 : 0; // Convert boolean to integer
     $stmt->bind_param('ssssis', $requestId, $recipientEmail, $recipientPhone, $emailStatus, $smsSentInt, $errorMsg);
     $stmt->execute();

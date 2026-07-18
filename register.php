@@ -542,13 +542,72 @@ function generateStoreSlug($store_name) {
     <link rel="preload" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>" as="style" onload="this.onload=null;this.rel='stylesheet'">
     <noscript><link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>"></noscript>
     <link rel="manifest" href="manifest.php">
-    <meta name="theme-color" content="#6366f1">
+    <meta name="theme-color" content="#541388">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
 </head>
 <body class="register-body">
     <div class="register-shell">
+        <aside class="register-hero">
+            <div class="hero-card">
+                <div class="brand-pill">
+                    <i class="fas fa-bolt"></i>
+                    <span><?php echo htmlspecialchars(getSiteName()); ?></span>
+                </div>
+                <h1>Launch your data business in minutes.</h1>
+                <p class="hero-lead">Sell bundles, track orders, and manage payments from one sleek dashboard built for growth.</p>
+                <div class="hero-features">
+                    <div class="feature">
+                        <span class="feature-icon"><i class="fas fa-shield-alt"></i></span>
+                        <div>
+                            <h4>Secure payments</h4>
+                            <p><?php echo htmlspecialchars($gateway_label); ?>-ready checkout and safe wallet credits.</p>
+                        </div>
+                    </div>
+                    <div class="feature">
+                        <span class="feature-icon"><i class="fas fa-store"></i></span>
+                        <div>
+                            <h4>Branded store</h4>
+                            <p>Get a shareable store link with instant setup.</p>
+                        </div>
+                    </div>
+                    <div class="feature">
+                        <span class="feature-icon"><i class="fas fa-chart-line"></i></span>
+                        <div>
+                            <h4>Live insights</h4>
+                            <p>Track orders, revenue, and activity in real time.</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="hero-steps">
+                    <div class="hero-step <?php echo $step >= '1' ? 'active' : ''; ?>">
+                        <span>1</span>
+                        <div>
+                            <strong>Account</strong>
+                            <small>Basics</small>
+                        </div>
+                    </div>
+                    <div class="hero-step <?php echo $step >= '2' ? 'active' : ''; ?>">
+                        <span>2</span>
+                        <div>
+                            <strong>Store</strong>
+                            <small>Branding</small>
+                        </div>
+                    </div>
+                    <div class="hero-step <?php echo $step >= '3' ? 'active' : ''; ?>">
+                        <span>3</span>
+                        <div>
+                            <strong>Payment</strong>
+                            <small>Activate</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="hero-footnote">
+                    <i class="fas fa-lock"></i>
+                    SSL-secured onboarding with instant access.
+                </div>
+            </div>
+        </aside>
         <main class="register-panel">
             <div class="register-card">
                 <div class="register-topbar">
@@ -633,7 +692,7 @@ function generateStoreSlug($store_name) {
                             </div>
                         </div>
                         
-                        <div class="form-grid">
+                        <div class="form-grid two">
                             <div class="form-group">
                                 <label for="full_name" class="form-label">Full Name *</label>
                                 <input type="text" class="form-control" id="full_name" name="full_name" required>
@@ -644,7 +703,7 @@ function generateStoreSlug($store_name) {
                             </div>
                         </div>
                         
-                        <div class="form-grid">
+                        <div class="form-grid two">
                             <div class="form-group">
                                 <label for="phone" class="form-label">Phone Number *</label>
                                 <input type="tel" class="form-control" id="phone" name="phone" required>
@@ -881,7 +940,7 @@ function generateStoreSlug($store_name) {
         // PWA service worker registration
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', function() {
-                navigator.serviceWorker.register('<?php echo htmlspecialchars(dbh_asset('sw.js'), ENT_QUOTES, 'UTF-8'); ?>')
+                navigator.serviceWorker.register('/sw.js')
                     .then(function(registration) {
                         console.log('ServiceWorker registration successful');
                     })
@@ -897,17 +956,18 @@ function generateStoreSlug($store_name) {
     
     <style>
         :root {
-            --reg-ink: var(--text-primary);
-            --reg-muted: var(--text-secondary);
-            --reg-border: var(--border-color);
-            --reg-accent: var(--brand-primary);
-            --reg-accent-dark: var(--brand-secondary);
-            --reg-accent-soft: rgba(139, 92, 246, 0.12);
-            --reg-bg: linear-gradient(135deg, var(--brand-primary) 0%, var(--brand-secondary) 100%);
-            --reg-card: var(--bg-primary);
-            --reg-shadow: 0 24px 60px rgba(15, 23, 42, 0.12);
-            --reg-bg-sheen-one: rgba(255, 255, 255, 0.16);
-            --reg-bg-sheen-two: rgba(255, 255, 255, 0.08);
+            --reg-ink: #2E294E;
+            --reg-muted: #2E294E;
+            --reg-border: #F1E9DA;
+            --reg-accent: #D90368;
+            --reg-accent-dark: #D90368;
+            --reg-accent-soft: rgba(217, 3, 104, 0.12);
+            --reg-teal: #2E294E;
+            --reg-bg: #F1E9DA;
+            --reg-card: #F1E9DA;
+            --reg-shadow: 0 24px 60px rgba(46, 41, 78, 0.12);
+            --reg-bg-sheen-one: rgba(46, 41, 78, 0.18);
+            --reg-bg-sheen-two: rgba(217, 3, 104, 0.14);
         }
 
         .register-body {
@@ -921,38 +981,213 @@ function generateStoreSlug($store_name) {
         }
 
         [data-theme="dark"] {
-            --reg-ink: var(--text-primary);
-            --reg-muted: var(--text-secondary);
-            --reg-border: var(--border-color);
-            --reg-accent: var(--brand-primary);
-            --reg-accent-dark: var(--brand-secondary);
-            --reg-accent-soft: rgba(139, 92, 246, 0.2);
-            --reg-bg: linear-gradient(135deg, var(--brand-primary) 0%, #4338ca 100%);
-            --reg-card: var(--bg-secondary);
-            --reg-shadow: 0 24px 60px rgba(2, 6, 23, 0.6);
-            --reg-bg-sheen-one: rgba(255, 255, 255, 0.08);
-            --reg-bg-sheen-two: rgba(255, 255, 255, 0.05);
+            --reg-ink: #F1E9DA;
+            --reg-muted: #F1E9DA;
+            --reg-border: #2E294E;
+            --reg-accent: #FFD400;
+            --reg-accent-dark: #FFD400;
+            --reg-accent-soft: rgba(255, 212, 0, 0.2);
+            --reg-bg: #2E294E;
+            --reg-card: #2E294E;
+            --reg-shadow: 0 24px 60px rgba(46, 41, 78, 0.6);
+            --reg-bg-sheen-one: rgba(46, 41, 78, 0.12);
+            --reg-bg-sheen-two: rgba(255, 212, 0, 0.12);
         }
 
         .register-shell {
-            width: min(100%, 640px);
-            margin: 0 auto;
-            display: block;
+            display: grid;
+            grid-template-columns: minmax(280px, 1.15fr) minmax(320px, 520px);
+            gap: clamp(1.5rem, 3vw, 3rem);
             padding: clamp(1.5rem, 4vw, 3.5rem);
+            align-items: stretch;
             min-height: 100vh;
             box-sizing: border-box;
+            max-width: 1240px;
+            margin: 0 auto;
+        }
+
+        .register-hero {
+            background: linear-gradient(145deg, #2E294E 0%, #541388 58%, #2E294E 100%);
+            border-radius: 28px;
+            padding: clamp(2rem, 4vw, 3.5rem);
+            color: #F1E9DA;
+            position: relative;
+            overflow: hidden;
+            box-shadow: var(--reg-shadow);
+            border: 1px solid rgba(241, 233, 218, 0.22);
+        }
+
+        .register-hero::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at 10% 5%, rgba(217, 3, 104, 0.42), transparent 45%),
+                radial-gradient(circle at 85% 20%, rgba(255, 212, 0, 0.3), transparent 48%),
+                radial-gradient(circle at 72% 90%, rgba(241, 233, 218, 0.16), transparent 44%);
+            opacity: 0.9;
+        }
+
+        .register-hero::after {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(115deg, rgba(241, 233, 218, 0.04), rgba(241, 233, 218, 0));
+            pointer-events: none;
+        }
+
+        .hero-card {
+            position: relative;
+            z-index: 2;
+            display: flex;
+            flex-direction: column;
+            gap: 1.35rem;
         }
 
         .brand-pill {
             display: inline-flex;
             align-items: center;
-            gap: 0.5rem;
-            padding: 0.4rem 0.9rem;
+            gap: 0.55rem;
+            padding: 0.45rem 0.95rem;
             border-radius: 999px;
-            background: rgba(255, 255, 255, 0.12);
+            background: rgba(241, 233, 218, 0.14);
+            border: 1px solid rgba(241, 233, 218, 0.3);
+            width: fit-content;
             font-family: "Space Grotesk", "Work Sans", sans-serif;
             font-weight: 600;
             letter-spacing: 0.3px;
+            backdrop-filter: blur(6px);
+            color: #F1E9DA;
+        }
+
+        .register-hero .brand-pill,
+        .register-hero .brand-pill i,
+        .register-hero .brand-pill span {
+            color: #F1E9DA !important;
+        }
+
+        .register-hero h1 {
+            font-family: "Space Grotesk", "Work Sans", sans-serif;
+            font-size: clamp(2.05rem, 3.35vw, 3.35rem);
+            line-height: 1.02;
+            margin: 0.1rem 0 0;
+            letter-spacing: -0.02em;
+            max-width: 13ch;
+            text-wrap: balance;
+        }
+
+        .hero-lead {
+            margin: 0;
+            color: rgba(241, 233, 218, 0.9);
+            font-size: 1.06rem;
+            line-height: 1.6;
+            max-width: 44ch;
+        }
+
+        .hero-features {
+            display: grid;
+            gap: 0.8rem;
+        }
+
+        .feature {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 0.75rem;
+            align-items: center;
+            background: linear-gradient(135deg, rgba(241, 233, 218, 0.18), rgba(241, 233, 218, 0.08));
+            border: 1px solid rgba(241, 233, 218, 0.24);
+            padding: 0.95rem 1rem;
+            border-radius: 16px;
+            backdrop-filter: blur(6px);
+        }
+
+        .feature-icon {
+            display: grid;
+            place-items: center;
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            background: linear-gradient(145deg, rgba(241, 233, 218, 0.26), rgba(241, 233, 218, 0.12));
+            color: #F1E9DA;
+        }
+
+        .feature h4 {
+            margin: 0 0 0.12rem 0;
+            font-size: 1.03rem;
+            line-height: 1.2;
+        }
+
+        .feature p {
+            margin: 0;
+            color: rgba(241, 233, 218, 0.86);
+            font-size: 0.93rem;
+            line-height: 1.35;
+        }
+
+        .hero-steps {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+            gap: 0.55rem;
+            margin-top: 0.25rem;
+        }
+
+        .hero-step {
+            display: flex;
+            gap: 0.6rem;
+            align-items: center;
+            padding: 0.65rem 0.7rem;
+            border-radius: 14px;
+            border: 1px solid rgba(241, 233, 218, 0.2);
+            background: rgba(241, 233, 218, 0.1);
+            opacity: 0.78;
+            transition: opacity 0.25s, transform 0.25s, background 0.25s, border-color 0.25s;
+        }
+
+        .hero-step span {
+            width: 28px;
+            height: 28px;
+            border-radius: 9px;
+            background: rgba(241, 233, 218, 0.24);
+            display: grid;
+            place-items: center;
+            font-weight: 600;
+            flex-shrink: 0;
+        }
+
+        .hero-step strong {
+            display: block;
+            font-size: 0.96rem;
+            line-height: 1.1;
+        }
+
+        .hero-step small {
+            color: rgba(241, 233, 218, 0.76);
+            display: block;
+            font-size: 0.78rem;
+            line-height: 1.1;
+        }
+
+        .hero-step.active {
+            opacity: 1;
+            transform: translateY(-2px);
+            background: rgba(255, 212, 0, 0.26);
+            border-color: rgba(255, 212, 0, 0.7);
+        }
+
+        .hero-step.active span {
+            background: rgba(46, 41, 78, 0.28);
+        }
+
+        .hero-footnote {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.9rem;
+            color: rgba(241, 233, 218, 0.9);
+            border: 1px solid rgba(241, 233, 218, 0.22);
+            border-radius: 999px;
+            padding: 0.45rem 0.8rem;
+            width: fit-content;
+            background: rgba(46, 41, 78, 0.24);
         }
 
         .register-panel {
@@ -983,7 +1218,7 @@ function generateStoreSlug($store_name) {
             height: 40px;
             border-radius: 12px;
             border: 1px solid var(--reg-border);
-            background: var(--bg-secondary);
+            background: #F1E9DA;
             color: var(--reg-ink);
             cursor: pointer;
             transition: transform 0.2s, box-shadow 0.2s, background 0.2s;
@@ -991,11 +1226,11 @@ function generateStoreSlug($store_name) {
 
         .theme-toggle-btn:hover {
             transform: translateY(-1px);
-            box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
+            box-shadow: 0 12px 24px rgba(46, 41, 78, 0.12);
         }
 
         [data-theme="dark"] .theme-toggle-btn {
-            background: var(--bg-secondary);
+            background: #2E294E;
             box-shadow: none;
         }
 
@@ -1043,8 +1278,8 @@ function generateStoreSlug($store_name) {
             gap: 0.4rem;
             padding: 0.4rem 0.6rem;
             border-radius: 999px;
-            background: var(--bg-secondary);
-            color: var(--reg-muted);
+            background: #F1E9DA;
+            color: #541388;
             font-weight: 600;
         }
 
@@ -1052,19 +1287,19 @@ function generateStoreSlug($store_name) {
             width: 22px;
             height: 22px;
             border-radius: 50%;
-            background: var(--bg-tertiary);
+            background: #F1E9DA;
             display: grid;
             place-items: center;
             font-size: 0.75rem;
         }
 
         [data-theme="dark"] .stepper-item {
-            background: var(--bg-tertiary);
-            color: var(--reg-muted);
+            background: #2E294E;
+            color: #F1E9DA;
         }
 
         [data-theme="dark"] .stepper-item span {
-            background: var(--bg-primary);
+            background: #2E294E;
         }
 
         .stepper-item.active {
@@ -1074,7 +1309,7 @@ function generateStoreSlug($store_name) {
 
         .stepper-item.active span {
             background: var(--reg-accent);
-            color: #fff;
+            color: #F1E9DA;
         }
 
         .register-form {
@@ -1103,37 +1338,40 @@ function generateStoreSlug($store_name) {
         .register-panel .form-control,
         .register-panel textarea {
             border-radius: 12px;
-            border: 1px solid var(--reg-border);
+            border: 1px solid rgba(46, 41, 78, 0.3);
             padding: 0.75rem 0.9rem;
-            background: var(--bg-primary);
-            color: var(--reg-ink);
+            background: #F1E9DA;
             transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .password-input-wrapper .form-control {
+            padding-right: 2.75rem;
         }
 
         .register-panel .form-control:focus,
         .register-panel textarea:focus {
             border-color: var(--reg-accent);
-            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.25);
+            box-shadow: 0 0 0 3px rgba(217, 3, 104, 0.15);
             outline: none;
-            background: var(--bg-primary);
+            background: #F1E9DA;
         }
 
         [data-theme="dark"] .register-panel .form-control,
         [data-theme="dark"] .register-panel textarea {
-            background: var(--bg-tertiary);
+            background: #2E294E;
             color: var(--reg-ink);
             border-color: var(--reg-border);
         }
 
         [data-theme="dark"] .register-panel .form-control::placeholder,
         [data-theme="dark"] .register-panel textarea::placeholder {
-            color: #6b7280;
+            color: #541388;
         }
 
         [data-theme="dark"] .register-panel .form-control:focus,
         [data-theme="dark"] .register-panel textarea:focus {
-            background: var(--bg-tertiary);
-            box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.25);
+            background: #2E294E;
+            box-shadow: 0 0 0 3px rgba(255, 212, 0, 0.2);
         }
 
         .password-input-wrapper {
@@ -1167,27 +1405,27 @@ function generateStoreSlug($store_name) {
             border-radius: 18px;
             border: 1px solid var(--reg-border);
             padding: 1.1rem;
-            background: var(--bg-primary);
+            background: #F1E9DA;
             cursor: pointer;
             transition: transform 0.2s, box-shadow 0.2s, border-color 0.2s;
         }
 
         .account-card.highlight {
-            background: linear-gradient(160deg, rgba(139, 92, 246, 0.14), rgba(255, 255, 255, 0.78));
+            background: linear-gradient(160deg, rgba(217, 3, 104, 0.15), rgba(241, 233, 218, 0.7));
         }
 
         [data-theme="dark"] .account-card {
-            background: var(--bg-tertiary);
+            background: #2E294E;
         }
 
         [data-theme="dark"] .account-card.highlight {
-            background: linear-gradient(160deg, rgba(139, 92, 246, 0.24), rgba(15, 23, 42, 0.88));
+            background: linear-gradient(160deg, rgba(255, 212, 0, 0.22), rgba(46, 41, 78, 0.85));
         }
 
         .account-card:hover,
         .account-option input[type="radio"]:checked + .account-card {
             border-color: var(--reg-accent);
-            box-shadow: 0 14px 30px rgba(139, 92, 246, 0.16);
+            box-shadow: 0 14px 30px rgba(217, 3, 104, 0.12);
             transform: translateY(-2px);
         }
 
@@ -1225,7 +1463,7 @@ function generateStoreSlug($store_name) {
         }
 
         .store-link-card {
-            background: linear-gradient(135deg, rgba(139, 92, 246, 0.08), rgba(167, 139, 250, 0.12));
+            background: linear-gradient(135deg, rgba(46, 41, 78, 0.08), rgba(217, 3, 104, 0.08));
             border-radius: 18px;
             padding: 1.1rem;
             display: grid;
@@ -1274,7 +1512,7 @@ function generateStoreSlug($store_name) {
 
         .store-link {
             font-family: "Space Grotesk", "Work Sans", sans-serif;
-            background: var(--bg-primary);
+            background: #F1E9DA;
             border-radius: 12px;
             border: 1px dashed var(--reg-border);
             padding: 0.65rem 0.9rem;
@@ -1313,15 +1551,15 @@ function generateStoreSlug($store_name) {
         }
 
         [data-theme="dark"] .store-link-card {
-            background: linear-gradient(135deg, rgba(139, 92, 246, 0.16), rgba(167, 139, 250, 0.14));
+            background: linear-gradient(135deg, rgba(46, 41, 78, 0.12), rgba(255, 212, 0, 0.12));
         }
 
         [data-theme="dark"] .store-link {
-            background: var(--bg-primary);
+            background: #2E294E;
         }
 
         .payment-summary {
-            background: var(--bg-secondary);
+            background: #F1E9DA;
             padding: 1.4rem;
             border-radius: 16px;
             border: 1px solid var(--reg-border);
@@ -1330,7 +1568,7 @@ function generateStoreSlug($store_name) {
         }
 
         [data-theme="dark"] .payment-summary {
-            background: var(--bg-tertiary);
+            background: #2E294E;
         }
 
         .summary-title {
@@ -1383,17 +1621,13 @@ function generateStoreSlug($store_name) {
         }
 
         .register-panel .btn-primary {
-            background: var(--brand-primary);
-            color: #fff;
-            box-shadow: 0 14px 26px rgba(139, 92, 246, 0.22);
-        }
-
-        .register-panel .btn-primary:hover {
-            background: var(--brand-secondary);
+            background: linear-gradient(120deg, var(--reg-accent), #FFD400);
+            color: #F1E9DA;
+            box-shadow: 0 14px 26px rgba(217, 3, 104, 0.2);
         }
 
         .register-panel .btn-secondary {
-            background: var(--bg-secondary);
+            background: #F1E9DA;
             color: var(--reg-ink);
         }
 
@@ -1404,7 +1638,7 @@ function generateStoreSlug($store_name) {
         }
 
         [data-theme="dark"] .register-panel .btn-secondary {
-            background: var(--bg-tertiary);
+            background: #2E294E;
         }
 
         .text-primary {
@@ -1413,11 +1647,62 @@ function generateStoreSlug($store_name) {
 
         @media (max-width: 980px) {
             .register-shell {
-                width: min(100%, 640px);
+                grid-template-columns: 1fr;
+                gap: 1rem;
+                padding: 1rem;
+            }
+
+            .register-hero {
+                min-height: auto;
+                border-radius: 20px;
+                padding: 1.65rem 1.45rem;
+            }
+
+            .hero-card {
+                gap: 1.2rem;
+            }
+
+            .register-hero h1 {
+                max-width: none;
+                font-size: clamp(1.7rem, 7vw, 2.2rem);
+            }
+
+            .hero-lead {
+                font-size: 0.98rem;
+            }
+
+            .feature {
+                padding: 0.8rem 0.85rem;
+            }
+
+            .feature h4 {
+                font-size: 0.96rem;
             }
         }
 
         @media (max-width: 720px) {
+            .hero-steps {
+                grid-template-columns: repeat(3, minmax(0, 1fr));
+                gap: 0.4rem;
+            }
+
+            .hero-step {
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+                gap: 0.25rem;
+                padding: 0.55rem 0.35rem;
+            }
+
+            .hero-step strong {
+                font-size: 0.82rem;
+            }
+
+            .hero-step small {
+                display: none;
+            }
+
             .account-type-selection {
                 grid-template-columns: 1fr;
             }
@@ -1440,12 +1725,13 @@ function generateStoreSlug($store_name) {
             }
         }
     </style>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/public-polish.css')); ?>">
     
     <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/password-toggle.js')); ?>"></script>
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', function() {
-                navigator.serviceWorker.register('<?php echo htmlspecialchars(dbh_asset('sw.js'), ENT_QUOTES, 'UTF-8'); ?>')
+                navigator.serviceWorker.register('/sw.js')
                     .then(function(registration) {
                         console.log('ServiceWorker registration successful');
                     })
@@ -1457,3 +1743,4 @@ function generateStoreSlug($store_name) {
     </script>
 </body>
 </html>
+

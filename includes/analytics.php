@@ -6,60 +6,21 @@
 /**
  * Get cached analytics data or generate new data
  */
-function analyticsCacheTableReady() {
-    static $ready = null;
-
-    if ($ready !== null) {
-        return $ready;
-    }
-
-    try {
-        if (function_exists('dbh_table_exists')) {
-            $ready = dbh_table_exists('analytics_cache');
-        } else {
-            global $db;
-            $result = $db->query("SHOW TABLES LIKE 'analytics_cache'");
-            $ready = $result && $result->num_rows > 0;
-        }
-    } catch (Throwable $e) {
-        $ready = false;
-        error_log('Analytics cache table probe failed: ' . $e->getMessage());
-    }
-
-    return $ready;
-}
-
 function getCachedAnalytics($cache_key, $user_id = null, $cache_duration = 3600) {
     global $db;
-
-    if (!analyticsCacheTableReady()) {
-        return null;
+    
+    $stmt = $db->prepare("
+        SELECT cache_data FROM analytics_cache 
+        WHERE cache_key = ? AND user_id = ? AND expires_at > NOW()
+    ");
+    $stmt->bind_param("si", $cache_key, $user_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    
+    if ($cached = $result->fetch_assoc()) {
+        return json_decode($cached['cache_data'], true);
     }
-
-    try {
-        $stmt = $db->prepare("
-            SELECT cache_data FROM analytics_cache
-            WHERE cache_key = ? AND user_id = ? AND expires_at > NOW()
-        ");
-        if (!$stmt) {
-            return null;
-        }
-
-        $safe_user_id = is_numeric($user_id) ? (int)$user_id : 0;
-        $stmt->bind_param("si", $cache_key, $safe_user_id);
-        if (!$stmt->execute()) {
-            return null;
-        }
-
-        $result = $stmt->get_result();
-        if ($result && ($cached = $result->fetch_assoc())) {
-            $decoded = json_decode($cached['cache_data'], true);
-            return is_array($decoded) ? $decoded : null;
-        }
-    } catch (Throwable $e) {
-        error_log('Analytics cache read error: ' . $e->getMessage());
-    }
-
+    
     return null;
 }
 
@@ -68,15 +29,11 @@ function getCachedAnalytics($cache_key, $user_id = null, $cache_duration = 3600)
  */
 function cacheAnalytics($cache_key, $data, $user_id = null, $cache_duration = 3600) {
     global $db;
-
-    if (!analyticsCacheTableReady()) {
-        return;
-    }
-
+    
     try {
         $expires_at = date('Y-m-d H:i:s', time() + $cache_duration);
         $cache_data = json_encode($data);
-
+        
         $stmt = $db->prepare("
             INSERT INTO analytics_cache (cache_key, cache_data, user_id, expires_at) 
             VALUES (?, ?, ?, ?)
@@ -84,11 +41,7 @@ function cacheAnalytics($cache_key, $data, $user_id = null, $cache_duration = 36
             cache_data = VALUES(cache_data), 
             expires_at = VALUES(expires_at)
         ");
-        if (!$stmt) {
-            return;
-        }
-        $safe_user_id = is_numeric($user_id) ? (int)$user_id : 0;
-        $stmt->bind_param("ssis", $cache_key, $cache_data, $safe_user_id, $expires_at);
+        $stmt->bind_param("ssis", $cache_key, $cache_data, $user_id, $expires_at);
         $stmt->execute();
     } catch (Exception $e) {
         // Silently fail caching - analytics will still work without cache
@@ -96,261 +49,13 @@ function cacheAnalytics($cache_key, $data, $user_id = null, $cache_duration = 36
     }
 }
 
-if (!function_exists('analyticsBuildTrackedSalesFilters')) {
-    function analyticsBuildTrackedSalesFilters($user_id = null, $user_role = 'admin', array $aliases = []) {
-        $user_id = (int) $user_id;
-        $defaultAliases = [
-            'bundle' => 'bo',
-            'afa' => 'ar',
-            'checker' => 'rcp',
-        ];
-        $aliases = array_merge($defaultAliases, $aliases);
-
-        $filters = [
-            'bundle' => ['clause' => '', 'types' => '', 'params' => []],
-            'afa' => ['clause' => '', 'types' => '', 'params' => []],
-            'checker' => ['clause' => '', 'types' => '', 'params' => []],
-        ];
-
-        if ($user_id <= 0) {
-            return $filters;
-        }
-
-        if ($user_role === 'agent' || $user_role === 'vip') {
-            $filters['bundle'] = [
-                'clause' => " AND ({$aliases['bundle']}.agent_id = ? OR {$aliases['bundle']}.user_id = ?)",
-                'types' => 'ii',
-                'params' => [$user_id, $user_id],
-            ];
-            $filters['afa'] = [
-                'clause' => " AND ({$aliases['afa']}.agent_id = ? OR {$aliases['afa']}.user_id = ?)",
-                'types' => 'ii',
-                'params' => [$user_id, $user_id],
-            ];
-            $filters['checker'] = [
-                'clause' => " AND ({$aliases['checker']}.agent_id = ? OR {$aliases['checker']}.user_id = ?)",
-                'types' => 'ii',
-                'params' => [$user_id, $user_id],
-            ];
-        } elseif ($user_role === 'customer') {
-            $filters['bundle'] = [
-                'clause' => " AND {$aliases['bundle']}.user_id = ?",
-                'types' => 'i',
-                'params' => [$user_id],
-            ];
-            $filters['afa'] = [
-                'clause' => " AND {$aliases['afa']}.user_id = ?",
-                'types' => 'i',
-                'params' => [$user_id],
-            ];
-            $filters['checker'] = [
-                'clause' => " AND {$aliases['checker']}.user_id = ?",
-                'types' => 'i',
-                'params' => [$user_id],
-            ];
-        }
-
-        return $filters;
-    }
-}
-
-if (!function_exists('analyticsGetTrackedSalesSummary')) {
-    function analyticsGetTrackedSalesSummary($start_date, $end_date, $user_id = null, $user_role = 'admin') {
-        global $db;
-
-        $summary = [
-            'total_sales' => 0.0,
-            'total_orders' => 0,
-        ];
-
-        $filters = analyticsBuildTrackedSalesFilters($user_id, $user_role);
-
-        $salesExpr = "bo.amount";
-        if ($user_role === 'admin') {
-            $salesExpr = "CASE WHEN bo.agent_id > 0 THEN COALESCE(NULLIF(bo.agent_cost, 0), bo.amount) ELSE bo.amount END";
-        } elseif ($user_role === 'agent' || $user_role === 'vip') {
-            $salesExpr = "CASE WHEN bo.agent_id > 0 AND (bo.user_id IS NULL OR bo.user_id != bo.agent_id) THEN bo.amount ELSE COALESCE(NULLIF(bo.agent_cost, 0), bo.amount) END";
-        }
-
-        if (!function_exists('dbh_table_exists') || dbh_table_exists('bundle_orders')) {
-            try {
-                $bundleSql = "
-                    SELECT COALESCE(SUM({$salesExpr}), 0) AS total_sales, COUNT(*) AS total_orders
-                    FROM bundle_orders bo
-                    WHERE LOWER(bo.status) IN ('processing', 'delivered', 'success', 'completed')
-                      AND DATE(COALESCE(bo.processed_at, bo.created_at)) BETWEEN ? AND ?
-                      {$filters['bundle']['clause']}
-                ";
-                $bundleStmt = $db->prepare($bundleSql);
-                if ($bundleStmt) {
-                    $bundleTypes = 'ss' . $filters['bundle']['types'];
-                    $bundleParams = array_merge([$start_date, $end_date], $filters['bundle']['params']);
-                    $bundleStmt->bind_param($bundleTypes, ...$bundleParams);
-                    $bundleStmt->execute();
-                    $bundleRow = $bundleStmt->get_result()->fetch_assoc() ?: [];
-                    $summary['total_sales'] += (float) ($bundleRow['total_sales'] ?? 0);
-                    $summary['total_orders'] += (int) ($bundleRow['total_orders'] ?? 0);
-                }
-            } catch (Throwable $e) {
-                error_log('Tracked bundle sales summary failed: ' . $e->getMessage());
-            }
-        }
-
-        if (function_exists('dbh_table_exists') && dbh_table_exists('afa_registrations')) {
-            try {
-                $afaSql = "
-                    SELECT COALESCE(SUM(ar.amount), 0) AS total_sales, COUNT(*) AS total_orders
-                    FROM afa_registrations ar
-                    WHERE ar.status IN ('processing', 'success')
-                      AND DATE(COALESCE(ar.processing_at, ar.created_at)) BETWEEN ? AND ?
-                      {$filters['afa']['clause']}
-                ";
-                $afaStmt = $db->prepare($afaSql);
-                if ($afaStmt) {
-                    $afaTypes = 'ss' . $filters['afa']['types'];
-                    $afaParams = array_merge([$start_date, $end_date], $filters['afa']['params']);
-                    $afaStmt->bind_param($afaTypes, ...$afaParams);
-                    $afaStmt->execute();
-                    $afaRow = $afaStmt->get_result()->fetch_assoc() ?: [];
-                    $summary['total_sales'] += (float) ($afaRow['total_sales'] ?? 0);
-                    $summary['total_orders'] += (int) ($afaRow['total_orders'] ?? 0);
-                }
-            } catch (Throwable $e) {
-                error_log('Tracked AFA sales summary failed: ' . $e->getMessage());
-            }
-        }
-
-        if (function_exists('dbh_table_exists') && dbh_table_exists('result_checker_purchases')) {
-            try {
-                $checkerSql = "
-                    SELECT COALESCE(SUM(rcp.amount), 0) AS total_sales, COUNT(*) AS total_orders
-                    FROM result_checker_purchases rcp
-                    WHERE rcp.status = 'success'
-                      AND DATE(rcp.created_at) BETWEEN ? AND ?
-                      {$filters['checker']['clause']}
-                ";
-                $checkerStmt = $db->prepare($checkerSql);
-                if ($checkerStmt) {
-                    $checkerTypes = 'ss' . $filters['checker']['types'];
-                    $checkerParams = array_merge([$start_date, $end_date], $filters['checker']['params']);
-                    $checkerStmt->bind_param($checkerTypes, ...$checkerParams);
-                    $checkerStmt->execute();
-                    $checkerRow = $checkerStmt->get_result()->fetch_assoc() ?: [];
-                    $summary['total_sales'] += (float) ($checkerRow['total_sales'] ?? 0);
-                    $summary['total_orders'] += (int) ($checkerRow['total_orders'] ?? 0);
-                }
-            } catch (Throwable $e) {
-                error_log('Tracked checker sales summary failed: ' . $e->getMessage());
-            }
-        }
-
-        return $summary;
-    }
-}
-
-if (!function_exists('analyticsGetTrackedCustomerCount')) {
-    function analyticsGetTrackedCustomerCount($user_id = null, $user_role = 'admin') {
-        global $db;
-
-        $user_id = (int) $user_id;
-        if (!in_array($user_role, ['agent', 'vip'], true) || $user_id <= 0) {
-            return 0;
-        }
-
-        $unionParts = [];
-        $types = '';
-        $params = [];
-
-        if (!function_exists('dbh_table_exists') || dbh_table_exists('bundle_orders')) {
-            $unionParts[] = "
-                SELECT DISTINCT
-                    CASE
-                        WHEN COALESCE(bo.user_id, 0) > 0 THEN CONCAT('u:', bo.user_id)
-                        WHEN NULLIF(TRIM(bo.beneficiary_number), '') IS NOT NULL THEN CONCAT('p:', TRIM(bo.beneficiary_number))
-                        WHEN NULLIF(TRIM(bo.order_reference), '') IS NOT NULL THEN CONCAT('r:', TRIM(bo.order_reference))
-                        ELSE NULL
-                    END AS buyer_key
-                FROM bundle_orders bo
-                WHERE bo.agent_id = ?
-                  AND LOWER(bo.status) IN ('processing', 'delivered', 'success', 'completed')
-            ";
-            $types .= 'i';
-            $params[] = $user_id;
-        }
-
-        if (function_exists('dbh_table_exists') && dbh_table_exists('afa_registrations')) {
-            $unionParts[] = "
-                SELECT DISTINCT
-                    CASE
-                        WHEN COALESCE(ar.user_id, 0) > 0 THEN CONCAT('u:', ar.user_id)
-                        WHEN NULLIF(TRIM(ar.phone), '') IS NOT NULL THEN CONCAT('p:', TRIM(ar.phone))
-                        WHEN NULLIF(TRIM(ar.email), '') IS NOT NULL THEN CONCAT('e:', LOWER(TRIM(ar.email)))
-                        WHEN NULLIF(TRIM(ar.reference), '') IS NOT NULL THEN CONCAT('r:', TRIM(ar.reference))
-                        ELSE NULL
-                    END AS buyer_key
-                FROM afa_registrations ar
-                WHERE ar.agent_id = ?
-                  AND ar.status IN ('processing', 'success')
-            ";
-            $types .= 'i';
-            $params[] = $user_id;
-        }
-
-        if (function_exists('dbh_table_exists') && dbh_table_exists('result_checker_purchases')) {
-            $unionParts[] = "
-                SELECT DISTINCT
-                    CASE
-                        WHEN COALESCE(rcp.user_id, 0) > 0 THEN CONCAT('u:', rcp.user_id)
-                        WHEN NULLIF(TRIM(rcp.sms_phone), '') IS NOT NULL THEN CONCAT('p:', TRIM(rcp.sms_phone))
-                        WHEN NULLIF(TRIM(rcp.notification_email), '') IS NOT NULL THEN CONCAT('e:', LOWER(TRIM(rcp.notification_email)))
-                        WHEN NULLIF(TRIM(rcp.reference), '') IS NOT NULL THEN CONCAT('r:', TRIM(rcp.reference))
-                        ELSE NULL
-                    END AS buyer_key
-                FROM result_checker_purchases rcp
-                WHERE rcp.agent_id = ?
-                  AND rcp.status = 'success'
-            ";
-            $types .= 'i';
-            $params[] = $user_id;
-        }
-
-        if (empty($unionParts)) {
-            return 0;
-        }
-
-        $sql = "
-            SELECT COUNT(*) AS total
-            FROM (
-                " . implode("\nUNION\n", $unionParts) . "
-            ) tracked_buyers
-            WHERE buyer_key IS NOT NULL AND buyer_key <> ''
-        ";
-
-        try {
-            $stmt = $db->prepare($sql);
-            if (!$stmt) {
-                return 0;
-            }
-            $stmt->bind_param($types, ...$params);
-            $stmt->execute();
-            $result = $stmt->get_result();
-            $row = $result ? $result->fetch_assoc() : null;
-            return (int) ($row['total'] ?? 0);
-        } catch (Throwable $e) {
-            error_log('Tracked customer count failed: ' . $e->getMessage());
-            return 0;
-        }
-    }
-}
-
 /**
  * Get weekly sales data for charts
  */
-function getWeeklySalesData($user_id = null, $user_role = 'admin', $weekOffset = 0) {
+function getWeeklySalesData($user_id = null, $user_role = 'admin') {
     global $db;
-
-    $weekOffset = max(0, (int) $weekOffset);
-    $cache_key = "weekly_sales_v3_" . $user_role . "_" . $weekOffset;
+    
+    $cache_key = "weekly_sales_" . $user_role;
     $cached = getCachedAnalytics($cache_key, $user_id, 1800); // 30 minutes cache
     
     if ($cached) {
@@ -362,22 +67,45 @@ function getWeeklySalesData($user_id = null, $user_role = 'admin', $weekOffset =
     }
     
     $weekly_sales = [];
+    $where_clause = "";
+    $params = [];
+    $param_types = "";
     
-    $today = new DateTimeImmutable('today');
-    $startOfWeek = $today
-        ->modify('-' . (int) $today->format('w') . ' days')
-        ->modify('-' . ($weekOffset * 7) . ' days');
-
-    for ($i = 0; $i < 7; $i++) {
-        $dayDate = $startOfWeek->modify('+' . $i . ' days');
-        $date = $dayDate->format('Y-m-d');
-        $daily_data = analyticsGetTrackedSalesSummary($date, $date, $user_id, $user_role);
+    // Filter by user if agent
+    if ($user_role === 'agent' && $user_id) {
+        $where_clause = "AND t.user_id = ?";
+        $params[] = $user_id;
+        $param_types .= "i";
+    }
+    
+    for ($i = 6; $i >= 0; $i--) {
+        $date = date('Y-m-d', strtotime("-$i days"));
+        $sql = "
+            SELECT COALESCE(SUM(t.amount), 0) as daily_sales 
+            FROM transactions t 
+            WHERE DATE(t.created_at) = ? 
+            AND t.status = 'success' 
+            AND t.transaction_type = 'purchase'
+            $where_clause
+        ";
+        
+        $stmt = $db->prepare($sql);
+        $all_params = array_merge([$date], $params);
+        $all_param_types = "s" . $param_types;
+        
+        if (!empty($all_params)) {
+            $stmt->bind_param($all_param_types, ...$all_params);
+        }
+        
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $daily_data = $result->fetch_assoc();
         
         $weekly_sales[] = [
-            'day' => $dayDate->format('l'),
-            'short_day' => $dayDate->format('D'),
+            'day' => date('l', strtotime($date)),
+            'short_day' => date('D', strtotime($date)),
             'date' => $date,
-            'sales' => (float) ($daily_data['total_sales'] ?? 0)
+            'sales' => floatval($daily_data['daily_sales'])
         ];
     }
     
@@ -408,7 +136,7 @@ function getWeeklyTrafficData($user_id = null, $user_role = 'admin') {
         $table_ready = false;
     }
 
-    $filter_agent = (in_array($user_role, ['agent', 'vip'], true) && $user_id);
+    $filter_agent = ($user_role === 'agent' && $user_id);
 
     for ($i = 6; $i >= 0; $i--) {
         $date = date('Y-m-d', strtotime("-$i days"));
@@ -460,7 +188,9 @@ function getWeeklyTrafficData($user_id = null, $user_role = 'admin') {
  * Get monthly sales data
  */
 function getMonthlySalesData($user_id = null, $user_role = 'admin') {
-    $cache_key = "monthly_sales_v3_" . $user_role;
+    global $db;
+    
+    $cache_key = "monthly_sales_" . $user_role;
     $cached = getCachedAnalytics($cache_key, $user_id, 3600); // 1 hour cache
     
     if ($cached) {
@@ -468,17 +198,44 @@ function getMonthlySalesData($user_id = null, $user_role = 'admin') {
     }
     
     $monthly_sales = [];
+    $where_clause = "";
+    $params = [];
+    $param_types = "";
+    
+    if ($user_role === 'agent' && $user_id) {
+        $where_clause = "AND t.user_id = ?";
+        $params[] = $user_id;
+        $param_types .= "i";
+    }
     
     for ($i = 11; $i >= 0; $i--) {
-        $monthStart = date('Y-m-01', strtotime("-$i months"));
-        $monthEnd = date('Y-m-t', strtotime($monthStart));
-        $monthly_data = analyticsGetTrackedSalesSummary($monthStart, $monthEnd, $user_id, $user_role);
+        $date = date('Y-m', strtotime("-$i months"));
+        $sql = "
+            SELECT COALESCE(SUM(t.amount), 0) as monthly_sales 
+            FROM transactions t 
+            WHERE DATE_FORMAT(t.created_at, '%Y-%m') = ? 
+            AND t.status = 'success' 
+            AND t.transaction_type = 'purchase'
+            $where_clause
+        ";
+        
+        $stmt = $db->prepare($sql);
+        $all_params = array_merge([$date], $params);
+        $all_param_types = "s" . $param_types;
+        
+        if (!empty($all_params)) {
+            $stmt->bind_param($all_param_types, ...$all_params);
+        }
+        
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $monthly_data = $result->fetch_assoc();
         
         $monthly_sales[] = [
-            'month' => date('F Y', strtotime($monthStart)),
-            'short_month' => date('M Y', strtotime($monthStart)),
-            'date' => date('Y-m', strtotime($monthStart)),
-            'sales' => (float) ($monthly_data['total_sales'] ?? 0)
+            'month' => date('F Y', strtotime($date . '-01')),
+            'short_month' => date('M Y', strtotime($date . '-01')),
+            'date' => $date,
+            'sales' => floatval($monthly_data['monthly_sales'])
         ];
     }
     
@@ -492,15 +249,10 @@ function getMonthlySalesData($user_id = null, $user_role = 'admin') {
 function getSalesByNetworkData($user_id = null, $user_role = 'admin', $days = 30) {
     global $db;
     
-    $cache_key = "sales_by_network_v4_{$user_role}_{$days}d";
+    $cache_key = "sales_by_network_{$user_role}_{$days}d";
     $cached = getCachedAnalytics($cache_key, $user_id, 1800);
     
     if ($cached) {
-        $cached = array_values(array_filter((array) $cached, function ($row) {
-            $network_name = strtolower(trim((string) ($row['network_name'] ?? '')));
-            return $network_name !== 'vodafone';
-        }));
-
         $has_data = false;
         foreach ($cached as $row) {
             if ((int)($row['total_orders'] ?? 0) > 0 || (float)($row['total_sales'] ?? 0) > 0) {
@@ -517,65 +269,60 @@ function getSalesByNetworkData($user_id = null, $user_role = 'admin', $days = 30
     $param_types = "i";
     
     $agent_filter = "";
-    $commission_join = "LEFT JOIN transactions t ON bo.transaction_id = t.id 
-                                 AND t.status = 'success' 
-                                 AND t.transaction_type = 'purchase'";
-    $commission_total = "COALESCE(SUM(COALESCE(NULLIF(t.commission_earned, 0), bo.commission, 0)), 0)";
-    if (in_array($user_role, ['agent', 'vip'], true) && $user_id) {
+    if ($user_role === 'agent' && $user_id) {
         $agent_filter = "AND (bo.agent_id = ? OR bo.user_id = ?)";
         $params[] = $user_id;
         $params[] = $user_id;
         $param_types .= "ii";
-
-        if (function_exists('dbh_table_exists') && dbh_table_exists('agent_commissions')) {
-            $commission_join = "
-                LEFT JOIN agent_commissions ac ON ac.agent_id = ?
-                                              AND ac.source_type = 'data'
-                                              AND ac.status <> 'cancelled'
-                                              AND (
-                                                  (ac.source_id IS NOT NULL AND ac.source_id = bo.id)
-                                                  OR (ac.source_reference <> '' AND ac.source_reference = bo.order_reference COLLATE utf8mb4_general_ci)
-                                              )
-            ";
-            $commission_total = "COALESCE(SUM(ac.amount), 0)";
-            $params[] = $user_id;
-            $param_types .= "i";
-        }
     }
     
-    $salesExpr = "bo.amount";
-    if ($user_role === 'admin') {
-        $salesExpr = "CASE WHEN bo.agent_id > 0 THEN COALESCE(NULLIF(bo.agent_cost, 0), bo.amount) ELSE bo.amount END";
-    } elseif ($user_role === 'agent' || $user_role === 'vip') {
-        $salesExpr = "CASE WHEN bo.agent_id > 0 AND (bo.user_id IS NULL OR bo.user_id != bo.agent_id) THEN bo.amount ELSE COALESCE(NULLIF(bo.agent_cost, 0), bo.amount) END";
-    }
-
     $sql = "
         SELECT n.name as network_name, n.color, 
-               COALESCE(SUM({$salesExpr}), 0) as total_sales,
+               COALESCE(SUM(bo.amount), 0) as total_sales,
                COUNT(DISTINCT bo.id) as total_orders,
-               {$commission_total} as commission_earned
+               COALESCE(SUM(COALESCE(NULLIF(t.commission_earned, 0), bo.commission, 0)), 0) as commission_earned
         FROM networks n
         LEFT JOIN data_packages dp ON n.id = dp.network_id
         LEFT JOIN bundle_orders bo ON dp.id = bo.package_id 
-                                 AND bo.status IN ('processing', 'success', 'delivered', 'completed')
+                                 AND bo.status IN ('success', 'delivered', 'completed')
                                  AND bo.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
                                  $agent_filter
-        {$commission_join}
-        WHERE LOWER(TRIM(n.name)) <> 'vodafone'
+        LEFT JOIN transactions t ON bo.transaction_id = t.id 
+                                 AND t.status = 'success' 
+                                 AND t.transaction_type = 'purchase'
         GROUP BY n.id, n.name, n.color
         ORDER BY total_sales DESC
     ";
     
     $stmt = $db->prepare($sql);
+    if (!$stmt) {
+        return [];
+    }
+
     $stmt->bind_param($param_types, ...$params);
-    $stmt->execute();
+    try {
+        $stmt->execute();
+    } catch (mysqli_sql_exception $e) {
+        $code = (int) $e->getCode();
+        $message = strtolower($e->getMessage() ?? '');
+        $isGoneAway = in_array($code, [2006, 2013], true) || strpos($message, 'server has gone away') !== false;
+
+        if ($isGoneAway) {
+            // Reconnect and retry once
+            $db->getConnection();
+            $stmt = $db->prepare($sql);
+            if (!$stmt) {
+                return [];
+            }
+            $stmt->bind_param($param_types, ...$params);
+            $stmt->execute();
+        } else {
+            throw $e;
+        }
+    }
     $result = $stmt->get_result();
     
-    $sales_by_network = array_values(array_filter($result->fetch_all(MYSQLI_ASSOC), function ($row) {
-        $network_name = strtolower(trim((string) ($row['network_name'] ?? '')));
-        return $network_name !== 'vodafone';
-    }));
+    $sales_by_network = $result->fetch_all(MYSQLI_ASSOC);
     
     cacheAnalytics($cache_key, $sales_by_network, $user_id, 1800);
     return $sales_by_network;
@@ -612,13 +359,13 @@ function getTopAgentsByNetwork($days = 7, $network_names = []) {
     $sql = "
         SELECT n.name as network_name, n.color,
                u.id as agent_id, u.full_name, u.email,
-               COALESCE(SUM(CASE WHEN bo.agent_id > 0 THEN COALESCE(NULLIF(bo.agent_cost, 0), bo.amount) ELSE bo.amount END), 0) as total_sales,
+               COALESCE(SUM(bo.amount), 0) as total_sales,
                COUNT(DISTINCT bo.id) as total_orders
         FROM bundle_orders bo
         JOIN data_packages dp ON dp.id = bo.package_id
         JOIN networks n ON n.id = dp.network_id
         JOIN users u ON u.id = IFNULL(bo.agent_id, bo.user_id)
-        WHERE bo.status IN ('processing', 'success', 'delivered', 'completed')
+        WHERE bo.status IN ('success', 'delivered', 'completed')
           AND bo.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
           AND u.role = 'agent'
           {$network_clause}
@@ -680,7 +427,7 @@ function getTopCustomersForAgent($agent_id, $days = 7, $limit = 5) {
                COUNT(DISTINCT bo.id) as total_orders
         FROM bundle_orders bo
         JOIN users u ON u.id = bo.user_id
-        WHERE bo.status IN ('processing', 'success', 'delivered', 'completed')
+        WHERE bo.status IN ('success', 'delivered', 'completed')
           AND bo.created_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
           AND u.role = 'customer'
           AND (bo.agent_id = ? OR u.agent_id = ?)
@@ -744,122 +491,11 @@ function getTopupAgentsByPeriod($days = 7, $limit = 5) {
 }
 
 /**
- * Get top sales agents for a tracked-sales period (bundle orders, AFA, result checker).
- */
-function getTopSalesAgentsByPeriod($days = 1, $limit = 5) {
-    global $db;
-
-    $days = (int) $days;
-    $limit = (int) $limit;
-    if ($days <= 0 || $limit <= 0) {
-        return [];
-    }
-
-    $today = date('Y-m-d');
-    $start_date = date('Y-m-d', strtotime("-" . ($days - 1) . " days"));
-    $cache_key = "top_sales_agents_{$days}d_{$limit}_{$today}";
-    $cached = getCachedAnalytics($cache_key, null, 1800);
-    if ($cached) {
-        return $cached;
-    }
-
-    $unionParts = [];
-    $types = '';
-    $params = [];
-
-    if (!function_exists('dbh_table_exists') || dbh_table_exists('bundle_orders')) {
-        $unionParts[] = "
-            SELECT
-                IFNULL(bo.agent_id, bo.user_id) AS agent_id,
-                COALESCE(SUM(CASE WHEN bo.agent_id > 0 THEN COALESCE(NULLIF(bo.agent_cost, 0), bo.amount) ELSE bo.amount END), 0) AS total_sales,
-                COUNT(*) AS total_orders
-            FROM bundle_orders bo
-            WHERE LOWER(bo.status) IN ('processing', 'delivered', 'success', 'completed')
-              AND DATE(COALESCE(bo.processed_at, bo.created_at)) BETWEEN ? AND ?
-            GROUP BY IFNULL(bo.agent_id, bo.user_id)
-        ";
-        $types .= 'ss';
-        $params[] = $start_date;
-        $params[] = $today;
-    }
-
-    if (function_exists('dbh_table_exists') && dbh_table_exists('afa_registrations')) {
-        $unionParts[] = "
-            SELECT
-                IFNULL(ar.agent_id, ar.user_id) AS agent_id,
-                COALESCE(SUM(ar.amount), 0) AS total_sales,
-                COUNT(*) AS total_orders
-            FROM afa_registrations ar
-            WHERE ar.status IN ('processing', 'success')
-              AND DATE(COALESCE(ar.processing_at, ar.created_at)) BETWEEN ? AND ?
-            GROUP BY IFNULL(ar.agent_id, ar.user_id)
-        ";
-        $types .= 'ss';
-        $params[] = $start_date;
-        $params[] = $today;
-    }
-
-    if (function_exists('dbh_table_exists') && dbh_table_exists('result_checker_purchases')) {
-        $unionParts[] = "
-            SELECT
-                IFNULL(rcp.agent_id, rcp.user_id) AS agent_id,
-                COALESCE(SUM(rcp.amount), 0) AS total_sales,
-                COUNT(*) AS total_orders
-            FROM result_checker_purchases rcp
-            WHERE rcp.status = 'success'
-              AND DATE(rcp.created_at) BETWEEN ? AND ?
-            GROUP BY IFNULL(rcp.agent_id, rcp.user_id)
-        ";
-        $types .= 'ss';
-        $params[] = $start_date;
-        $params[] = $today;
-    }
-
-    if (empty($unionParts)) {
-        return [];
-    }
-
-    $sql = "
-        SELECT
-            u.id AS agent_id,
-            u.full_name,
-            u.email,
-            COALESCE(SUM(sales.total_sales), 0) AS total_sales,
-            COALESCE(SUM(sales.total_orders), 0) AS total_orders
-        FROM (
-            " . implode("\nUNION ALL\n", $unionParts) . "
-        ) sales
-        JOIN users u ON u.id = sales.agent_id
-        WHERE sales.agent_id IS NOT NULL
-          AND sales.agent_id > 0
-          AND u.role = 'agent'
-        GROUP BY u.id, u.full_name, u.email
-        ORDER BY total_sales DESC, total_orders DESC, u.full_name ASC
-        LIMIT ?
-    ";
-
-    $types .= 'i';
-    $params[] = $limit;
-
-    $stmt = $db->prepare($sql);
-    if (!$stmt) {
-        return [];
-    }
-
-    $stmt->bind_param($types, ...$params);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    $rows = $result->fetch_all(MYSQLI_ASSOC);
-    $stmt->close();
-
-    cacheAnalytics($cache_key, $rows, null, 1800);
-    return $rows;
-}
-
-/**
  * Get sales + order totals for a period (in days).
  */
 function getSalesOrdersSummary($user_id = null, $user_role = 'admin', $days = 1) {
+    global $db;
+
     $days = (int) $days;
     if ($days <= 0) {
         $days = 1;
@@ -867,309 +503,196 @@ function getSalesOrdersSummary($user_id = null, $user_role = 'admin', $days = 1)
 
     $today = date('Y-m-d');
     $start_date = date('Y-m-d', strtotime("-" . ($days - 1) . " days"));
-    return analyticsGetTrackedSalesSummary($start_date, $today, $user_id, $user_role);
-}
+    $cache_key = "sales_orders_summary_{$user_role}_{$days}d_{$today}";
+    $cached = getCachedAnalytics($cache_key, $user_id, 900);
+    if ($cached) {
+        return $cached;
+    }
 
+    $total_sales = 0.0;
+    $total_orders = 0;
 
-/**
- * Record profit for an order in the agent_profits table.
- * This is used as a ledger for agent earnings.
- */
-if (!function_exists('recordOrderProfit')) {
-    function recordOrderProfit($data) {
-        global $db;
-        
-        if (!function_exists('dbh_table_exists') || !dbh_table_exists('agent_profits')) {
-            return false;
-        }
-        
-        $agent_id = (int)($data['agent_id'] ?? 0);
-        $order_id = (int)($data['order_id'] ?? 0);
-        $customer_id = isset($data['customer_id']) ? (int)$data['customer_id'] : null;
-        $package_id = (int)($data['package_id'] ?? 0);
-        $customer_payment = (float)($data['customer_paid'] ?? $data['customer_payment'] ?? 0);
-        $agent_cost = (float)($data['agent_cost'] ?? 0);
-        $profit_amount = (float)($data['profit_amount'] ?? 0);
-        $reference = (string)($data['reference'] ?? '');
-        $status = (string)($data['status'] ?? 'earned');
-        
-        if ($order_id <= 0 || $agent_id <= 0) {
-            return false;
+    // 1. Query bundle_orders
+    if (function_exists('dbh_table_exists') && dbh_table_exists('bundle_orders')) {
+        $params = [$start_date, $today];
+        $param_types = "ss";
+        $agent_filter = "";
+
+        if ($user_role === 'agent' && $user_id) {
+            $agent_filter = "AND (agent_id = ? OR user_id = ?)";
+            $params[] = $user_id;
+            $params[] = $user_id;
+            $param_types .= "ii";
+        } elseif ($user_role === 'customer' && $user_id) {
+            $agent_filter = "AND user_id = ?";
+            $params[] = $user_id;
+            $param_types .= "i";
         }
 
-        try {
-            // Check if already recorded to avoid duplicates
-            $stmt = $db->prepare("SELECT id FROM agent_profits WHERE order_id = ? LIMIT 1");
-            if ($stmt) {
-                $stmt->bind_param("i", $order_id);
-                $stmt->execute();
-                if ($stmt->get_result()->num_rows > 0) {
-                    return false;
-                }
+        $sql = "
+            SELECT COALESCE(SUM(amount), 0) as total_sales,
+                   COUNT(*) as total_orders
+            FROM bundle_orders
+            WHERE status IN ('success', 'delivered', 'completed')
+              AND DATE(created_at) BETWEEN ? AND ?
+              {$agent_filter}
+        ";
+
+        $stmt = $db->prepare($sql);
+        if ($stmt) {
+            $stmt->bind_param($param_types, ...$params);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            if ($result) {
+                $row = $result->fetch_assoc();
+                $total_sales += (float) ($row['total_sales'] ?? 0);
+                $total_orders += (int) ($row['total_orders'] ?? 0);
             }
-            
-            $stmt = $db->prepare("
-                INSERT INTO agent_profits 
-                (agent_id, order_id, customer_id, package_id, customer_payment, agent_cost, profit_amount, reference, status, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-            ");
-            
-            if (!$stmt) {
-                return false;
-            }
-
-            $stmt->bind_param("iiiidddss", $agent_id, $order_id, $customer_id, $package_id, $customer_payment, $agent_cost, $profit_amount, $reference, $status);
-            $inserted = $stmt->execute();
-
-            if ($inserted) {
-                // Fetch order details for notification
-                $stmt_notif = $db->prepare("
-                    SELECT 
-                        bo.id AS order_id,
-                        bo.order_reference,
-                        bo.beneficiary_number,
-                        bo.amount AS customer_payment,
-                        bo.agent_cost,
-                        bo.status AS order_status,
-                        bo.user_id AS customer_user_id,
-                        bo.agent_id,
-                        dp.name AS package_name,
-                        dp.data_size,
-                        n.name AS network_name,
-                        t.metadata AS txn_metadata,
-                        u.full_name AS customer_name,
-                        u.email AS customer_email
-                    FROM bundle_orders bo
-                    LEFT JOIN data_packages dp ON bo.package_id = dp.id
-                    LEFT JOIN networks n ON dp.network_id = n.id
-                    LEFT JOIN users u ON bo.user_id = u.id
-                    LEFT JOIN transactions t ON bo.order_reference = t.reference
-                    WHERE bo.id = ?
-                    LIMIT 1
-                ");
-                if ($stmt_notif) {
-                    $stmt_notif->bind_param("i", $order_id);
-                    $stmt_notif->execute();
-                    $order_info = $stmt_notif->get_result()->fetch_assoc();
-                    $stmt_notif->close();
-                    
-                    if ($order_info) {
-                        $c_name = 'Guest Customer';
-                        $c_email = '';
-                        if ($order_info['customer_user_id'] > 0) {
-                            $c_name = $order_info['customer_name'] ?? 'Customer';
-                            $c_email = $order_info['customer_email'] ?? '';
-                        } else if (!empty($order_info['txn_metadata'])) {
-                            $meta = json_decode($order_info['txn_metadata'], true);
-                            if (is_array($meta)) {
-                                $c_name = $meta['buyer_name'] ?? 'Guest Customer';
-                                $c_email = $meta['buyer_email'] ?? $meta['email'] ?? '';
-                            }
-                        }
-                        
-                        $network_name = $order_info['network_name'] ?? 'Data';
-                        $data_size = $order_info['data_size'] ?? $order_info['package_name'] ?? 'bundle';
-                        $item_name = trim($network_name . ' ' . $data_size);
-                        
-                        if (!function_exists('sendAgentOrderNotification')) {
-                            require_once __DIR__ . '/functions.php';
-                        }
-                        if (function_exists('sendAgentOrderNotification')) {
-                            sendAgentOrderNotification([
-                                'agent_id' => $agent_id,
-                                'service' => 'Data Bundle Purchase',
-                                'item' => $item_name,
-                                'reference' => $order_info['order_reference'] ?? $reference,
-                                'customer_name' => $c_name,
-                                'customer_email' => $c_email,
-                                'beneficiary_number' => $order_info['beneficiary_number'] ?? '',
-                                'amount' => $customer_payment,
-                                'payment_method' => 'online',
-                                'status' => $order_info['order_status'] ?? $status
-                            ]);
-                        }
-
-                        if ($profit_amount > 0) {
-                            if (!function_exists('sendAgentProfitNotification')) {
-                                require_once __DIR__ . '/functions.php';
-                            }
-                            if (function_exists('sendAgentProfitNotification')) {
-                                sendAgentProfitNotification([
-                                    'agent_id' => $agent_id,
-                                    'service' => 'Data Bundle Purchase',
-                                    'item' => $item_name,
-                                    'reference' => $order_info['order_reference'] ?? $reference,
-                                    'customer_name' => $c_name,
-                                    'customer_email' => $c_email,
-                                    'beneficiary_number' => $order_info['beneficiary_number'] ?? '',
-                                    'amount' => $customer_payment,
-                                    'profit_amount' => $profit_amount,
-                                    'payment_method' => 'online',
-                                    'status' => $order_info['order_status'] ?? $status
-                                ]);
-                            }
-                        }
-                    }
-                }
-            }
-
-            return $inserted;
-        } catch (Throwable $e) {
-            error_log('recordOrderProfit failed: ' . $e->getMessage());
-            return false;
         }
     }
+
+    // 2. Query afa_registrations
+    if (function_exists('dbh_table_exists') && dbh_table_exists('afa_registrations')) {
+        $params = [$start_date, $today];
+        $param_types = "ss";
+        $agent_filter = "";
+
+        if ($user_role === 'agent' && $user_id) {
+            $agent_filter = "AND (agent_id = ? OR user_id = ?)";
+            $params[] = $user_id;
+            $params[] = $user_id;
+            $param_types .= "ii";
+        } elseif ($user_role === 'customer' && $user_id) {
+            $agent_filter = "AND user_id = ?";
+            $params[] = $user_id;
+            $param_types .= "i";
+        }
+
+        $sql = "
+            SELECT COALESCE(SUM(amount), 0) as total_sales,
+                   COUNT(*) as total_orders
+            FROM afa_registrations
+            WHERE status IN ('success', 'delivered', 'completed', 'processing')
+              AND DATE(created_at) BETWEEN ? AND ?
+              {$agent_filter}
+        ";
+
+        $stmt = $db->prepare($sql);
+        if ($stmt) {
+            $stmt->bind_param($param_types, ...$params);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            if ($result) {
+                $row = $result->fetch_assoc();
+                $total_sales += (float) ($row['total_sales'] ?? 0);
+                $total_orders += (int) ($row['total_orders'] ?? 0);
+            }
+        }
+    }
+
+    // 3. Query result_checker_purchases
+    if (function_exists('dbh_table_exists') && dbh_table_exists('result_checker_purchases')) {
+        $params = [$start_date, $today];
+        $param_types = "ss";
+        $agent_filter = "";
+
+        if ($user_role === 'agent' && $user_id) {
+            $agent_filter = "AND (agent_id = ? OR user_id = ?)";
+            $params[] = $user_id;
+            $params[] = $user_id;
+            $param_types .= "ii";
+        } elseif ($user_role === 'customer' && $user_id) {
+            $agent_filter = "AND user_id = ?";
+            $params[] = $user_id;
+            $param_types .= "i";
+        }
+
+        $sql = "
+            SELECT COALESCE(SUM(amount), 0) as total_sales,
+                   COUNT(*) as total_orders
+            FROM result_checker_purchases
+            WHERE status = 'success'
+              AND DATE(created_at) BETWEEN ? AND ?
+              {$agent_filter}
+        ";
+
+        $stmt = $db->prepare($sql);
+        if ($stmt) {
+            $stmt->bind_param($param_types, ...$params);
+            $stmt->execute();
+            $result = $stmt->get_result();
+            if ($result) {
+                $row = $result->fetch_assoc();
+                $total_sales += (float) ($row['total_sales'] ?? 0);
+                $total_orders += (int) ($row['total_orders'] ?? 0);
+            }
+        }
+    }
+
+    $summary = [
+        'total_sales' => $total_sales,
+        'total_orders' => $total_orders
+    ];
+
+    cacheAnalytics($cache_key, $summary, $user_id, 900);
+    return $summary;
 }
+
 
 /**
  * Summarize profits over a span of days.
- * Strictly matches the calculation logic in admin/profit-monitor.php for "Store Profit".
  */
 function getProfitSummary($days = 1) {
     global $db;
 
-    $days = (int) $days;
-    $is_lifetime = $days <= 0;
-    if (!$is_lifetime) {
-        $days = max(1, $days);
-    }
+    $days = max(1, (int) $days);
     $default = [
         'total_profit' => 0,
         'total_revenue' => 0,
         'total_cost' => 0,
-        'agent_profit' => 0,
-        'customer_profit' => 0,
-        'total_orders' => 0,
-        'available_profit' => 0,
-        'paid_withdrawals' => 0,
-        'pending_withdrawals' => 0
+        'total_orders' => 0
     ];
 
-    $today = date('Y-m-d');
-    $start_date = $is_lifetime ? '2000-01-01' : date('Y-m-d', strtotime("-" . ($days - 1) . " days"));
-    // New cache key version to force update
-    $cache_key = $is_lifetime ? "profit_summary_v6_lifetime_{$today}" : "profit_summary_v6_{$days}d_{$today}";
-    $cached = getCachedAnalytics($cache_key, null, 900);
-    if ($cached) {
-        return $cached;
-    }
-
-    $summary = $default;
-
-    // 1. Calculate Data Store Profit (Bundles) - Matches admin/profit-monitor.php
-    if (function_exists('dbh_table_exists') && dbh_table_exists('bundle_orders')) {
-        try {
-            $bundleActivityExpression = (function_exists('dbh_table_has_column') && dbh_table_has_column('bundle_orders', 'delivered_at'))
-                ? 'COALESCE(bo.delivered_at, bo.updated_at, bo.created_at)'
-                : 'COALESCE(bo.updated_at, bo.created_at)';
-
-            // This SQL strictly follows Profit Monitor's data_profit calculation
-            $bundleSql = "
-                SELECT
-                    COALESCE(SUM(GREATEST(0, COALESCE(bo.amount, 0) - COALESCE(bo.agent_cost, 0))), 0) AS data_profit,
-                    COALESCE(SUM(COALESCE(bo.amount, 0)), 0) AS data_revenue,
-                    COALESCE(SUM(COALESCE(bo.agent_cost, 0)), 0) AS data_cost,
-                    COUNT(*) AS data_orders
-                FROM bundle_orders bo
-                WHERE bo.agent_id IS NOT NULL
-                  AND bo.agent_id > 0
-                  AND (bo.user_id IS NULL OR bo.user_id <> bo.agent_id)
-                  AND LOWER(COALESCE(bo.status, '')) IN ('success', 'delivered', 'completed')
-                  AND COALESCE(bo.agent_cost, 0) > 0
-                  AND COALESCE(bo.amount, 0) > COALESCE(bo.agent_cost, 0)
-                  AND DATE({$bundleActivityExpression}) BETWEEN ? AND ?
-            ";
-            
-            $stmt = $db->prepare($bundleSql);
-            if ($stmt) {
-                $stmt->bind_param('ss', $start_date, $today);
-                $stmt->execute();
-                $data = $stmt->get_result()->fetch_assoc();
-                
-                $summary['total_profit'] = (float) ($data['data_profit'] ?? 0);
-                $summary['total_revenue'] = (float) ($data['data_revenue'] ?? 0);
-                $summary['total_cost'] = (float) ($data['data_cost'] ?? 0);
-                $summary['agent_profit'] = (float) ($data['data_profit'] ?? 0);
-                $summary['total_orders'] = (int) ($data['data_orders'] ?? 0);
-            }
-        } catch (Throwable $e) {
-            error_log('getProfitSummary Bundle Calculation failed: ' . $e->getMessage());
-        }
-    }
-
-    // 2. Subtract withdrawals if lifetime to get available profit (matching Profit Monitor)
-    if ($is_lifetime && function_exists('dbh_table_exists') && dbh_table_exists('profit_withdrawals')) {
-        try {
-            $withdrawalSumColumn = (function_exists('dbh_table_has_column') && dbh_table_has_column('profit_withdrawals', 'total_debit'))
-                ? 'CASE WHEN pw.total_debit IS NULL OR pw.total_debit <= 0 THEN pw.amount WHEN pw.total_debit > pw.amount THEN pw.amount ELSE pw.total_debit END'
-                : 'pw.amount';
-
-            $withdrawalSql = "
-                SELECT
-                    COALESCE(SUM(CASE WHEN pw.status IN ('pending', 'approved', 'processing') THEN {$withdrawalSumColumn} ELSE 0 END), 0) AS pending_withdrawals,
-                    COALESCE(SUM(CASE WHEN pw.status = 'paid' THEN {$withdrawalSumColumn} ELSE 0 END), 0) AS paid_withdrawals
-                FROM profit_withdrawals pw
-            ";
-            
-            $result = $db->query($withdrawalSql);
-            if ($result) {
-                $wData = $result->fetch_assoc();
-                $summary['pending_withdrawals'] = (float)($wData['pending_withdrawals'] ?? 0);
-                $summary['paid_withdrawals'] = (float)($wData['paid_withdrawals'] ?? 0);
-                $summary['available_profit'] = max(0, $summary['total_profit'] - $summary['pending_withdrawals'] - $summary['paid_withdrawals']);
-            }
-        } catch (Throwable $e) {
-            error_log('getProfitSummary Withdrawal calculation failed: ' . $e->getMessage());
-        }
-    }
-
-    cacheAnalytics($cache_key, $summary, null, 900);
-    return $summary;
-}
-
-/**
- * Summarize agent commission program earnings over a span of days.
- */
-function getCommissionSummary($days = 1) {
-    global $db;
-
-    $days = (int) $days;
-    $is_lifetime = $days <= 0;
-    if (!$is_lifetime) {
-        $days = max(1, $days);
-    }
-
-    $default = [
-        'total_commission' => 0,
-        'pending_commission' => 0,
-        'liquidated_commission' => 0,
-        'total_entries' => 0,
-    ];
-
-    if (function_exists('ensureAgentCommissionTables')) {
-        ensureAgentCommissionTables();
-    }
-
-    if (!function_exists('dbh_table_exists') || !dbh_table_exists('agent_commissions')) {
+    if (!function_exists('dbh_table_exists') || !dbh_table_exists('agent_profits')) {
         return $default;
     }
 
     $today = date('Y-m-d');
-    $start_date = $is_lifetime ? '2000-01-01' : date('Y-m-d', strtotime("-" . ($days - 1) . " days"));
-    $cache_key = $is_lifetime ? "commission_summary_lifetime_{$today}" : "commission_summary_{$days}d_{$today}";
+    $start_date = date('Y-m-d', strtotime("-" . ($days - 1) . " days"));
+    $cache_key = "profit_summary_{$days}d_{$today}";
     $cached = getCachedAnalytics($cache_key, null, 900);
     if ($cached) {
         return $cached;
     }
 
+    $revenue_column = null;
+    if (function_exists('dbh_table_has_column')) {
+        foreach (['customer_paid', 'customer_payment'] as $candidate) {
+            if (dbh_table_has_column('agent_profits', $candidate)) {
+                $revenue_column = $candidate;
+                break;
+            }
+        }
+    }
+    $cost_column = function_exists('dbh_table_has_column') && dbh_table_has_column('agent_profits', 'agent_cost')
+        ? 'agent_cost'
+        : null;
+
+    $select_clauses = [
+        'COALESCE(SUM(ap.profit_amount), 0) as total_profit',
+        $revenue_column ? "COALESCE(SUM(ap.{$revenue_column}), 0) as total_revenue" : '0 as total_revenue',
+        $cost_column ? "COALESCE(SUM(ap.{$cost_column}), 0) as total_cost" : '0 as total_cost',
+        'COALESCE(SUM(CASE WHEN bo.agent_id IS NOT NULL THEN ap.profit_amount ELSE 0 END), 0) as agent_profit',
+        'COALESCE(SUM(CASE WHEN bo.agent_id IS NULL THEN ap.profit_amount ELSE 0 END), 0) as customer_profit',
+        'COUNT(*) as total_orders'
+    ];
+
     $sql = "
         SELECT
-            COALESCE(SUM(CASE WHEN status <> 'cancelled' THEN amount ELSE 0 END), 0) AS total_commission,
-            COALESCE(SUM(CASE WHEN status = 'earned' THEN amount ELSE 0 END), 0) AS pending_commission,
-            COALESCE(SUM(CASE WHEN status = 'liquidated' THEN amount ELSE 0 END), 0) AS liquidated_commission,
-            COUNT(CASE WHEN status <> 'cancelled' THEN 1 END) AS total_entries
-        FROM agent_commissions
-        WHERE DATE(earned_at) BETWEEN ? AND ?
+            " . implode(",\n            ", $select_clauses) . "
+        FROM agent_profits ap
+        LEFT JOIN bundle_orders bo ON bo.id = ap.order_id
+        WHERE DATE(ap.created_at) BETWEEN ? AND ?
     ";
 
     $stmt = $db->prepare($sql);
@@ -1180,14 +703,13 @@ function getCommissionSummary($days = 1) {
     $stmt->bind_param('ss', $start_date, $today);
     $stmt->execute();
     $result = $stmt->get_result();
-    $data = $result ? $result->fetch_assoc() : [];
-    $stmt->close();
+    $data = $result->fetch_assoc();
 
     $summary = [
-        'total_commission' => (float) ($data['total_commission'] ?? 0),
-        'pending_commission' => (float) ($data['pending_commission'] ?? 0),
-        'liquidated_commission' => (float) ($data['liquidated_commission'] ?? 0),
-        'total_entries' => (int) ($data['total_entries'] ?? 0),
+        'total_profit' => (float) ($data['total_profit'] ?? 0),
+        'total_revenue' => (float) ($data['total_revenue'] ?? 0),
+        'total_cost' => (float) ($data['total_cost'] ?? 0),
+        'total_orders' => (int) ($data['total_orders'] ?? 0)
     ];
 
     cacheAnalytics($cache_key, $summary, null, 900);
@@ -1197,66 +719,157 @@ function getCommissionSummary($days = 1) {
 
 /**
  * Retrieve per-day profit breakdown for the requested window.
- * Strictly matches the calculation logic in admin/profit-monitor.php for "Store Profit".
  */
 function getProfitTrends($days = 7) {
     global $db;
 
     $days = max(1, (int) $days);
+
+    if (!function_exists('dbh_table_exists') || !dbh_table_exists('agent_profits')) {
+        return [];
+    }
+
     $today = date('Y-m-d');
     $start_date = date('Y-m-d', strtotime("-" . ($days - 1) . " days"));
-    // New cache key version to force update
-    $cache_key = "profit_trends_v5_{$days}d_{$today}";
+    $cache_key = "profit_trends_{$days}d_{$today}";
     $cached = getCachedAnalytics($cache_key, null, 900);
     if ($cached) {
         return $cached;
     }
 
-    if (!function_exists('dbh_table_exists') || !dbh_table_exists('bundle_orders')) {
-        return [];
-    }
-
-    try {
-        $bundleActivityExpression = (function_exists('dbh_table_has_column') && dbh_table_has_column('bundle_orders', 'delivered_at'))
-            ? 'COALESCE(bo.delivered_at, bo.updated_at, bo.created_at)'
-            : 'COALESCE(bo.updated_at, bo.created_at)';
-
-        $sql = "
-            SELECT
-                DATE({$bundleActivityExpression}) as profit_date,
-                COALESCE(SUM(GREATEST(0, COALESCE(bo.amount, 0) - COALESCE(bo.agent_cost, 0))), 0) AS total_profit,
-                COALESCE(SUM(COALESCE(bo.amount, 0)), 0) AS total_revenue,
-                COALESCE(SUM(COALESCE(bo.agent_cost, 0)), 0) AS total_cost,
-                COUNT(*) AS total_orders
-            FROM bundle_orders bo
-            WHERE bo.agent_id IS NOT NULL
-              AND bo.agent_id > 0
-              AND (bo.user_id IS NULL OR bo.user_id <> bo.agent_id)
-              AND LOWER(COALESCE(bo.status, '')) IN ('success', 'delivered', 'completed')
-              AND COALESCE(bo.agent_cost, 0) > 0
-              AND COALESCE(bo.amount, 0) > COALESCE(bo.agent_cost, 0)
-              AND DATE({$bundleActivityExpression}) BETWEEN ? AND ?
-            GROUP BY DATE({$bundleActivityExpression})
-            ORDER BY DATE({$bundleActivityExpression}) DESC
-            LIMIT ?
-        ";
-
-        $stmt = $db->prepare($sql);
-        if (!$stmt) {
-            return [];
+    $limit = (int) $days;
+    $revenue_column = null;
+    if (function_exists('dbh_table_has_column')) {
+        foreach (['customer_paid', 'customer_payment'] as $candidate) {
+            if (dbh_table_has_column('agent_profits', $candidate)) {
+                $revenue_column = $candidate;
+                break;
+            }
         }
+    }
+    $cost_column = function_exists('dbh_table_has_column') && dbh_table_has_column('agent_profits', 'agent_cost')
+        ? 'agent_cost'
+        : null;
 
-        $stmt->bind_param('ssi', $start_date, $today, $days);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        $rows = $result->fetch_all(MYSQLI_ASSOC);
+    $select_clauses = [
+        'DATE(ap.created_at) as profit_date',
+        'COALESCE(SUM(ap.profit_amount), 0) as total_profit',
+        $revenue_column ? "COALESCE(SUM(ap.{$revenue_column}), 0) as total_revenue" : '0 as total_revenue',
+        $cost_column ? "COALESCE(SUM(ap.{$cost_column}), 0) as total_cost" : '0 as total_cost',
+        'COALESCE(SUM(CASE WHEN bo.agent_id IS NOT NULL THEN ap.profit_amount ELSE 0 END), 0) as agent_profit',
+        'COALESCE(SUM(CASE WHEN bo.agent_id IS NULL THEN ap.profit_amount ELSE 0 END), 0) as customer_profit',
+        'COUNT(*) as total_orders'
+    ];
 
-        cacheAnalytics($cache_key, $rows, null, 900);
-        return $rows;
-    } catch (Throwable $e) {
-        error_log('getProfitTrends calculation failed: ' . $e->getMessage());
+    $sql = "
+        SELECT
+            " . implode(",\n            ", $select_clauses) . "
+        FROM agent_profits ap
+        LEFT JOIN bundle_orders bo ON bo.id = ap.order_id
+        WHERE DATE(ap.created_at) BETWEEN ? AND ?
+        GROUP BY DATE(created_at)
+        ORDER BY DATE(created_at) DESC
+        LIMIT {$limit}
+    ";
+
+    $stmt = $db->prepare($sql);
+    if (!$stmt) {
         return [];
     }
+
+    $stmt->bind_param('ss', $start_date, $today);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $rows = $result->fetch_all(MYSQLI_ASSOC);
+
+    cacheAnalytics($cache_key, $rows, null, 900);
+    return $rows;
+}
+
+
+/**
+ * Sum up successful/completed orders from bundle_orders, afa_registrations, and result_checker_purchases.
+ */
+function getDashboardTotalOrdersCount($user_id, $user_role = 'admin') {
+    global $db;
+    $total_orders = 0;
+    
+    // 1. bundle_orders count
+    $order_statuses = "'success','delivered','completed'";
+    if (function_exists('dbh_table_exists') && dbh_table_exists('bundle_orders')) {
+        if ($user_role === 'admin') {
+            $sql = "SELECT COUNT(*) as total FROM bundle_orders WHERE status IN ({$order_statuses})";
+            $res = $db->query($sql);
+            if ($res) {
+                $row = $res->fetch_assoc();
+                $total_orders += (int)($row['total'] ?? 0);
+            }
+        } else {
+            $sql = "SELECT COUNT(*) as total FROM bundle_orders WHERE user_id = ? AND status IN ({$order_statuses})";
+            $stmt = $db->prepare($sql);
+            if ($stmt) {
+                $stmt->bind_param("i", $user_id);
+                $stmt->execute();
+                $res = $stmt->get_result();
+                if ($res) {
+                    $row = $res->fetch_assoc();
+                    $total_orders += (int)($row['total'] ?? 0);
+                }
+            }
+        }
+    }
+
+    // 2. afa_registrations count
+    $afa_statuses = "'success','completed','delivered','processing'";
+    if (function_exists('dbh_table_exists') && dbh_table_exists('afa_registrations')) {
+        if ($user_role === 'admin') {
+            $sql = "SELECT COUNT(*) as total FROM afa_registrations WHERE status IN ({$afa_statuses})";
+            $res = $db->query($sql);
+            if ($res) {
+                $row = $res->fetch_assoc();
+                $total_orders += (int)($row['total'] ?? 0);
+            }
+        } else {
+            $sql = "SELECT COUNT(*) as total FROM afa_registrations WHERE user_id = ? AND status IN ({$afa_statuses})";
+            $stmt = $db->prepare($sql);
+            if ($stmt) {
+                $stmt->bind_param("i", $user_id);
+                $stmt->execute();
+                $res = $stmt->get_result();
+                if ($res) {
+                    $row = $res->fetch_assoc();
+                    $total_orders += (int)($row['total'] ?? 0);
+                }
+            }
+        }
+    }
+
+    // 3. result_checker_purchases count
+    $rc_statuses = "'success'";
+    if (function_exists('dbh_table_exists') && dbh_table_exists('result_checker_purchases')) {
+        if ($user_role === 'admin') {
+            $sql = "SELECT COUNT(*) as total FROM result_checker_purchases WHERE status IN ({$rc_statuses})";
+            $res = $db->query($sql);
+            if ($res) {
+                $row = $res->fetch_assoc();
+                $total_orders += (int)($row['total'] ?? 0);
+            }
+        } else {
+            $sql = "SELECT COUNT(*) as total FROM result_checker_purchases WHERE user_id = ? AND status IN ({$rc_statuses})";
+            $stmt = $db->prepare($sql);
+            if ($stmt) {
+                $stmt->bind_param("i", $user_id);
+                $stmt->execute();
+                $res = $stmt->get_result();
+                if ($res) {
+                    $row = $res->fetch_assoc();
+                    $total_orders += (int)($row['total'] ?? 0);
+                }
+            }
+        }
+    }
+
+    return $total_orders;
 }
 
 
@@ -1266,8 +879,22 @@ function getProfitTrends($days = 7) {
 function getDashboardStats($user_id, $user_role = 'admin') {
     global $db;
 
-    $stats = [];
-    $completed_order_statuses = "'success','delivered'";
+    $cache_key = "dashboard_stats_" . $user_role . "_" . $user_id;
+    $cached = getCachedAnalytics($cache_key, $user_id, 900);
+    $use_cached_only = false;
+    
+    if ($cached) {
+        if ($user_role !== 'agent') {
+            return $cached;
+        }
+        $stats = $cached;
+        $use_cached_only = true;
+    } else {
+        $stats = [];
+    }
+
+    // Normalized order statuses we consider "completed"
+    $order_statuses = "'success','delivered'";
 
     // Define queries based on role
     $queries = [
@@ -1276,74 +903,110 @@ function getDashboardStats($user_id, $user_role = 'admin') {
             'total_agents' => "SELECT COUNT(*) as total FROM users WHERE role = 'agent'",
             'total_customers' => "SELECT COUNT(*) as total FROM users WHERE role = 'customer'",
             'total_sales' => "SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE status = 'success' AND transaction_type = 'purchase'",
-            'total_orders' => "SELECT COUNT(*) as total FROM bundle_orders",
+            'total_orders' => "SELECT COUNT(*) as total FROM bundle_orders WHERE status IN ({$order_statuses})",
             'total_balance' => "SELECT COALESCE(SUM(balance), 0) as total FROM wallets"
         ],
         'agent' => [
             'wallet_balance' => "SELECT COALESCE(balance, 0) as balance FROM wallets WHERE user_id = ?",
-            'total_orders' => "SELECT COUNT(*) as total FROM bundle_orders WHERE user_id = ?",
-            'total_sales' => "SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE user_id = ? AND status = 'success' AND transaction_type = 'purchase'",
-            'total_customers' => "SELECT COUNT(DISTINCT bo.user_id) as total FROM bundle_orders bo WHERE bo.agent_id = ? AND bo.status = 'success'"
-        ],
-        'vip' => [
-            'wallet_balance' => "SELECT COALESCE(balance, 0) as balance FROM wallets WHERE user_id = ?",
-            'total_orders' => "SELECT COUNT(*) as total FROM bundle_orders WHERE user_id = ?",
+            'total_orders' => "SELECT COUNT(*) as total FROM bundle_orders WHERE user_id = ? AND status IN ({$order_statuses})",
             'total_sales' => "SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE user_id = ? AND status = 'success' AND transaction_type = 'purchase'",
             'total_customers' => "SELECT COUNT(DISTINCT bo.user_id) as total FROM bundle_orders bo WHERE bo.agent_id = ? AND bo.status = 'success'"
         ],
         'customer' => [
             'wallet_balance' => "SELECT COALESCE(balance, 0) as balance FROM wallets WHERE user_id = ?",
-            'total_orders' => "SELECT COUNT(*) as total FROM bundle_orders WHERE user_id = ?",
+            'total_orders' => "SELECT COUNT(*) as total FROM bundle_orders WHERE user_id = ? AND status IN ({$order_statuses})",
             'total_spent' => "SELECT COALESCE(SUM(amount), 0) as total FROM transactions WHERE user_id = ? AND status = 'success' AND transaction_type = 'purchase'"
         ]
     ];
     
     $role_queries = $queries[$user_role] ?? $queries['admin'];
     
-    foreach ($role_queries as $key => $query) {
-        if (strpos($query, '?') !== false) {
-            // Query with parameter - must have user_id
-            if (!$user_id) {
-                $stats[$key] = 0; // Default value for queries requiring user_id when not provided
+    if (!$use_cached_only) {
+        foreach ($role_queries as $key => $query) {
+            if ($key === 'total_orders') {
+                $stats[$key] = getDashboardTotalOrdersCount($user_id, $user_role);
                 continue;
             }
-            $stmt = $db->prepare($query);
-            $stmt->bind_param("i", $user_id);
-            $stmt->execute();
-            $result = $stmt->get_result();
-            $data = $result->fetch_assoc();
-        } else {
-            // Query without parameter
-            $result = $db->query($query);
-            if (!$result) {
-                $stats[$key] = 0; // Default value on query failure
-                continue;
-            }
-            $data = $result->fetch_assoc();
-        }
-
-        // Extract the value based on column name
-        if ($data) {
-            if (isset($data['total'])) {
-                $stats[$key] = floatval($data['total']);
-            } elseif (isset($data['balance'])) {
-                $stats[$key] = floatval($data['balance']);
+            if (strpos($query, '?') !== false) {
+                // Query with parameter - must have user_id
+                if (!$user_id) {
+                    $stats[$key] = 0; // Default value for queries requiring user_id when not provided
+                    continue;
+                }
+                $stmt = $db->prepare($query);
+                $stmt->bind_param("i", $user_id);
+                $stmt->execute();
+                $result = $stmt->get_result();
+                $data = $result->fetch_assoc();
             } else {
-                $stats[$key] = 0; // Default value when no recognizable column found
+                // Query without parameter
+                $result = $db->query($query);
+                if (!$result) {
+                    $stats[$key] = 0; // Default value on query failure
+                    continue;
+                }
+                $data = $result->fetch_assoc();
             }
-        } else {
-            $stats[$key] = 0; // Default value when query returns no data
+
+            // Extract the value based on column name
+            if ($data) {
+                if (isset($data['total'])) {
+                    $stats[$key] = floatval($data['total']);
+                } elseif (isset($data['balance'])) {
+                    $stats[$key] = floatval($data['balance']);
+                } else {
+                    $stats[$key] = 0; // Default value when no recognizable column found
+                }
+            } else {
+                $stats[$key] = 0; // Default value when query returns no data
+            }
         }
     }
 
-    if (in_array($user_role, ['admin', 'agent', 'vip'], true)) {
-        $lifetimeSummary = analyticsGetTrackedSalesSummary('2000-01-01', date('Y-m-d'), in_array($user_role, ['agent', 'vip'], true) ? $user_id : null, $user_role);
-        $stats['total_sales'] = (float) ($lifetimeSummary['total_sales'] ?? 0);
-        $stats['total_orders'] = (int) ($lifetimeSummary['total_orders'] ?? 0);
-    }
+    if ($user_role === 'agent' && $user_id) {
+        $hasAgentIdCol = dbh_table_has_column('users', 'agent_id');
+        $hasReferrals = dbh_table_exists('user_referrals');
+        $hasBundleOrders = dbh_table_exists('bundle_orders');
 
-    if (in_array($user_role, ['agent', 'vip'], true) && $user_id) {
-        $stats['total_customers'] = analyticsGetTrackedCustomerCount($user_id, $user_role);
+        try {
+            if ($hasAgentIdCol && $hasReferrals && $hasBundleOrders) {
+                $stmt = $db->prepare("
+                    SELECT COUNT(DISTINCT u.id) AS total
+                    FROM users u
+                    LEFT JOIN user_referrals ur ON ur.user_id = u.id
+                    LEFT JOIN bundle_orders bo ON bo.user_id = u.id AND bo.agent_id = ? AND bo.status IN ({$order_statuses})
+                    WHERE u.role = 'customer' AND (u.agent_id = ? OR ur.agent_id = ? OR bo.agent_id = ?)
+                ");
+                $stmt->bind_param("iiii", $user_id, $user_id, $user_id, $user_id);
+            } elseif ($hasAgentIdCol) {
+                $stmt = $db->prepare("SELECT COUNT(*) AS total FROM users WHERE role = 'customer' AND agent_id = ?");
+                $stmt->bind_param("i", $user_id);
+            } elseif ($hasReferrals) {
+                $stmt = $db->prepare("
+                    SELECT COUNT(DISTINCT u.id) AS total
+                    FROM users u
+                    JOIN user_referrals ur ON ur.user_id = u.id
+                    WHERE u.role = 'customer' AND ur.agent_id = ?
+                ");
+                $stmt->bind_param("i", $user_id);
+            } elseif ($hasBundleOrders) {
+                $stmt = $db->prepare("SELECT COUNT(DISTINCT user_id) AS total FROM bundle_orders WHERE agent_id = ? AND status IN ({$order_statuses})");
+                $stmt->bind_param("i", $user_id);
+            } else {
+                $stmt = null;
+            }
+
+            if (!empty($stmt)) {
+                $stmt->execute();
+                $res = $stmt->get_result();
+                $row = $res ? $res->fetch_assoc() : null;
+                if ($row && isset($row['total'])) {
+                    $stats['total_customers'] = (int) $row['total'];
+                }
+            }
+        } catch (Exception $e) {
+            error_log('Agent client count query failed: ' . $e->getMessage());
+        }
     }
 
     // Fallback: if total_orders still resolves to zero (legacy data without bundle_orders),
@@ -1370,6 +1033,8 @@ function getDashboardStats($user_id, $user_role = 'admin') {
             }
         }
     }
+
+    cacheAnalytics($cache_key, $stats, $user_id, 900);
     return $stats;
 }
 
@@ -1421,12 +1086,12 @@ function getTopPerformingAgents($limit = 10, $user_id = null, $user_role = 'admi
 function getRecentTransactions($user_id = null, $user_role = 'admin', $limit = 10) {
     global $db;
     
-    $inner_where_clause = "";
+    $where_clause = "";
     $params = [$limit];
     $param_types = "i";
     
     if ($user_id) {
-        $inner_where_clause = "WHERE user_id = ?";
+        $where_clause = "WHERE t.user_id = ?";
         $params = [$user_id, $limit];
         $param_types = "ii";
     }
@@ -1439,11 +1104,9 @@ function getRecentTransactions($user_id = null, $user_role = 'admin', $limit = 1
             bo.order_reference,
             bo.beneficiary_number,
             bo.amount as order_amount,
-            bo.agent_cost,
             dp.name as package_name, 
             n.name as network_name, 
             n.color as network_color,
-            JSON_UNQUOTE(JSON_EXTRACT(t.metadata, '$.admin_price')) AS metadata_admin_price,
             JSON_UNQUOTE(JSON_EXTRACT(t.metadata, '$.beneficiary_number')) AS metadata_beneficiary,
             JSON_UNQUOTE(JSON_EXTRACT(t.metadata, '$.msisdn')) AS metadata_msisdn,
             JSON_UNQUOTE(JSON_EXTRACT(t.metadata, '$.phone')) AS metadata_phone,
@@ -1458,13 +1121,7 @@ function getRecentTransactions($user_id = null, $user_role = 'admin', $limit = 1
                 'purchase'
             ) AS transaction_type_display,
             COALESCE(t.status, bo.status, 'pending') AS status_display
-        FROM (
-            SELECT *
-            FROM transactions
-            $inner_where_clause
-            ORDER BY created_at DESC
-            LIMIT ?
-        ) t
+        FROM transactions t
         LEFT JOIN users u ON t.user_id = u.id
         LEFT JOIN bundle_orders bo ON (
             bo.transaction_id = t.id
@@ -1479,13 +1136,48 @@ function getRecentTransactions($user_id = null, $user_role = 'admin', $limit = 1
         )
         LEFT JOIN data_packages dp ON bo.package_id = dp.id
         LEFT JOIN networks n ON dp.network_id = n.id
+        $where_clause
         ORDER BY t.created_at DESC
+        LIMIT ?
     ";
     
     $stmt = $db->prepare($sql);
+    if (!$stmt) {
+        return [];
+    }
+
     $stmt->bind_param($param_types, ...$params);
-    $stmt->execute();
+
+    $attempts = 0;
+    while (true) {
+        try {
+            $stmt->execute();
+            break;
+        } catch (mysqli_sql_exception $e) {
+            $attempts++;
+            $code = (int) $e->getCode();
+            $message = strtolower($e->getMessage() ?? '');
+            $isGoneAway = in_array($code, [2006, 2013], true) || strpos($message, 'server has gone away') !== false;
+
+            if (!$isGoneAway || $attempts >= 2) {
+                error_log('getRecentTransactions failed: ' . $e->getMessage());
+                return [];
+            }
+
+            // Reconnect and retry once
+            $db->getConnection();
+            $stmt = $db->prepare($sql);
+            if (!$stmt) {
+                return [];
+            }
+            $stmt->bind_param($param_types, ...$params);
+        }
+    }
+
     $result = $stmt->get_result();
+    if (!$result) {
+        return [];
+    }
     
     return $result->fetch_all(MYSQLI_ASSOC);
 }
@@ -1495,25 +1187,14 @@ function getRecentTransactions($user_id = null, $user_role = 'admin', $limit = 1
  */
 function clearAnalyticsCache($cache_key = null, $user_id = null) {
     global $db;
-
-    if (!analyticsCacheTableReady()) {
-        return;
-    }
-
+    
     if ($cache_key) {
         $stmt = $db->prepare("DELETE FROM analytics_cache WHERE cache_key = ? AND user_id = ?");
-        if (!$stmt) {
-            return;
-        }
-        $safe_user_id = is_numeric($user_id) ? (int)$user_id : 0;
-        $stmt->bind_param("si", $cache_key, $safe_user_id);
+        $stmt->bind_param("si", $cache_key, $user_id);
     } else {
         $stmt = $db->prepare("DELETE FROM analytics_cache WHERE expires_at < NOW()");
-        if (!$stmt) {
-            return;
-        }
     }
-
+    
     $stmt->execute();
 }
 
@@ -1535,7 +1216,7 @@ function getHourlySalesData($user_id = null, $user_role = 'admin') {
     $params = [];
     $param_types = "";
     
-    if (in_array($user_role, ['agent', 'vip'], true) && $user_id) {
+    if ($user_role === 'agent' && $user_id) {
         $where_clause = "AND t.user_id = ?";
         $params[] = $user_id;
         $param_types .= "i";

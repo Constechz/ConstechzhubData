@@ -108,7 +108,147 @@ if ($approved_app) {
                 <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
             </div>
             
-            <?php renderAgentSidebar(); ?>
+            <ul class="sidebar-nav">
+                <li class="nav-section">
+                    <div class="nav-section-title">Dashboard</div>
+                    <div class="nav-item">
+                        <a href="dashboard.php" class="nav-link">
+                            <i class="fas fa-home"></i>
+                            Dashboard
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Services</div>
+                    <div class="nav-item">
+                        <a href="at-business.php" class="nav-link">
+                            <i class="fas fa-mobile-alt"></i>
+                            AT Business
+                        </a>
+                    </div>
+                <div class="nav-item">
+                    <a href="mtn-business.php" class="nav-link">
+                        <i class="fas fa-mobile-alt"></i>
+                        MTN Business
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="afa-registration.php" class="nav-link">
+                        <i class="fas fa-user-check"></i>
+                        AFA Registration
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="bulk-mtn.php" class="nav-link">
+                        <i class="fas fa-layer-group"></i>
+                        Bulk MTN
+                    </a>
+                </div>
+                    <div class="nav-item">
+                        <a href="result-checker.php" class="nav-link">
+                            <i class="fas fa-award"></i>
+                            Result Checker
+                        </a>
+                    </div>
+                <div class="nav-item">
+                    <a href="telecel-business.php" class="nav-link">
+                        <i class="fas fa-signal"></i>
+                        Telecel Business
+                    </a>
+                </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Transaction</div>
+                    <div class="nav-item">
+                        <a href="transactions.php" class="nav-link">
+                            <i class="fas fa-money-bill-wave"></i>
+                            Transactions
+                        </a>
+                    </div>
+                <div class="nav-item">
+                    <a href="histories.php" class="nav-link">
+                        <i class="fas fa-history"></i>
+                        Data Histories
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="reference.php" class="nav-link">
+                        <i class="fas fa-search"></i>
+                        Reference
+                    </a>
+                </div>
+            </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Operations</div>
+                    <div class="nav-item">
+                        <a href="customer_topup.php" class="nav-link">
+                            <i class="fas fa-user-plus"></i>
+                            Customer Top-up
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="support.php" class="nav-link">
+                            <i class="fas fa-life-ring"></i>
+                            Support
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Business</div>
+                    <div class="nav-item">
+                        <a href="pricing.php" class="nav-link">
+                            <i class="fas fa-tags"></i>
+                            Custom Pricing
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Users</div>
+                    <div class="nav-item">
+                        <a href="customers.php" class="nav-link">
+                            <i class="fas fa-user-friends"></i>
+                            Customers
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Commission</div>
+                    <div class="nav-item">
+                        <a href="commission.php" class="nav-link">
+                            <i class="fas fa-percentage"></i>
+                            Commission
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="withdraw-profit.php" class="nav-link">
+                            <i class="fas fa-wallet"></i>
+                            Withdraw Profit
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Settings</div>
+                    <div class="nav-item">
+                        <a href="settings.php" class="nav-link">
+                            <i class="fas fa-cog"></i>
+                            Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="api-access.php" class="nav-link active">
+                            <i class="fas fa-key"></i>
+                            API Access
+                        </a>
+                    </div>
+                </li>
+            </ul>
         </nav>
         
         <!-- Main Content -->
@@ -160,6 +300,9 @@ if ($approved_app) {
                     </div>
                 </div>
             </header>
+
+<?php echo renderNotificationSlides('agents'); ?>
+
             
             <!-- Dashboard Content -->
             <div class="dashboard-content">
@@ -320,8 +463,8 @@ if ($approved_app) {
     </div>
 
     <!-- Application Form Modal -->
-    <div id="applicationModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.5); z-index: 9999;">
-        <div class="modal-content-wrapper" style="position: relative; background: var(--card-bg, white); color: var(--text-color, #333); margin: 5% auto; padding: 0; width: 90%; max-width: 600px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); max-height: 80vh; overflow-y: auto; border: 1px solid var(--border-color, #e0e0e0);">
+    <div id="applicationModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(46, 41, 78, 0.5); z-index: 9999;">
+        <div class="modal-content-wrapper" style="position: relative; background: var(--card-bg, #F1E9DA); color: var(--text-color, #2E294E); margin: 5% auto; padding: 0; width: 90%; max-width: 600px; border-radius: 8px; box-shadow: 0 4px 6px rgba(46, 41, 78, 0.1); max-height: 80vh; overflow-y: auto; border: 1px solid var(--border-color, #F1E9DA);">
             <div class="modal-header">
                 <h3>Apply for API Access</h3>
                 <span class="close" onclick="hideApplicationForm()">&times;</span>
@@ -390,16 +533,16 @@ if ($approved_app) {
         }
         
         [data-theme="dark"] .form-control {
-            background: var(--input-bg, #2a2a2a);
+            background: var(--input-bg, #2E294E);
             color: var(--text-color);
             border: 1px solid var(--border-color);
         }
         
         [data-theme="dark"] .form-control:focus {
-            background: var(--input-bg, #2a2a2a);
+            background: var(--input-bg, #2E294E);
             color: var(--text-color);
-            border-color: var(--primary-color, #007bff);
-            box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.25);
+            border-color: var(--primary-color, #541388);
+            box-shadow: 0 0 0 0.2rem rgba(84, 19, 136, 0.25);
         }
         
         [data-theme="dark"] .close {
@@ -419,9 +562,9 @@ if ($approved_app) {
         /* Light mode fallbacks */
         [data-theme="light"] .modal-content-wrapper,
         .modal-content-wrapper {
-            background: white !important;
-            color: #333 !important;
-            border: 1px solid #e0e0e0 !important;
+            background: #F1E9DA !important;
+            color: #2E294E !important;
+            border: 1px solid #F1E9DA !important;
         }
     </style>
 
@@ -437,7 +580,7 @@ if ($approved_app) {
                 modal.style.left = '0';
                 modal.style.width = '100%';
                 modal.style.height = '100%';
-                modal.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+                modal.style.backgroundColor = 'rgba(46, 41, 78, 0.5)';
                 modal.style.zIndex = '9999';
                 document.body.style.overflow = 'hidden';
                 
@@ -450,9 +593,9 @@ if ($approved_app) {
                         modalContent.style.color = 'var(--text-color)';
                         modalContent.style.border = '1px solid var(--border-color)';
                     } else {
-                        modalContent.style.background = 'white';
-                        modalContent.style.color = '#333';
-                        modalContent.style.border = '1px solid #e0e0e0';
+                        modalContent.style.background = '#F1E9DA';
+                        modalContent.style.color = '#2E294E';
+                        modalContent.style.border = '1px solid #F1E9DA';
                     }
                 }
                 
@@ -603,7 +746,8 @@ if ($approved_app) {
     </script>
     <!-- IMMEDIATE Icon Fix for square placeholder issues -->
     <script src="../immediate_icon_fix.js"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
-
 

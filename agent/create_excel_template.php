@@ -47,3 +47,7 @@ header('Cache-Control: max-age=0');
 // Output Excel content
 echo $excel_content;
 exit;
+?>
+    <!-- IMMEDIATE Icon Fix for square placeholder issues -->
+    <script src="../immediate_icon_fix.js"></script>
+

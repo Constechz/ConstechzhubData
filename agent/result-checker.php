@@ -172,23 +172,7 @@ if ($count_rs) {
 }
 
 $gateway = getActivePaymentGateway();
-$enabled_gateways = getEnabledPaymentGateways();
-$enabled_gateways = array_values(array_filter($enabled_gateways, function ($name) {
-    return in_array($name, ['paystack', 'moolre'], true);
-}));
-if (empty($enabled_gateways)) {
-    $enabled_gateways = ['paystack'];
-}
-if (!in_array($gateway, $enabled_gateways, true)) {
-    $gateway = $enabled_gateways[0];
-}
-$gateway_labels = [
-    'paystack' => 'Paystack',
-    'moolre' => 'Moolre'
-];
-$gateway_label = $gateway_labels[$gateway] ?? ucfirst($gateway);
-$gateway_mode_label = count($enabled_gateways) > 1 ? 'Paystack + Moolre' : $gateway_label;
-$has_gateway_choice = count($enabled_gateways) > 1;
+$gateway_label = $gateway === 'moolre' ? 'Moolre' : 'Paystack';
 
 $flash = getFlashMessage();
 ?>
@@ -204,24 +188,24 @@ $flash = getFlashMessage();
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>">
     <style>
         :root {
-            --rc-card: #ffffff;
-            --rc-text: #0f172a;
-            --rc-muted: #6b7280;
-            --rc-border: #e5e7eb;
-            --rc-primary: #4f46e5;
-            --rc-accent: #10b981;
+            --rc-card: #F1E9DA;
+            --rc-text: #2E294E;
+            --rc-muted: #541388;
+            --rc-border: #F1E9DA;
+            --rc-primary: #541388;
+            --rc-accent: #2E294E;
         }
         .rc-shell {
             max-width: 980px;
             margin: 0 auto;
         }
         .rc-hero {
-            background: linear-gradient(135deg, #2f5bea, #7c3aed);
-            color: #fff;
+            background: linear-gradient(135deg, #541388, #541388);
+            color: #F1E9DA;
             border-radius: 18px;
             padding: 1.75rem 1.5rem;
             text-align: center;
-            box-shadow: 0 18px 36px rgba(56, 74, 195, 0.24);
+            box-shadow: 0 18px 36px rgba(84, 19, 136, 0.24);
         }
         .rc-hero h2 {
             margin: 0 0 0.4rem;
@@ -246,7 +230,7 @@ $flash = getFlashMessage();
             display: flex;
             gap: 0.85rem;
             align-items: center;
-            box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+            box-shadow: 0 10px 24px rgba(46, 41, 78, 0.08);
         }
         .rc-icon {
             width: 44px;
@@ -256,14 +240,14 @@ $flash = getFlashMessage();
             border-radius: 12px;
             font-size: 1.2rem;
         }
-        .rc-icon.blue { background: #e0e7ff; color: #3b82f6; }
-        .rc-icon.pink { background: #fde2e2; color: #ef4444; }
+        .rc-icon.blue { background: #F1E9DA; color: #541388; }
+        .rc-icon.pink { background: #F1E9DA; color: #D90368; }
         .rc-price-meta h3 {
             margin: 0 0 0.3rem;
             font-size: 1rem;
         }
         .rc-price-meta span {
-            color: #10b981;
+            color: #2E294E;
             font-weight: 700;
             display: block;
         }
@@ -275,7 +259,7 @@ $flash = getFlashMessage();
             border: 1px solid var(--rc-border);
             border-radius: 18px;
             padding: 1.5rem;
-            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+            box-shadow: 0 12px 28px rgba(46, 41, 78, 0.08);
         }
         .rc-form h4 {
             margin: 0 0 1rem;
@@ -304,14 +288,14 @@ $flash = getFlashMessage();
             border-radius: 12px;
             border: 1px solid var(--rc-border);
             font-size: 0.95rem;
-            background: #fff;
+            background: #F1E9DA;
         }
         .rc-balance-card {
-            background: #eef4ff;
-            border: 1px solid #bfdbfe;
+            background: #F1E9DA;
+            border: 1px solid #F1E9DA;
             border-radius: 12px;
             padding: 0.85rem 0.9rem;
-            color: #1d4ed8;
+            color: #541388;
             font-weight: 600;
             display: flex;
             gap: 0.5rem;
@@ -325,13 +309,13 @@ $flash = getFlashMessage();
             border: none;
             font-weight: 600;
             font-size: 1rem;
-            background: #e5e7eb;
-            color: #9ca3af;
+            background: #F1E9DA;
+            color: #F1E9DA;
             cursor: not-allowed;
         }
         .rc-submit.active {
             background: var(--rc-primary);
-            color: #fff;
+            color: #F1E9DA;
             cursor: pointer;
         }
         .rc-notes {
@@ -340,7 +324,7 @@ $flash = getFlashMessage();
             gap: 0.65rem;
         }
         .rc-note {
-            background: #fff;
+            background: #F1E9DA;
             border-radius: 12px;
             border: 1px solid var(--rc-border);
             padding: 0.85rem 1rem;
@@ -359,17 +343,17 @@ $flash = getFlashMessage();
             gap: 0.4rem;
             padding: 0.7rem 1.4rem;
             border-radius: 999px;
-            border: 1px solid #93c5fd;
-            color: #2563eb;
+            border: 1px solid #F1E9DA;
+            color: #541388;
             text-decoration: none;
             font-weight: 600;
-            background: #f8fbff;
+            background: #F1E9DA;
         }
         .rc-result {
             margin-top: 1rem;
-            background: #f0fdf4;
-            border: 1px solid #bbf7d0;
-            color: #166534;
+            background: #F1E9DA;
+            border: 1px solid #F1E9DA;
+            color: #2E294E;
             border-radius: 12px;
             padding: 1rem;
             display: none;
@@ -379,7 +363,7 @@ $flash = getFlashMessage();
         }
         .rc-result code {
             display: inline-block;
-            background: #dcfce7;
+            background: #F1E9DA;
             padding: 0.2rem 0.4rem;
             border-radius: 6px;
         }
@@ -387,26 +371,26 @@ $flash = getFlashMessage();
             margin-bottom: 1rem;
             padding: 0.8rem 1rem;
             border-radius: 12px;
-            background: #fff;
+            background: #F1E9DA;
             border: 1px solid var(--rc-border);
         }
-        .rc-flash.success { border-color: #bbf7d0; color: #166534; }
-        .rc-flash.error { border-color: #fecaca; color: #991b1b; }
+        .rc-flash.success { border-color: #F1E9DA; color: #2E294E; }
+        .rc-flash.error { border-color: #F1E9DA; color: #D90368; }
         [data-theme="dark"] .rc-flash {
-            color: #000;
+            color: #2E294E;
         }
         [data-theme="dark"] .rc-form,
         [data-theme="dark"] .rc-form * {
-            color: #000000;
+            color: #2E294E;
         }
         [data-theme="dark"] .rc-input,
         [data-theme="dark"] .rc-select {
-            color: #000000;
-            background: #ffffff;
+            color: #2E294E;
+            background: #F1E9DA;
         }
         [data-theme="dark"] .rc-input::placeholder,
         [data-theme="dark"] .rc-select::placeholder {
-            color: #111827;
+            color: #2E294E;
         }
     </style>
 </head>
@@ -416,7 +400,153 @@ $flash = getFlashMessage();
             <div class="sidebar-brand">
                 <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
             </div>
-            <?php renderAgentSidebar(); ?>
+            <ul class="sidebar-nav">
+                <li class="nav-section">
+                    <div class="nav-section-title">Dashboard</div>
+                    <div class="nav-item">
+                        <a href="dashboard.php" class="nav-link">
+                            <i class="fas fa-home"></i>
+                            Dashboard
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Services</div>
+                    <div class="nav-item">
+                        <a href="at-business.php" class="nav-link">
+                            <i class="fas fa-mobile-alt"></i>
+                            AT Business
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="mtn-business.php" class="nav-link">
+                            <i class="fas fa-mobile-alt"></i>
+                            MTN Business
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="bulk-mtn.php" class="nav-link">
+                            <i class="fas fa-layer-group"></i>
+                            Bulk MTN
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="result-checker.php" class="nav-link active">
+                            <i class="fas fa-award"></i>
+                            Result Checker
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="telecel-business.php" class="nav-link">
+                            <i class="fas fa-signal"></i>
+                            Telecel Business
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Transaction</div>
+                    <div class="nav-item">
+                        <a href="transactions.php" class="nav-link">
+                            <i class="fas fa-money-bill-wave"></i>
+                            Transactions
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="histories.php" class="nav-link">
+                            <i class="fas fa-history"></i>
+                            Data Histories
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="reference.php" class="nav-link">
+                            <i class="fas fa-search"></i>
+                            Reference
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Operations</div>
+                    <div class="nav-item">
+                        <a href="customer_topup.php" class="nav-link">
+                            <i class="fas fa-user-plus"></i>
+                            Customer Top-up
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="topup-requests.php" class="nav-link">
+                            <i class="fas fa-hand-holding-usd"></i>
+                            Topup Requests
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="support.php" class="nav-link">
+                            <i class="fas fa-life-ring"></i>
+                            Support
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Business</div>
+                    <div class="nav-item">
+                        <a href="pricing.php" class="nav-link">
+                            <i class="fas fa-tags"></i>
+                            Custom Pricing
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Users</div>
+                    <div class="nav-item">
+                        <a href="customers.php" class="nav-link">
+                            <i class="fas fa-user-friends"></i>
+                            Customers
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Commission</div>
+                    <div class="nav-item">
+                        <a href="commission.php" class="nav-link">
+                            <i class="fas fa-percentage"></i>
+                            Commission
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="withdraw-profit.php" class="nav-link">
+                            <i class="fas fa-wallet"></i>
+                            Withdraw Profit
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Settings</div>
+                    <div class="nav-item">
+                        <a href="settings.php" class="nav-link">
+                            <i class="fas fa-cog"></i>
+                            Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="payment-settings.php" class="nav-link">
+                            <i class="fas fa-university"></i>
+                            Payment Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="api-access.php" class="nav-link">
+                            <i class="fas fa-key"></i>
+                            API Access
+                        </a>
+                    </div>
+                </li>
+            </ul>
         </nav>
         
         <main class="main-content">
@@ -466,6 +596,9 @@ $flash = getFlashMessage();
                     </div>
                 </div>
             </header>
+
+<?php echo renderNotificationSlides('agents'); ?>
+
             
             <div class="dashboard-content">
                 <?php if ($flash): ?>
@@ -519,11 +652,6 @@ $flash = getFlashMessage();
                             </select>
                         </div>
                         <div class="rc-field">
-                            <label for="cardQuantity">Quantity *</label>
-                            <input id="cardQuantity" class="rc-input" type="number" min="1" max="20" value="1">
-                            <span class="rc-help" id="quantityHint">Enter how many cards to buy (max 20 per purchase).</span>
-                        </div>
-                        <div class="rc-field">
                             <label for="smsPhone">SMS Phone Number *</label>
                             <input id="smsPhone" class="rc-input" type="tel" placeholder="e.g. 0240000000">
                             <span class="rc-help">We will send the PIN, Serial, and checker link to this number.</span>
@@ -537,22 +665,8 @@ $flash = getFlashMessage();
                             <label for="paymentMethod">Payment Method *</label>
                             <select id="paymentMethod" class="rc-select">
                                 <option value="wallet">Wallet</option>
-                                <option value="gateway">Pay with Gateway (<?php echo htmlspecialchars($gateway_mode_label); ?>)</option>
+                                <option value="gateway">Pay with <?php echo htmlspecialchars($gateway_label); ?></option>
                             </select>
-                        </div>
-                        <div class="rc-field" id="gatewayField" style="display:none;">
-                            <label for="gatewayChoice">Select Gateway *</label>
-                            <?php if ($has_gateway_choice): ?>
-                                <select id="gatewayChoice" class="rc-select">
-                                    <?php foreach ($enabled_gateways as $gateway_name): ?>
-                                        <option value="<?php echo htmlspecialchars($gateway_name); ?>" <?php echo $gateway_name === $gateway ? 'selected' : ''; ?>>
-                                            <?php echo htmlspecialchars($gateway_labels[$gateway_name] ?? ucfirst($gateway_name)); ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                            <?php else: ?>
-                                <input id="gatewayChoice" class="rc-input" type="text" value="<?php echo htmlspecialchars($gateway_label); ?>" readonly>
-                            <?php endif; ?>
                         </div>
                         <div class="rc-balance-card">
                             <i class="fas fa-wallet"></i>
@@ -606,37 +720,6 @@ $flash = getFlashMessage();
         const resultBox = document.getElementById('rcResult');
         const smsPhoneInput = document.getElementById('smsPhone');
         const notifyEmailInput = document.getElementById('notifyEmail');
-        const quantityInput = document.getElementById('cardQuantity');
-        const quantityHint = document.getElementById('quantityHint');
-        const gatewayField = document.getElementById('gatewayField');
-        const gatewayChoice = document.getElementById('gatewayChoice');
-        const availableByType = {
-            BECE: <?php echo (int) $available_counts['BECE']; ?>,
-            WASSCE: <?php echo (int) $available_counts['WASSCE']; ?>
-        };
-        const defaultGateway = <?php echo json_encode($gateway); ?>;
-
-        function getSelectedGateway() {
-            if (!gatewayChoice) {
-                return defaultGateway;
-            }
-            const value = String(gatewayChoice.value || '').trim().toLowerCase();
-            if (!value || value === 'paystack' || value === 'moolre') {
-                return value || defaultGateway;
-            }
-            return defaultGateway;
-        }
-
-        function updateGatewayFieldVisibility() {
-            if (!gatewayField) {
-                return;
-            }
-            const isGateway = methodSelect.value === 'gateway';
-            gatewayField.style.display = isGateway ? 'block' : 'none';
-            if (gatewayChoice && gatewayChoice.tagName === 'SELECT') {
-                gatewayChoice.disabled = !isGateway;
-            }
-        }
 
         async function parseJsonResponse(res) {
             const text = await res.text();
@@ -655,33 +738,18 @@ $flash = getFlashMessage();
             const type = cardTypeSelect.value;
             const phoneOk = smsPhoneInput.value.trim().length > 0;
             const emailOk = notifyEmailInput.value.trim().length > 0;
-            const qty = parseInt(quantityInput.value, 10);
-            const qtyOk = Number.isFinite(qty) && qty >= 1 && qty <= 20;
-            const stockOk = !type || !qtyOk ? false : qty <= (availableByType[type] || 0);
-            const enabled = type && rcEnabled[type] && phoneOk && emailOk && qtyOk && stockOk;
-            if (type) {
-                quantityHint.textContent = 'Available: ' + (availableByType[type] || 0) + ' cards. Max 20 per purchase.';
-                if (qtyOk && !stockOk) {
-                    quantityHint.textContent = 'Requested quantity exceeds available stock for ' + type + '.';
-                }
-            } else {
-                quantityHint.textContent = 'Enter how many cards to buy (max 20 per purchase).';
-            }
+            const enabled = type && rcEnabled[type] && phoneOk && emailOk;
             rcSubmit.classList.toggle('active', !!enabled);
             rcSubmit.disabled = !enabled;
         }
         updateButtonState();
-        updateGatewayFieldVisibility();
         cardTypeSelect.addEventListener('change', updateButtonState);
-        quantityInput.addEventListener('input', updateButtonState);
         smsPhoneInput.addEventListener('input', updateButtonState);
         notifyEmailInput.addEventListener('input', updateButtonState);
-        methodSelect.addEventListener('change', updateGatewayFieldVisibility);
 
         rcSubmit.addEventListener('click', async () => {
             const cardType = cardTypeSelect.value;
             const paymentMethod = methodSelect.value;
-            const quantity = parseInt(quantityInput.value, 10) || 1;
             const smsPhone = smsPhoneInput.value.trim();
             const notifyEmail = notifyEmailInput.value.trim();
             if (!cardType) return;
@@ -692,16 +760,6 @@ $flash = getFlashMessage();
             }
             if (!notifyEmail) {
                 alert('Please enter an email address.');
-                updateButtonState();
-                return;
-            }
-            if (quantity < 1 || quantity > 20) {
-                alert('Quantity must be between 1 and 20.');
-                updateButtonState();
-                return;
-            }
-            if (quantity > (availableByType[cardType] || 0)) {
-                alert('Requested quantity exceeds available stock.');
                 updateButtonState();
                 return;
             }
@@ -717,9 +775,7 @@ $flash = getFlashMessage();
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         card_type: cardType,
-                        quantity: quantity,
                         payment_method: paymentMethod,
-                        gateway: paymentMethod === 'gateway' ? getSelectedGateway() : '',
                         sms_phone: smsPhone,
                         notification_email: notifyEmail,
                         csrf_token: <?php echo json_encode($csrf_token); ?>
@@ -738,25 +794,12 @@ $flash = getFlashMessage();
                     throw new Error(data.message || 'Purchase failed');
                 }
                 const details = data.data || {};
-                const cards = Array.isArray(details.cards) ? details.cards : [];
-                let cardHtml = '';
-                if (cards.length > 0) {
-                    cardHtml = cards.map((item, index) => (
-                        '<div style="margin-top:0.5rem;">#' + (index + 1) +
-                        ' PIN: <code>' + (item.pin || '') + '</code> | Serial: <code>' + (item.serial_number || '') + '</code></div>'
-                    )).join('');
-                } else {
-                    cardHtml =
-                        '<div>PIN: <code>' + (details.pin || '') + '</code></div>' +
-                        '<div>Serial: <code>' + (details.serial_number || '') + '</code></div>';
-                }
                 resultBox.innerHTML =
                     '<h5>Card Details</h5>' +
                     '<div>Type: <strong>' + (details.card_type || cardType) + '</strong></div>' +
-                    '<div>Quantity: <strong>' + (details.quantity || quantity) + '</strong></div>' +
-                    '<div>Total Amount: <strong><?php echo addslashes(CURRENCY); ?> ' + Number(details.amount || 0).toFixed(2) + '</strong></div>' +
-                    cardHtml +
-                    '<div style="margin-top:0.5rem;">Reference: <strong>' + (details.reference || '') + '</strong></div>';
+                    '<div>PIN: <code>' + (details.pin || '') + '</code></div>' +
+                    '<div>Serial: <code>' + (details.serial_number || '') + '</code></div>' +
+                    '<div>Reference: <strong>' + (details.reference || '') + '</strong></div>';
                 resultBox.style.display = 'block';
             } catch (err) {
                 alert(err.message || 'Purchase failed');
@@ -819,7 +862,7 @@ $flash = getFlashMessage();
     </script>
     <!-- IMMEDIATE Icon Fix for square placeholder issues -->
     <script src="../immediate_icon_fix.js"></script>
-<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/phone-paste.js')); ?>"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
-

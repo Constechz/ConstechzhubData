@@ -44,8 +44,7 @@ $profit_values = array_column($profit_trends, 'total_profit');
     
     <!-- PWA Meta Tags -->
     <link rel="manifest" href="../manifest.php">
-    <link rel="icon" type="image/png" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-192.png')); ?>">
-    <meta name="theme-color" content="#6366f1">
+    <meta name="theme-color" content="#541388">
     
     <!-- iOS PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -61,7 +60,7 @@ $profit_values = array_column($profit_trends, 'total_profit');
     <meta name="application-name" content="<?php echo SITE_NAME; ?>">
     
     <!-- Microsoft PWA Support -->
-    <meta name="msapplication-TileColor" content="#6366f1">
+    <meta name="msapplication-TileColor" content="#541388">
     <meta name="msapplication-TileImage" content="../assets/images/icon-192.png">
     <meta name="msapplication-config" content="none">
     
@@ -103,7 +102,174 @@ $profit_values = array_column($profit_trends, 'total_profit');
                 <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
             </div>
             
-                        <?php renderAdminSidebar(); ?>
+            <ul class="sidebar-nav">
+                <li class="nav-section">
+                    <div class="nav-section-title">Dashboard</div>
+                    <div class="nav-item">
+                        <a href="dashboard.php" class="nav-link">
+                            <i class="fas fa-home"></i>
+                            Dashboard
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Management</div>
+                    <div class="nav-item">
+                        <a href="packages.php" class="nav-link">
+                            <i class="fas fa-box"></i>
+                            Data Packages
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="pricing.php" class="nav-link">
+                            <i class="fas fa-tags"></i>
+                            Pricing
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="afa-registration.php" class="nav-link">
+                            <i class="fas fa-user-check"></i>
+                            AFA Registration
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="users.php" class="nav-link">
+                            <i class="fas fa-users"></i>
+                            Users
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="agents.php" class="nav-link">
+                            <i class="fas fa-user-tie"></i>
+                            Agents
+                        </a>
+                    </div>
+                
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Operations</div>
+                    <div class="nav-item">
+                        <a href="manual_topup.php" class="nav-link">
+                            <i class="fas fa-plus-circle"></i>
+                            Manual Top-up
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="support.php" class="nav-link">
+                            <i class="fas fa-life-ring"></i>
+                            Support
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Analytics</div>
+                    <div class="nav-item">
+                        <a href="transactions.php" class="nav-link">
+                            <i class="fas fa-history"></i>
+                            Transactions
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="reports.php" class="nav-link">
+                            <i class="fas fa-chart-bar"></i>
+                            Reports
+                        </a>
+                    </div>
+                    <div class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></div>
+                    <div class="nav-item">
+                        <a href="profit.php" class="nav-link active">
+                            <i class="fas fa-coins"></i>
+                            Profit
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Settings</div>
+                    <div class="nav-item">
+                        <a href="settings.php" class="nav-link">
+                            <i class="fas fa-cog"></i>
+                            System Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="topup-settings.php" class="nav-link">
+                            <i class="fas fa-university"></i>
+                            Topup Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="topup-requests.php" class="nav-link">
+                            <i class="fas fa-file-invoice"></i>
+                            Topup Requests
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="commission-settings.php" class="nav-link">
+                            <i class="fas fa-percentage"></i>
+                            Commission Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="pwa-settings.php" class="nav-link">
+                            <i class="fas fa-mobile-alt"></i>
+                            PWA Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="sms-settings.php" class="nav-link">
+                            <i class="fas fa-sms"></i>
+                            SMS Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="sms-broadcast.php" class="nav-link">
+                            <i class="fas fa-bullhorn"></i>
+                            SMS Broadcasts
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="seo-settings.php" class="nav-link">
+                            <i class="fas fa-globe"></i>
+                            SEO Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="smtp-settings.php" class="nav-link">
+                            <i class="fas fa-envelope"></i>
+                            SMTP Email Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="email-broadcast.php" class="nav-link">
+                            <i class="fas fa-paper-plane"></i>
+                            Email Broadcasts
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="api-providers.php" class="nav-link">
+                            <i class="fas fa-plug"></i>
+                            API Providers
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="api-applications.php" class="nav-link">
+                            <i class="fas fa-key"></i>
+                            API Applications
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="system-reset.php" class="nav-link">
+                            <i class="fas fa-broom"></i>
+                            System Reset
+                        </a>
+                    </div>
+                </li>
+            </ul>
                 <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
         </nav>
         
@@ -337,13 +503,13 @@ $profit_values = array_column($profit_trends, 'total_profit');
                     datasets: [{
                         label: 'Profit',
                         data: profitData,
-                        borderColor: '#10B981',
-                        backgroundColor: 'rgba(16, 185, 129, 0.12)',
+                        borderColor: '#2E294E',
+                        backgroundColor: 'rgba(46, 41, 78, 0.12)',
                         borderWidth: 2,
                         tension: 0.35,
                         fill: true,
                         pointRadius: 4,
-                        pointBackgroundColor: '#10B981'
+                        pointBackgroundColor: '#2E294E'
                     }]
                 },
                 options: {
@@ -365,7 +531,7 @@ $profit_values = array_column($profit_trends, 'total_profit');
                         y: {
                             beginAtZero: true,
                             grid: {
-                                color: 'rgba(0,0,0,0.08)'
+                                color: 'rgba(46, 41, 78, 0.08)'
                             },
                             ticks: {
                                 callback: function(value) {
@@ -388,6 +554,7 @@ $profit_values = array_column($profit_trends, 'total_profit');
     <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/mobile-enhancements.js')); ?>""></script>
 </body>
 </html>
+
 
 
 

@@ -57,10 +57,9 @@ function getAudienceRecipients($audience) {
                 }
 
                 $normalized = formatPhone($row['phone']);
-                if (!$normalized || !preg_match('/^0[0-9]{9}$/', $normalized)) {
+                if (!$normalized || !preg_match('/^233[0-9]{9}$/', $normalized)) {
                     continue;
                 }
-                $normalized = '233' . substr($normalized, 1);
 
                 $recipients[$normalized] = [
                     'user_id' => (int) $row['id'],
@@ -117,36 +116,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $error_message = 'Delete failed. Please try again.';
             }
         }
-    } elseif (isset($_POST['bulk_delete']) && isset($_POST['bulk_ids']) && is_array($_POST['bulk_ids'])) {
-        $ids = array_map('intval', $_POST['bulk_ids']);
-        $ids = array_filter($ids, function($id) { return $id > 0; });
-        if (empty($ids)) {
-            $error_message = 'No valid broadcasts selected for deletion.';
-        } else {
-            try {
-                $idPlaceholders = implode(',', array_fill(0, count($ids), '?'));
-                $types = str_repeat('i', count($ids));
-                if ($current_user_role === 'super_admin') {
-                    $stmt = $db->prepare("DELETE FROM sms_broadcasts WHERE id IN ($idPlaceholders)");
-                    $stmt->bind_param($types, ...$ids);
-                } else {
-                    $stmt = $db->prepare("DELETE FROM sms_broadcasts WHERE id IN ($idPlaceholders) AND owner_id = ? AND owner_role = ?");
-                    $bindParams = array_merge($ids, [$current_user_id, $current_user_role]);
-                    $types .= 'is';
-                    $stmt->bind_param($types, ...$bindParams);
-                }
-                $stmt->execute();
-                $affected = $stmt->affected_rows;
-                if ($affected > 0) {
-                    $success_message = "Successfully deleted $affected selected broadcast(s).";
-                } else {
-                    $error_message = 'No broadcasts were deleted (not found or not allowed).';
-                }
-            } catch (Exception $e) {
-                error_log('SMS broadcast bulk delete failed: ' . $e->getMessage());
-                $error_message = 'Bulk deletion failed. Please try again.';
-            }
-        }
     } elseif (!$smsEnabled) {
         $error_message = 'SMS is not enabled. Please configure your SMS provider first.';
     } else {
@@ -191,48 +160,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $sms = new MnotifySmsService();
                 $successCount = 0;
                 $failedNumbers = [];
-                $lastError = '';
 
-                // Detect if the message template uses personalization placeholders
-                $isPersonalized = (strpos($message, '{{name}}') !== false || strpos($message, '{{role}}') !== false);
-
-                if (!$isPersonalized) {
-                    // Send in one single API request (takes 1-2 seconds regardless of volume)
-                    $phoneNumbers = array_column($recipients, 'phone');
+                foreach ($recipients as $recipient) {
+                    $personalized = buildBroadcastMessage($message, $recipient);
                     try {
-                        $response = $sms->sendBulkSMS($phoneNumbers, $message, 'admin_broadcast');
+                        $response = $sms->sendSMS(
+                            $recipient['phone'],
+                            $personalized,
+                            'admin_broadcast',
+                            $recipient['user_id']
+                        );
+
                         if (!empty($response['success'])) {
-                            $successCount = count($phoneNumbers);
+                            $successCount++;
                         } else {
-                            $failedNumbers = $phoneNumbers;
-                            $lastError = $response['error'] ?? 'Unknown API error';
+                            $failedNumbers[] = $recipient['phone'];
                         }
                     } catch (Exception $ex) {
-                        $failedNumbers = $phoneNumbers;
-                        $lastError = $ex->getMessage();
-                    }
-                } else {
-                    // Personalized: Must send one by one
-                    foreach ($recipients as $recipient) {
-                        $personalized = buildBroadcastMessage($message, $recipient);
-                        try {
-                            $response = $sms->sendSMS(
-                                $recipient['phone'],
-                                $personalized,
-                                'admin_broadcast',
-                                $recipient['user_id']
-                            );
-
-                            if (!empty($response['success'])) {
-                                $successCount++;
-                            } else {
-                                $failedNumbers[] = $recipient['phone'];
-                                $lastError = $response['error'] ?? 'Unknown API error';
-                            }
-                        } catch (Exception $ex) {
-                            $failedNumbers[] = $recipient['phone'];
-                            $lastError = $ex->getMessage();
-                        }
+                        $failedNumbers[] = $recipient['phone'];
                     }
                 }
 
@@ -277,9 +222,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $success_message = "Broadcast completed with {$successCount} successes and {$failedCount} failures.";
                 } elseif ($successCount === 0) {
                     $error_message = 'Unable to send SMS broadcast. Please check the SMS provider logs.';
-                    if ($lastError !== '') {
-                        $error_message .= ' (Provider Error: ' . htmlspecialchars($lastError) . ')';
-                    }
                 } else {
                     $success_message = "Broadcast sent to {$successCount} recipient(s).";
                 }
@@ -447,12 +389,12 @@ require_once '../includes/admin_header.php';
         }
 
         .sms-broadcast-page .broadcast-table tr {
-            background: #ffffff;
-            border: 1px solid #e5e7eb;
+            background: #F1E9DA;
+            border: 1px solid #F1E9DA;
             border-radius: 0.9rem;
             padding: 0.75rem 0.9rem;
             margin-bottom: 1rem;
-            box-shadow: 0 10px 18px rgba(15, 23, 42, 0.06);
+            box-shadow: 0 10px 18px rgba(46, 41, 78, 0.06);
         }
 
         .sms-broadcast-page .broadcast-table td {
@@ -472,7 +414,7 @@ require_once '../includes/admin_header.php';
         .sms-broadcast-page .broadcast-table td::before {
             content: attr(data-label);
             font-weight: 600;
-            color: #6b7280;
+            color: #541388;
             flex: 0 0 auto;
             font-size: 0.8rem;
         }
@@ -487,7 +429,7 @@ require_once '../includes/admin_header.php';
 
     .sms-broadcast-page .broadcast-table td[data-label="Sent At"] {
         font-size: 0.8rem;
-        color: #6b7280;
+        color: #541388;
     }
 
     .sms-broadcast-page .broadcast-table td:last-child {
@@ -604,19 +546,13 @@ require_once '../includes/admin_header.php';
 
     <div class="card">
         <div class="card-header d-flex justify-content-between align-items-center">
-            <div class="d-flex align-items-center gap-3">
-                <h5 class="mb-0">Recent Broadcasts</h5>
-                <button type="button" id="bulkDeleteBtn" class="btn btn-sm btn-danger d-none" onclick="submitBulkDelete()">
-                    <i class="fas fa-trash me-1"></i> Delete Selected (<span id="selectedCount">0</span>)
-                </button>
-            </div>
+            <h5 class="mb-0">Recent Broadcasts</h5>
             <small class="text-muted">Showing latest 15 entries.</small>
         </div>
         <div class="table-responsive">
             <table class="table table-striped mb-0 broadcast-table">
                 <thead>
                     <tr>
-                        <th width="40"><input type="checkbox" id="selectAllBroadcasts"></th>
                         <th>Title</th>
                         <th>Audience</th>
                         <th>Total</th>
@@ -630,12 +566,11 @@ require_once '../includes/admin_header.php';
                 <tbody>
                     <?php if (empty($broadcastHistory)): ?>
                         <tr>
-                            <td colspan="9" class="text-center text-muted py-4">No broadcasts yet.</td>
+                            <td colspan="8" class="text-center text-muted py-4">No broadcasts yet.</td>
                         </tr>
                     <?php else: ?>
                         <?php foreach ($broadcastHistory as $broadcast): ?>
                             <tr>
-                                <td data-label="Select"><input type="checkbox" name="bulk_ids[]" value="<?php echo (int) $broadcast['id']; ?>" class="broadcast-checkbox"></td>
                                 <td data-label="Title"><?php echo htmlspecialchars($broadcast['title']); ?></td>
                                 <td data-label="Audience" class="text-capitalize"><?php echo htmlspecialchars($broadcast['target_audience']); ?></td>
                                 <td data-label="Total"><?php echo (int) $broadcast['total_recipients']; ?></td>
@@ -674,84 +609,5 @@ require_once '../includes/admin_header.php';
     </div>
 </div>
 </div>
-
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    const selectAllCheckbox = document.getElementById('selectAllBroadcasts');
-    const checkboxes = document.querySelectorAll('.broadcast-checkbox');
-    const bulkDeleteBtn = document.getElementById('bulkDeleteBtn');
-    const selectedCountSpan = document.getElementById('selectedCount');
-    
-    function updateBulkButton() {
-        const checkedCount = document.querySelectorAll('.broadcast-checkbox:checked').length;
-        if (checkedCount > 0) {
-            bulkDeleteBtn.classList.remove('d-none');
-            selectedCountSpan.textContent = checkedCount;
-        } else {
-            bulkDeleteBtn.classList.add('d-none');
-        }
-    }
-    
-    if (selectAllCheckbox) {
-        selectAllCheckbox.addEventListener('change', function() {
-            checkboxes.forEach(cb => {
-                cb.checked = selectAllCheckbox.checked;
-            });
-            updateBulkButton();
-        });
-    }
-    
-    checkboxes.forEach(cb => {
-        cb.addEventListener('change', function() {
-            if (!cb.checked) {
-                selectAllCheckbox.checked = false;
-            } else {
-                const allChecked = Array.from(checkboxes).every(c => c.checked);
-                selectAllCheckbox.checked = allChecked;
-            }
-            updateBulkButton();
-        });
-    });
-});
-
-function submitBulkDelete() {
-    const checkedCheckboxes = document.querySelectorAll('.broadcast-checkbox:checked');
-    if (checkedCheckboxes.length === 0) {
-        alert('Please select at least one broadcast to delete.');
-        return;
-    }
-    
-    if (!confirm('Are you sure you want to delete the ' + checkedCheckboxes.length + ' selected broadcast(s)?')) {
-        return;
-    }
-    
-    const form = document.createElement('form');
-    form.method = 'POST';
-    form.action = '';
-    
-    const csrfInput = document.createElement('input');
-    csrfInput.type = 'hidden';
-    csrfInput.name = 'csrf_token';
-    csrfInput.value = '<?php echo $csrf_token; ?>';
-    form.appendChild(csrfInput);
-    
-    const bulkInput = document.createElement('input');
-    bulkInput.type = 'hidden';
-    bulkInput.name = 'bulk_delete';
-    bulkInput.value = '1';
-    form.appendChild(bulkInput);
-    
-    checkedCheckboxes.forEach(cb => {
-        const idInput = document.createElement('input');
-        idInput.type = 'hidden';
-        idInput.name = 'bulk_ids[]';
-        idInput.value = cb.value;
-        form.appendChild(idInput);
-    });
-    
-    document.body.appendChild(form);
-    form.submit();
-}
-</script>
 
 <?php require_once '../includes/admin_footer.php'; ?>

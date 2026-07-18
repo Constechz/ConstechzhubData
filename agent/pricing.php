@@ -15,73 +15,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $prices = $_POST['prices'] ?? [];
 
     if (!empty($prices) && is_array($prices)) {
-        $validated_prices = [];
-        $clear_prices = [];
-        $validation_errors = [];
-
-        $base_stmt = $db->prepare("
-            SELECT COALESCE(pp.price, dp.price, 0) AS base_price
-            FROM data_packages dp
-            LEFT JOIN package_pricing pp ON pp.package_id = dp.id AND pp.user_type = 'agent'
-            WHERE dp.id = ? AND dp.status = 'active'
-            LIMIT 1
-        ");
-        if (!$base_stmt) {
-            setFlashMessage('danger', 'Unable to validate package pricing right now.');
-            header('Location: pricing.php' . (!empty($_GET['network']) ? ('?network=' . urlencode($_GET['network'])) : ''));
-            exit();
-        }
+        // Prepare upsert statement for agent custom pricing
+        $stmt = $db->prepare("INSERT INTO agent_custom_pricing (agent_id, package_id, custom_price, is_active) VALUES (?, ?, ?, 1) ON DUPLICATE KEY UPDATE custom_price = VALUES(custom_price), is_active = 1");
         
         foreach ($prices as $pkgId => $price) {
             $pkgId = intval($pkgId);
             if ($price !== '' && $price !== null) {
-                $price = round((float) $price, 2);
-                if ($price < 0) {
-                    $validation_errors[] = "Package #{$pkgId}: price cannot be negative.";
-                    continue;
-                }
-
-                $base_stmt->bind_param('i', $pkgId);
-                $base_stmt->execute();
-                $base_row = $base_stmt->get_result()->fetch_assoc();
-                if (!$base_row) {
-                    $validation_errors[] = "Package #{$pkgId}: package is not available.";
-                    continue;
-                }
-
-                $base_price = round((float) ($base_row['base_price'] ?? 0), 2);
-                if (($price + 0.00001) < $base_price) {
-                    $validation_errors[] = "Package #{$pkgId}: your price must be at least " . formatCurrency($base_price) . ".";
-                    continue;
-                }
-
-                $validated_prices[$pkgId] = $price;
+                $price = floatval($price);
+                $stmt->bind_param('iid', $agent_id, $pkgId, $price);
+                $stmt->execute();
             } else {
-                $clear_prices[] = $pkgId;
-            }
-        }
-
-        if (!empty($validation_errors)) {
-            setFlashMessage('danger', implode(' ', array_slice($validation_errors, 0, 3)));
-            header('Location: pricing.php' . (!empty($_GET['network']) ? ('?network=' . urlencode($_GET['network'])) : ''));
-            exit();
-        }
-
-        // Prepare upsert statement for agent custom pricing
-        $stmt = $db->prepare("INSERT INTO agent_custom_pricing (agent_id, package_id, custom_price, is_active) VALUES (?, ?, ?, 1) ON DUPLICATE KEY UPDATE custom_price = VALUES(custom_price), is_active = 1");
-        foreach ($validated_prices as $pkgId => $price) {
-            $stmt->bind_param('iid', $agent_id, $pkgId, $price);
-            $stmt->execute();
-        }
-
-        if (!empty($clear_prices)) {
-            $delete_stmt = $db->prepare("UPDATE agent_custom_pricing SET is_active = 0 WHERE agent_id = ? AND package_id = ?");
-            foreach ($clear_prices as $pkgId) {
+                // Remove custom pricing if price is empty
+                $delete_stmt = $db->prepare("UPDATE agent_custom_pricing SET is_active = 0 WHERE agent_id = ? AND package_id = ?");
                 $delete_stmt->bind_param('ii', $agent_id, $pkgId);
                 $delete_stmt->execute();
             }
         }
-
         setFlashMessage('success', 'Custom pricing updated successfully');
         header('Location: pricing.php' . (!empty($_GET['network']) ? ('?network=' . urlencode($_GET['network'])) : ''));
         exit();
@@ -148,7 +97,46 @@ $flash = getFlashMessage();
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-        <?php renderAgentSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Services</div>
+                <div class="nav-item"><a href="at-business.php" class="nav-link"><i class="fas fa-mobile-alt"></i> AT Business</a></div>
+                <div class="nav-item"><a href="mtn-business.php" class="nav-link"><i class="fas fa-mobile-alt"></i> MTN Business</a></div>
+                <div class="nav-item">
+                    <a href="afa-registration.php" class="nav-link">
+                        <i class="fas fa-user-check"></i>
+                        AFA Registration
+                    </a>
+                </div>
+                <div class="nav-item"><a href="bulk-mtn.php" class="nav-link"><i class="fas fa-layer-group"></i> Bulk MTN</a></div>
+                    <div class="nav-item">
+                        <a href="result-checker.php" class="nav-link">
+                            <i class="fas fa-award"></i>
+                            Result Checker
+                        </a>
+                    </div>
+                <div class="nav-item"><a href="telecel-business.php" class="nav-link"><i class="fas fa-signal"></i> Telecel Business</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Business</div>
+                <div class="nav-item"><a href="pricing.php" class="nav-link active"><i class="fas fa-tags"></i> Custom Pricing</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Transaction</div>
+                <div class="nav-item"><a href="histories.php" class="nav-link"><i class="fas fa-history"></i> Histories</a></div>
+                <div class="nav-item"><a href="reference.php" class="nav-link"><i class="fas fa-search"></i> Reference</a></div>
+            </li>
+        </ul>
+                    <div class="nav-item">
+                        <a href="withdraw-profit.php" class="nav-link">
+                            <i class="fas fa-wallet"></i>
+                            Withdraw Profit
+                        </a>
+                    </div>
     </nav>
 
     <!-- Main Content -->
@@ -196,10 +184,13 @@ $flash = getFlashMessage();
             </div>
         </header>
 
+<?php echo renderNotificationSlides('agents'); ?>
+
+
         <div class="dashboard-content">
             <div class="page-title">
                 <h1>Custom Pricing</h1>
-                <p class="page-subtitle">Set the storefront prices customers pay. Store profit is your price minus the agent base cost.</p>
+                <p class="page-subtitle">Set your own prices for data packages. Leave blank to use default agent pricing.</p>
             </div>
 
             <?php if ($flash): ?>
@@ -232,7 +223,7 @@ $flash = getFlashMessage();
                                         <th>Type</th>
                                         <th>Size</th>
                                         <th>Validity</th>
-                                        <th>Agent Base Cost (<?php echo CURRENCY; ?>)</th>
+                                        <th>Default Price (<?php echo CURRENCY; ?>)</th>
                                         <th>Your Price (<?php echo CURRENCY; ?>)</th>
                                         <th>Status</th>
                                     </tr>
@@ -248,11 +239,11 @@ $flash = getFlashMessage();
                                             <td data-label="Type"><?php echo htmlspecialchars($pkg['package_type']); ?></td>
                                             <td data-label="Size"><?php echo htmlspecialchars($pkg['data_size']); ?></td>
                                             <td data-label="Validity"><?php echo intval($pkg['validity_days']); ?> days</td>
-                                            <td data-label="Agent Base Cost (<?php echo htmlspecialchars(CURRENCY); ?>)">
+                                            <td data-label="Default Price (<?php echo htmlspecialchars(CURRENCY); ?>)">
                                                 <?php echo $pkg['default_agent_price'] ? formatCurrency($pkg['default_agent_price']) : '<span class="text-muted">Not set</span>'; ?>
                                             </td>
                                             <td data-label="Your Price (<?php echo htmlspecialchars(CURRENCY); ?>)">
-                                                <input type="number" step="0.01" min="<?php echo htmlspecialchars(number_format((float) ($pkg['default_agent_price'] ?? 0), 2, '.', '')); ?>" name="prices[<?php echo $pkg['id']; ?>]" 
+                                                <input type="number" step="0.01" min="0" name="prices[<?php echo $pkg['id']; ?>]" 
                                                        value="<?php echo $pkg['custom_price'] !== null ? htmlspecialchars($pkg['custom_price']) : ''; ?>" 
                                                        class="form-control" placeholder="Leave blank for default">
                                             </td>
@@ -271,7 +262,7 @@ $flash = getFlashMessage();
                         </div>
                         <div class="pricing-actions" style="display:flex; justify-content:space-between; align-items:center; margin-top:1rem;">
                             <div class="text-muted">
-                                <small><i class="fas fa-info-circle"></i> Custom prices are storefront prices. Leave blank to use the base cost; prices below base cost are not allowed.</small>
+                                <small><i class="fas fa-info-circle"></i> Custom prices override default agent pricing. Leave blank to use default.</small>
                             </div>
                             <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Custom Pricing</button>
                         </div>
@@ -343,7 +334,8 @@ $flash = getFlashMessage();
 </script>
     <!-- IMMEDIATE Icon Fix for square placeholder issues -->
     <script src="../immediate_icon_fix.js"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
-
 

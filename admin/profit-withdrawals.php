@@ -13,30 +13,6 @@ $success = '';
 $moolre_payout_url = trim((string) dbh_env('MOOLRE_PAYOUT_URL', defined('MOOLRE_PAYOUT_URL') ? MOOLRE_PAYOUT_URL : ''));
 $moolre_config = getMoolreConfig();
 $moolre_payout_auto = $moolre_payout_url !== '' && isMoolreConfigured($moolre_config);
-$paystack_transfer_configured = function_exists('getPaystackTransferSecretKey') && getPaystackTransferSecretKey() !== '';
-$paystack_transfer_otp_disabled = function_exists('isPaystackTransferOtpDisabled') && isPaystackTransferOtpDisabled();
-$paystack_payout_auto = function_exists('isPaystackTransferAutomationAvailable') && isPaystackTransferAutomationAvailable();
-$available_payout_routes = [
-    'manual' => 'Manual payout',
-];
-if ($paystack_transfer_configured) {
-    $available_payout_routes['paystack_manual'] = 'Manual Paystack';
-}
-if ($paystack_payout_auto) {
-    $available_payout_routes['paystack_auto'] = 'Automatic Paystack';
-}
-if ($moolre_payout_auto) {
-    $available_payout_routes['moolre_auto'] = 'Automatic Moolre';
-}
-
-$default_payout_route = 'manual';
-if ($paystack_payout_auto) {
-    $default_payout_route = 'paystack_auto';
-} elseif ($moolre_payout_auto) {
-    $default_payout_route = 'moolre_auto';
-} elseif ($paystack_transfer_configured) {
-    $default_payout_route = 'paystack_manual';
-}
 
 // Generate CSRF token
 if (!isset($_SESSION['csrf_token'])) {
@@ -51,14 +27,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
         $withdrawal_id = (int) ($_POST['withdrawal_id'] ?? 0);
         $admin_notes = sanitize($_POST['admin_notes'] ?? '');
-        $payout_route = trim((string) ($_POST['payout_route'] ?? $default_payout_route));
 
         if ($withdrawal_id <= 0) {
             $error = 'Invalid withdrawal request.';
-        } elseif (!in_array($action, ['approve', 'reject', 'verify_status'], true)) {
+        } elseif (!in_array($action, ['approve', 'reject'], true)) {
             $error = 'Invalid action.';
-        } elseif ($action === 'approve' && !array_key_exists($payout_route, $available_payout_routes)) {
-            $error = 'Invalid payout route selected.';
         } else {
             // Fetch withdrawal details
             $stmt = $db->prepare("SELECT * FROM profit_withdrawals WHERE id = ? LIMIT 1");
@@ -69,103 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt->execute();
                 $withdrawal = $stmt->get_result()->fetch_assoc();
 
-                if (!$withdrawal) {
-                    $error = 'Request not found.';
-                } elseif ($action === 'verify_status') {
-                    $ref = (string) ($withdrawal['reference'] ?? '');
-                    $payout_provider = (string) ($withdrawal['payout_provider'] ?? '');
-                    $current_status = (string) ($withdrawal['status'] ?? '');
-                    
-                    if ($current_status !== 'processing') {
-                        $error = 'Only processing withdrawals can be verified.';
-                    } elseif ($payout_provider !== 'paystack') {
-                        $error = 'Verification is only supported for Paystack automated transfers.';
-                    } elseif ($ref === '') {
-                        $error = 'Missing withdrawal reference.';
-                    } else {
-                        $payout_error = '';
-                        $verify_res = verifyPaystackProfitTransfer($ref, $payout_error);
-                        if (!$verify_res) {
-                            $error = 'Paystack verification query failed: ' . ($payout_error ?: 'Unknown error.');
-                        } else {
-                            $provider_status = $verify_res['status'];
-                            $transfer_code = $verify_res['transfer_code'];
-                            $provider_reference = $verify_res['provider_reference'];
-                            $provider_response = $verify_res['response'];
-                            $provider_response_json = json_encode($provider_response, JSON_UNESCAPED_SLASHES);
-                            
-                            $mapped_status = $provider_status === 'success' ? 'paid' : ($provider_status === 'reversed' ? 'reversed' : ($provider_status === 'failed' ? 'failed' : 'processing'));
-                            
-                            $admin_notes = trim((string) ($withdrawal['admin_notes'] ?? ''));
-                            $event_note = '[Paystack check: ' . strtoupper($provider_status) . ' on ' . date('Y-m-d H:i:s') . ']';
-                            if ($transfer_code !== '') {
-                                $event_note .= ' Transfer code: ' . $transfer_code;
-                            }
-                            if ($provider_reference !== '') {
-                                $event_note .= ' Ref: ' . $provider_reference;
-                            }
-                            $updated_notes = trim($admin_notes . PHP_EOL . $event_note);
-                            
-                            $stmt = $db->prepare("
-                                UPDATE profit_withdrawals
-                                SET status = ?, provider_status = ?, provider_response = ?, admin_notes = ?, processed_at = IFNULL(processed_at, NOW())
-                                WHERE id = ?
-                            ");
-                            if ($stmt) {
-                                $stmt->bind_param('ssssi', $mapped_status, $provider_status, $provider_response_json, $updated_notes, $withdrawal_id);
-                                $stmt->execute();
-                                if ($stmt->affected_rows >= 0) {
-                                    if ($mapped_status === 'paid') {
-                                        $success = 'Withdrawal payment verified as successful and marked as Paid.';
-                                        // Send SMS if not already marked paid
-                                        if ($current_status !== 'paid') {
-                                            $agent_id = (int) ($withdrawal['agent_id'] ?? 0);
-                                            $amount = (float) ($withdrawal['amount'] ?? 0);
-                                            $fee_amount = (float) ($withdrawal['fee_amount'] ?? 0);
-                                            $total_debit = $amount;
-                                            $net_payout = round($amount - $fee_amount, 2);
-                                            $phone_column = function_exists('dbh_get_users_phone_column') ? dbh_get_users_phone_column() : 'phone';
-                                            $phone_select = $phone_column !== '' ? $phone_column : 'phone';
-                                            $agent_stmt = $db->prepare("SELECT full_name, {$phone_select} AS phone FROM users WHERE id = ? LIMIT 1");
-                                            if ($agent_stmt) {
-                                                $agent_stmt->bind_param('i', $agent_id);
-                                                if ($agent_stmt->execute()) {
-                                                    $agent = $agent_stmt->get_result()->fetch_assoc();
-                                                    $agent_phone = $agent['phone'] ?? '';
-                                                    $agent_name = $agent['full_name'] ?? 'Agent';
-                                                    if ($agent_phone && isSMSFeatureEnabled()) {
-                                                        $amount_str = CURRENCY . number_format($amount, 2);
-                                                        $fee_str = CURRENCY . number_format($fee_amount, 2);
-                                                        $total_str = CURRENCY . number_format($total_debit, 2);
-                                                        $net_str = CURRENCY . number_format($net_payout, 2);
-                                                        $smsMessage = "Hi {$agent_name}, your profit withdrawal of {$amount_str} has been paid.";
-                                                        if ($fee_amount > 0) {
-                                                            $smsMessage .= " Processing fee {$fee_str} applied.";
-                                                        }
-                                                        $smsMessage .= " You received {$net_str}. Store profit withdrawn: {$total_str}. Ref: {$ref}. - " . SITE_NAME;
-                                                        try {
-                                                            sendSMS(formatPhone($agent_phone), $smsMessage, 'profit_withdrawal', $agent_id);
-                                                        } catch (Exception $e) {
-                                                            error_log('Paystack manual verify SMS failed: ' . $e->getMessage());
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    } elseif ($mapped_status === 'failed' || $mapped_status === 'reversed') {
-                                        $success = 'Withdrawal checked. Paystack reported status as: ' . strtoupper($provider_status) . '. Local status updated to ' . $mapped_status . '.';
-                                    } else {
-                                        $success = 'Withdrawal checked. Paystack reported status is still: ' . strtoupper($provider_status) . '.';
-                                    }
-                                } else {
-                                    $error = 'Failed to update withdrawal record.';
-                                }
-                            } else {
-                                $error = 'Failed to prepare database update.';
-                            }
-                        }
-                    }
-                } elseif (($withdrawal['status'] ?? '') !== 'pending') {
+                if (!$withdrawal || ($withdrawal['status'] ?? '') !== 'pending') {
                     $error = 'Request already processed or not found.';
                 } else {
                     $agent_id = (int) ($withdrawal['agent_id'] ?? 0);
@@ -186,61 +63,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     } elseif ($net_payout <= 0) {
                         $error = 'Net payout must be greater than zero after fee.';
                     } elseif ($action === 'approve') {
-                        $store_profit_balance = function_exists('getAgentStoreProfitWithdrawalBalance')
-                            ? getAgentStoreProfitWithdrawalBalance($agent_id)
-                            : $amount;
-                        // The current pending request is already reserved in the store-profit balance calculation.
-                        $store_profit_balance = round($store_profit_balance + $total_debit, 2);
-                        if (($total_debit - $store_profit_balance) > 0.00001) {
-                            $error = 'Agent store profit balance is insufficient for this withdrawal.';
+                        $balance = getWalletBalance($agent_id);
+                        if ($balance < $total_debit) {
+                            $error = 'Agent wallet balance is insufficient to reserve this withdrawal.';
                         } else {
                             $payout_error = '';
                             $payout_result = null;
-                            $payout_provider = 'manual';
-                            $provider_bank_code = '';
-                            $provider_recipient_code = (string) ($withdrawal['provider_recipient_code'] ?? '');
-                            $provider_transfer_code = '';
-                            $provider_reference = '';
-                            $provider_status = '';
-                            $provider_response = null;
-                            $should_send_paid_notification = false;
-
-                            if ($payout_route === 'paystack_auto') {
-                                $payout_provider = 'paystack';
-                                if ($provider_recipient_code === '') {
-                                    $recipient_result = createPaystackMobileMoneyRecipient(
-                                        (string) ($withdrawal['payout_name'] ?? ''),
-                                        (string) ($withdrawal['payout_number'] ?? ''),
-                                        (string) ($withdrawal['payout_network'] ?? ''),
-                                        $payout_error
-                                    );
-                                    if ($recipient_result) {
-                                        $provider_recipient_code = (string) ($recipient_result['recipient_code'] ?? '');
-                                        $provider_bank_code = (string) ($recipient_result['bank_code'] ?? '');
-                                    }
-                                }
-
-                                if ($provider_recipient_code === '') {
-                                    $error = 'Paystack recipient creation failed: ' . ($payout_error ?: 'Unknown error.');
-                                } else {
-                                    $payout_result = initiatePaystackProfitTransfer(
-                                        $provider_recipient_code,
-                                        $net_payout,
-                                        $reference,
-                                        'Agent profit withdrawal',
-                                        $payout_error
-                                    );
-                                    if (!$payout_result) {
-                                        $error = 'Paystack payout failed: ' . ($payout_error ?: 'Unknown error.');
-                                    } else {
-                                        $provider_transfer_code = (string) ($payout_result['transfer_code'] ?? '');
-                                        $provider_reference = (string) ($payout_result['provider_reference'] ?? '');
-                                        $provider_status = strtolower(trim((string) ($payout_result['status'] ?? 'pending')));
-                                        $provider_response = $payout_result['response'] ?? null;
-                                    }
-                                }
-                            } elseif ($payout_route === 'moolre_auto') {
-                                $payout_provider = 'moolre';
+                            if ($moolre_payout_auto) {
                                 $payout_result = requestMoolreMomoPayout(
                                     $net_payout,
                                     (string) ($withdrawal['payout_network'] ?? ''),
@@ -249,130 +78,78 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     $reference,
                                     $payout_error
                                 );
-                                $provider_status = $payout_result ? 'success' : 'failed';
-                                $provider_response = $payout_result;
-                            } elseif ($payout_route === 'paystack_manual') {
-                                $payout_provider = 'paystack';
-                                $provider_status = 'manual';
-                            } else {
-                                $provider_status = 'manual';
                             }
 
-                            if ($payout_route === 'paystack_auto' && !$paystack_payout_auto) {
-                                $error = 'Automatic Paystack payout is not available right now.';
-                            } elseif ($payout_route === 'moolre_auto' && !$moolre_payout_auto) {
-                                $error = 'Automatic Moolre payout is not available right now.';
-                            } elseif ($payout_route === 'paystack_manual' && !$paystack_transfer_configured) {
-                                $error = 'Manual Paystack payout is not configured right now.';
-                            } elseif ($payout_route === 'paystack_auto' && !$payout_result) {
-                                $error = 'Paystack payout failed: ' . ($payout_error ?: 'Unknown error.');
-                            } elseif ($payout_route === 'moolre_auto' && !$payout_result) {
+                            if ($moolre_payout_auto && !$payout_result) {
                                 $error = 'Momo payout failed: ' . ($payout_error ?: 'Unknown error.');
                             } else {
-                                $profit_reserved = true;
-                                if (!$profit_reserved) {
-                                    $error = 'Failed to reserve agent store profit for this payout.';
+                                $debit_note = 'Profit withdrawal payout';
+                                if ($fee_amount > 0) {
+                                    $debit_note .= ' (fee ' . CURRENCY . number_format($fee_amount, 2) . ')';
+                                }
+                                $debit_ok = updateWalletBalance($agent_id, $total_debit, 'debit', $reference, $debit_note);
+                                if (!$debit_ok) {
+                                    $error = 'Failed to debit agent wallet for this payout.';
                                 } else {
                                     $gateway_ref = '';
-                                    if ($moolre_payout_auto && $payout_result && is_array($payout_result['data'] ?? null)) {
+                                    if ($payout_result && is_array($payout_result['data'] ?? null)) {
                                         $gateway_ref = $payout_result['data']['transactid'] ?? $payout_result['data']['transaction_id'] ?? '';
                                     }
                                     $note_suffix = '';
-                                    $final_status = 'paid';
-                                    if ($payout_route === 'paystack_auto') {
-                                        $final_status = $provider_status === 'success' ? 'paid' : 'processing';
-                                        $note_suffix = ' | Paystack status: ' . strtoupper($provider_status !== '' ? $provider_status : 'pending');
-                                        if ($provider_transfer_code !== '') {
-                                            $note_suffix .= ' | Transfer code: ' . $provider_transfer_code;
-                                        }
-                                        if ($provider_reference !== '') {
-                                            $note_suffix .= ' | Paystack ref: ' . $provider_reference;
-                                        }
-                                        $should_send_paid_notification = $final_status === 'paid';
-                                    } elseif ($payout_route === 'moolre_auto') {
+                                    if ($moolre_payout_auto) {
                                         $note_suffix = $gateway_ref ? (' | Moolre ref: ' . $gateway_ref) : '';
-                                        $should_send_paid_notification = true;
-                                    } elseif ($payout_route === 'paystack_manual') {
-                                        $note_suffix = ' | Manual Paystack payout';
-                                        $should_send_paid_notification = true;
                                     } else {
-                                        $note_suffix = ' | Manual payout';
-                                        $provider_status = 'manual';
-                                        $should_send_paid_notification = true;
+                                        $note_suffix = ' | Manual MoMo payout (API not configured)';
                                     }
                                     $fee_note = $fee_amount > 0 ? (' | Fee: ' . CURRENCY . number_format($fee_amount, 2)) : '';
                                     $payout_note = ' | Net payout: ' . CURRENCY . number_format($net_payout, 2);
                                     $final_notes = trim($admin_notes . $fee_note . $payout_note . $note_suffix);
-                                    $provider_response_json = $provider_response !== null ? json_encode($provider_response, JSON_UNESCAPED_SLASHES) : null;
 
                                     $stmt = $db->prepare("
                                         UPDATE profit_withdrawals
-                                        SET status = ?, admin_notes = ?, processed_by = ?, processed_at = NOW(),
-                                            payout_provider = ?, provider_bank_code = ?, provider_recipient_code = ?,
-                                            provider_transfer_code = ?, provider_reference = ?, provider_status = ?, provider_response = ?
+                                        SET status = 'paid', admin_notes = ?, processed_by = ?, processed_at = NOW()
                                         WHERE id = ? AND status = 'pending'
                                     ");
                                     if ($stmt) {
-                                        $stmt->bind_param(
-                                            'ssisssssssi',
-                                            $final_status,
-                                            $final_notes,
-                                            $current_user['id'],
-                                            $payout_provider,
-                                            $provider_bank_code,
-                                            $provider_recipient_code,
-                                            $provider_transfer_code,
-                                            $provider_reference,
-                                            $provider_status,
-                                            $provider_response_json,
-                                            $withdrawal_id
-                                        );
+                                        $stmt->bind_param('sii', $final_notes, $current_user['id'], $withdrawal_id);
                                         $stmt->execute();
                                         if ($stmt->affected_rows > 0) {
-                                            if ($payout_route === 'paystack_auto') {
-                                                $success = $final_status === 'paid'
-                                                    ? 'Withdrawal paid via Paystack and store profit recorded.'
-                                                    : 'Withdrawal approved and submitted to Paystack. Final confirmation is pending.';
-                                            } elseif ($payout_route === 'moolre_auto') {
-                                                $success = 'Withdrawal paid via MoMo and store profit recorded.';
-                                            } elseif ($payout_route === 'paystack_manual') {
-                                                $success = 'Withdrawal marked paid as a manual Paystack payout and store profit recorded.';
-                                            } else {
-                                                $success = 'Withdrawal marked paid manually and store profit recorded.';
-                                            }
-                                            if ($should_send_paid_notification) {
-                                                $phone_column = function_exists('dbh_get_users_phone_column') ? dbh_get_users_phone_column() : 'phone';
-                                                $phone_select = $phone_column !== '' ? $phone_column : 'phone';
-                                                $agent_stmt = $db->prepare("SELECT full_name, {$phone_select} AS phone FROM users WHERE id = ? LIMIT 1");
-                                                if ($agent_stmt) {
-                                                    $agent_stmt->bind_param('i', $agent_id);
-                                                    if ($agent_stmt->execute()) {
-                                                        $agent = $agent_stmt->get_result()->fetch_assoc();
-                                                        $agent_phone = $agent['phone'] ?? '';
-                                                        $agent_name = $agent['full_name'] ?? 'Agent';
-                                                        if ($agent_phone && isSMSFeatureEnabled()) {
-                                                            $amount_str = CURRENCY . number_format($amount, 2);
-                                                            $fee_str = CURRENCY . number_format($fee_amount, 2);
-                                                            $total_str = CURRENCY . number_format($total_debit, 2);
-                                                            $net_str = CURRENCY . number_format($net_payout, 2);
-                                                            $smsMessage = "Hi {$agent_name}, your profit withdrawal of {$amount_str} has been paid.";
-                                                            if ($fee_amount > 0) {
-                                                                $smsMessage .= " Processing fee {$fee_str} applied.";
-                                                            }
-                                                            $smsMessage .= " You received {$net_str}. Store profit withdrawn: {$total_str}. Ref: {$reference}. - " . SITE_NAME;
-                                                            try {
-                                                                sendSMS(formatPhone($agent_phone), $smsMessage, 'profit_withdrawal', $agent_id);
-                                                            } catch (Exception $e) {
-                                                                error_log('Profit withdrawal SMS failed: ' . $e->getMessage());
-                                                            }
+                                            $success = $moolre_payout_auto
+                                                ? 'Withdrawal paid via MoMo and agent wallet debited.'
+                                                : 'Withdrawal marked paid (manual MoMo payout) and agent wallet debited.';
+                                            $phone_column = function_exists('dbh_get_users_phone_column') ? dbh_get_users_phone_column() : 'phone';
+                                            $phone_select = $phone_column !== '' ? $phone_column : 'phone';
+                                            $agent_stmt = $db->prepare("SELECT full_name, {$phone_select} AS phone FROM users WHERE id = ? LIMIT 1");
+                                            if ($agent_stmt) {
+                                                $agent_stmt->bind_param('i', $agent_id);
+                                                if ($agent_stmt->execute()) {
+                                                    $agent = $agent_stmt->get_result()->fetch_assoc();
+                                                    $agent_phone = $agent['phone'] ?? '';
+                                                    $agent_name = $agent['full_name'] ?? 'Agent';
+                                                    if ($agent_phone && isSMSFeatureEnabled()) {
+                                                        $amount_str = CURRENCY . number_format($amount, 2);
+                                                        $fee_str = CURRENCY . number_format($fee_amount, 2);
+                                                        $total_str = CURRENCY . number_format($total_debit, 2);
+                                                        $net_str = CURRENCY . number_format($net_payout, 2);
+                                                        $smsMessage = "Hi {$agent_name}, your profit withdrawal of {$amount_str} has been paid.";
+                                                        if ($fee_amount > 0) {
+                                                            $smsMessage .= " Processing fee {$fee_str} applied.";
+                                                        }
+                                                        $smsMessage .= " You received {$net_str}. Wallet debited: {$total_str}. Ref: {$reference}. - " . SITE_NAME;
+                                                        try {
+                                                            sendSMS(formatPhone($agent_phone), $smsMessage, 'profit_withdrawal', $agent_id);
+                                                        } catch (Exception $e) {
+                                                            error_log('Profit withdrawal SMS failed: ' . $e->getMessage());
                                                         }
                                                     }
                                                 }
                                             }
                                         } else {
+                                            updateWalletBalance($agent_id, $total_debit, 'credit', $reference . '_REFUND', 'Refund: withdrawal update failed');
                                             $error = 'Failed to update withdrawal status.';
                                         }
                                     } else {
+                                        updateWalletBalance($agent_id, $total_debit, 'credit', $reference . '_REFUND', 'Refund: withdrawal update failed');
                                         $error = 'Failed to update withdrawal status.';
                                     }
                                 }
@@ -427,32 +204,6 @@ $stmt = $db->query("
 ");
 if ($stmt) {
     $history = $stmt->fetch_all(MYSQLI_ASSOC);
-}
-
-$withdrawal_summary = [
-    'pending_count' => 0,
-    'pending_amount' => 0,
-    'processing_count' => 0,
-    'processing_amount' => 0,
-    'paid_today_count' => 0,
-    'paid_today_amount' => 0,
-    'problem_count' => 0,
-    'problem_amount' => 0,
-];
-$stmt = $db->query("
-    SELECT
-        COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS pending_count,
-        COALESCE(SUM(CASE WHEN status = 'pending' THEN amount ELSE 0 END), 0) AS pending_amount,
-        COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0) AS processing_count,
-        COALESCE(SUM(CASE WHEN status = 'processing' THEN amount ELSE 0 END), 0) AS processing_amount,
-        COALESCE(SUM(CASE WHEN status = 'paid' AND DATE(processed_at) = CURDATE() THEN 1 ELSE 0 END), 0) AS paid_today_count,
-        COALESCE(SUM(CASE WHEN status = 'paid' AND DATE(processed_at) = CURDATE() THEN amount ELSE 0 END), 0) AS paid_today_amount,
-        COALESCE(SUM(CASE WHEN status IN ('failed','reversed') THEN 1 ELSE 0 END), 0) AS problem_count,
-        COALESCE(SUM(CASE WHEN status IN ('failed','reversed') THEN amount ELSE 0 END), 0) AS problem_amount
-    FROM profit_withdrawals
-");
-if ($stmt) {
-    $withdrawal_summary = array_merge($withdrawal_summary, $stmt->fetch_assoc() ?: []);
 }
 ?>
 <!DOCTYPE html>
@@ -529,10 +280,10 @@ if ($stmt) {
             }
             .table tr {
                 margin-bottom: 1rem;
-                border: 1px solid var(--border-color, #e5e7eb);
+                border: 1px solid var(--border-color, #F1E9DA);
                 border-radius: 12px;
                 padding: 0.5rem;
-                background: #ffffff;
+                background: #F1E9DA;
             }
             .table td {
                 border: none;
@@ -544,7 +295,7 @@ if ($stmt) {
                 content: attr(data-label);
                 display: block;
                 font-weight: 600;
-                color: var(--text-muted, #6b7280);
+                color: var(--text-muted, #541388);
                 margin-bottom: 0.25rem;
             }
             .table td code {
@@ -566,21 +317,21 @@ if ($stmt) {
         }
 
         [data-theme="dark"] .table tr {
-            background: #0f172a;
-            border-color: #1f2937;
+            background: #2E294E;
+            border-color: #2E294E;
         }
 
         [data-theme="dark"] .table td {
-            color: #e5e7eb;
+            color: #F1E9DA;
         }
 
         [data-theme="dark"] .table td::before {
-            color: #9ca3af;
+            color: #F1E9DA;
         }
 
         [data-theme="dark"] .table td code {
-            color: #e5e7eb;
-            background: #111827;
+            color: #F1E9DA;
+            background: #2E294E;
         }
     </style>
 </head>
@@ -590,7 +341,42 @@ if ($stmt) {
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-                    <?php renderAdminSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Management</div>
+                <div class="nav-item"><a href="packages.php" class="nav-link"><i class="fas fa-box"></i> Data Packages</a></div>
+                <div class="nav-item"><a href="afa-registration.php" class="nav-link"><i class="fas fa-user-check"></i> AFA Registration</a></div>
+                <div class="nav-item"><a href="users.php" class="nav-link"><i class="fas fa-users"></i> Users</a></div>
+                <div class="nav-item"><a href="agents.php" class="nav-link"><i class="fas fa-user-tie"></i> Agents</a></div>
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Commission</div>
+                <div class="nav-item"><a href="commission-settings.php" class="nav-link"><i class="fas fa-percentage"></i> Commission Settings</a></div>
+                <div class="nav-item"><a href="commission-payout-settings.php" class="nav-link"><i class="fas fa-calendar-alt"></i> Payout Settings</a></div>
+                <div class="nav-item"><a href="commission-liquidations.php" class="nav-link"><i class="fas fa-money-check-alt"></i> Liquidations</a></div>
+                <div class="nav-item"><a href="commission-payouts.php" class="nav-link"><i class="fas fa-wallet"></i> Manual Payouts</a></div>
+                <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link active"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Analytics</div>
+                <div class="nav-item"><a href="transactions.php" class="nav-link"><i class="fas fa-history"></i> Transactions</a></div>
+                <div class="nav-item"><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></div>
+                <div class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item"><a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> System Settings</a></div>
+                <div class="nav-item"><a href="email-broadcast.php" class="nav-link"><i class="fas fa-paper-plane"></i> Email Broadcasts</a></div>
+                <div class="nav-item"><a href="system-reset.php" class="nav-link"><i class="fas fa-broom"></i> System Reset</a></div>
+                <div class="nav-item"><a href="pwa-settings.php" class="nav-link"><i class="fas fa-mobile-alt"></i> PWA Settings</a></div>
+                <div class="nav-item"><a href="sms-settings.php" class="nav-link"><i class="fas fa-sms"></i> SMS Settings</a></div>
+            </li>
+        </ul>
     </nav>
 
     <main class="main-content">
@@ -650,76 +436,15 @@ if ($stmt) {
                     <?php echo htmlspecialchars($success); ?>
                 </div>
             <?php endif; ?>
-            <?php if ((int) ($withdrawal_summary['processing_count'] ?? 0) > 0): ?>
+            <?php if (!$moolre_payout_auto): ?>
                 <div class="alert alert-warning" style="margin-bottom: 1rem;">
-                    <?php echo (int) $withdrawal_summary['processing_count']; ?> payout(s) are still awaiting final confirmation from Paystack.
+                    Automatic MoMo payout is not configured. Approvals will be recorded as paid after you send MoMo manually.
                 </div>
             <?php endif; ?>
-            <?php if (!empty($pending_requests)): ?>
-                <div class="alert alert-info" style="margin-bottom: 1rem;">
-                    <?php echo (int) count($pending_requests); ?> profit withdrawal request(s) are waiting for admin action.
-                </div>
-            <?php endif; ?>
-            <?php if ($paystack_transfer_configured && !$paystack_transfer_otp_disabled): ?>
-                <div class="alert alert-warning" style="margin-bottom: 1rem;">
-                    Paystack payout automation is paused because transfer OTP is still enabled. Complete the Paystack Transfer OTP setup in <a href="settings.php">System Settings</a> to restore automatic payouts.
-                </div>
-            <?php endif; ?>
-            <?php if ($paystack_payout_auto): ?>
-                <div class="alert alert-success" style="margin-bottom: 1rem;">
-                    Automatic mobile money payouts are configured through Paystack. You can choose Automatic Paystack or Manual Paystack when approving each withdrawal.
-                </div>
-            <?php elseif ($paystack_transfer_configured): ?>
-                <div class="alert alert-info" style="margin-bottom: 1rem;">
-                    Paystack is configured for manual payouts. Automatic Paystack will appear after transfer OTP is disabled in <a href="settings.php">System Settings</a>.
-                </div>
-            <?php elseif ($moolre_payout_auto): ?>
-                <div class="alert alert-info" style="margin-bottom: 1rem;">
-                    Automatic MoMo payout is currently configured through Moolre.
-                </div>
-            <?php else: ?>
-                <div class="alert alert-warning" style="margin-bottom: 1rem;">
-                    Automatic payout is not configured. Approvals will be recorded as paid after you send mobile money manually.
-                </div>
-            <?php endif; ?>
-            <div class="stats-grid" style="margin-bottom: 2rem;">
-                <div class="stat-card">
-                    <div class="stat-icon warning"><i class="fas fa-hourglass-half"></i></div>
-                    <div class="stat-content">
-                        <div class="stat-value"><?php echo (int) ($withdrawal_summary['pending_count'] ?? 0); ?></div>
-                        <div class="stat-label">Awaiting Approval</div>
-                        <div class="stat-subtitle"><?php echo CURRENCY . number_format((float) ($withdrawal_summary['pending_amount'] ?? 0), 2); ?></div>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon info"><i class="fas fa-paper-plane"></i></div>
-                    <div class="stat-content">
-                        <div class="stat-value"><?php echo (int) ($withdrawal_summary['processing_count'] ?? 0); ?></div>
-                        <div class="stat-label">Paystack Processing</div>
-                        <div class="stat-subtitle"><?php echo CURRENCY . number_format((float) ($withdrawal_summary['processing_amount'] ?? 0), 2); ?></div>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon success"><i class="fas fa-check-circle"></i></div>
-                    <div class="stat-content">
-                        <div class="stat-value"><?php echo (int) ($withdrawal_summary['paid_today_count'] ?? 0); ?></div>
-                        <div class="stat-label">Paid Today</div>
-                        <div class="stat-subtitle"><?php echo CURRENCY . number_format((float) ($withdrawal_summary['paid_today_amount'] ?? 0), 2); ?></div>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon danger"><i class="fas fa-exclamation-triangle"></i></div>
-                    <div class="stat-content">
-                        <div class="stat-value"><?php echo (int) ($withdrawal_summary['problem_count'] ?? 0); ?></div>
-                        <div class="stat-label">Failed / Reversed</div>
-                        <div class="stat-subtitle"><?php echo CURRENCY . number_format((float) ($withdrawal_summary['problem_amount'] ?? 0), 2); ?></div>
-                    </div>
-                </div>
-            </div>
             <div class="widget">
                 <div class="widget-header">
                     <h3 class="widget-title">Pending Requests</h3>
-                    <p class="widget-subtitle">Requests waiting for admin approval and payout.</p>
+                    <p class="widget-subtitle">Requests waiting for approval.</p>
                 </div>
                 <div class="widget-content">
                     <?php if (!empty($pending_requests)): ?>
@@ -767,16 +492,9 @@ if ($stmt) {
                                                 <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
                                                 <input type="hidden" name="withdrawal_id" value="<?php echo (int) $request['id']; ?>">
                                                 <input type="hidden" name="action" value="approve">
-                                                <select name="payout_route" class="form-control" style="min-width:180px;">
-                                                    <?php foreach ($available_payout_routes as $route_value => $route_label): ?>
-                                                        <option value="<?php echo htmlspecialchars($route_value); ?>" <?php echo $route_value === $default_payout_route ? 'selected' : ''; ?>>
-                                                            <?php echo htmlspecialchars($route_label); ?>
-                                                        </option>
-                                                    <?php endforeach; ?>
-                                                </select>
                                                 <input type="text" name="admin_notes" class="form-control" placeholder="Notes (optional)" style="min-width:180px;">
                                                 <button type="submit" class="btn btn-success btn-sm">
-                                                    <i class="fas fa-check"></i> Approve & Process
+                                                    <i class="fas fa-check"></i> Pay MoMo
                                                 </button>
                                             </form>
                                             <form method="post" style="margin-top:0.5rem;">
@@ -845,21 +563,9 @@ if ($stmt) {
                                         <td data-label="Status">
                                             <?php
                                             $status = $row['status'] ?? 'pending';
-                                            $badge = $status === 'paid'
-                                                ? 'success'
-                                                : (in_array($status, ['failed', 'rejected', 'reversed'], true) ? 'danger' : 'warning');
+                                            $badge = $status === 'approved' || $status === 'paid' ? 'success' : ($status === 'rejected' ? 'danger' : 'warning');
                                             ?>
                                             <span class="badge badge-<?php echo $badge; ?>"><?php echo ucfirst($status); ?></span>
-                                            <?php if ($status === 'processing' && ($row['payout_provider'] ?? '') === 'paystack'): ?>
-                                                <form method="post" style="display:inline-block; margin-top:0.25rem; width: 100%;">
-                                                    <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                                                    <input type="hidden" name="withdrawal_id" value="<?php echo (int) $row['id']; ?>">
-                                                    <input type="hidden" name="action" value="verify_status">
-                                                    <button type="submit" class="btn btn-sm btn-outline-info" style="padding: 2px 6px; font-size: 0.75rem; width: 100%; text-align: center;" title="Check Paystack transfer status">
-                                                        <i class="fas fa-sync-alt"></i> Verify Status
-                                                    </button>
-                                                </form>
-                                            <?php endif; ?>
                                         </td>
                                         <td data-label="Processed By"><?php echo htmlspecialchars($row['processed_by_name'] ?? ''); ?></td>
                                         <td data-label="Date"><?php echo date('M j, Y H:i', strtotime($row['created_at'])); ?></td>

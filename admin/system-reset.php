@@ -69,7 +69,7 @@ include '../includes/admin_header.php';
 
             <div class="stats-grid" style="margin-bottom:1.5rem;">
                 <div class="stat-card">
-                    <div class="stat-icon" style="background:rgba(99,102,241,0.12);color:#6366f1;">
+                    <div class="stat-icon" style="background:rgba(84, 19, 136, 0.12);color:#541388;">
                         <i class="fas fa-database"></i>
                     </div>
                     <div class="stat-content">
@@ -78,7 +78,7 @@ include '../includes/admin_header.php';
                     </div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-icon" style="background:rgba(34,197,94,0.12);color:#22c55e;">
+                    <div class="stat-icon" style="background:rgba(46, 41, 78, 0.12);color:#2E294E;">
                         <i class="fas fa-user-tie"></i>
                     </div>
                     <div class="stat-content">
@@ -87,7 +87,7 @@ include '../includes/admin_header.php';
                     </div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-icon" style="background:rgba(244,114,182,0.12);color:#f472b6;">
+                    <div class="stat-icon" style="background:rgba(241, 233, 218, 0.12);color:#F1E9DA;">
                         <i class="fas fa-users"></i>
                     </div>
                     <div class="stat-content">
@@ -96,7 +96,7 @@ include '../includes/admin_header.php';
                     </div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-icon" style="background:rgba(249,115,22,0.12);color:#f97316;">
+                    <div class="stat-icon" style="background:rgba(255, 212, 0, 0.12);color:#FFD400;">
                         <i class="fas fa-exchange-alt"></i>
                     </div>
                     <div class="stat-content">
@@ -105,7 +105,7 @@ include '../includes/admin_header.php';
                     </div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-icon" style="background:rgba(14,165,233,0.12);color:#0ea5e9;">
+                    <div class="stat-icon" style="background:rgba(84, 19, 136, 0.12);color:#541388;">
                         <i class="fas fa-history"></i>
                     </div>
                     <div class="stat-content">
@@ -114,7 +114,7 @@ include '../includes/admin_header.php';
                     </div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-icon" style="background:rgba(251,191,36,0.12);color:#fbbf24;">
+                    <div class="stat-icon" style="background:rgba(255, 212, 0, 0.12);color:#FFD400;">
                         <i class="fas fa-bell"></i>
                     </div>
                     <div class="stat-content">
@@ -123,7 +123,7 @@ include '../includes/admin_header.php';
                     </div>
                 </div>
                 <div class="stat-card">
-                    <div class="stat-icon" style="background:rgba(248,113,113,0.12);color:#ef4444;">
+                    <div class="stat-icon" style="background:rgba(217, 3, 104, 0.12);color:#D90368;">
                         <i class="fas fa-exclamation-circle"></i>
                     </div>
                     <div class="stat-content">
@@ -174,3 +174,4 @@ if (confirmationField) {
 </script>
 
 <?php include '../includes/admin_footer.php'; ?>
+

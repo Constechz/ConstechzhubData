@@ -9,14 +9,11 @@ preventBrowserCaching();
 requireRole('customer');
 
 $current_user = getCurrentUser();
-$customer_pricing_type = getCustomerPricingUserType($current_user);
-$is_vip_portal = defined('VIP_PORTAL') && VIP_PORTAL;
-$portal_role_label = $is_vip_portal ? 'VIP' : 'Customer';
 
 // Store-context redirect guard: if customer visits without ?store, redirect to their agent's active store if exists
 try {
     $store_slug_guard = $_GET['store'] ?? null;
-    if (!$is_vip_portal && empty($store_slug_guard)) {
+    if (empty($store_slug_guard)) {
         $colCheck = $db->query("SHOW COLUMNS FROM users LIKE 'agent_id'");
         if ($colCheck && $colCheck->num_rows > 0) {
             $stmt = $db->prepare(
@@ -101,14 +98,6 @@ $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
 $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
-$status_filter_groups = [
-    'pending' => ['pending'],
-    'processing' => ['processing'],
-    'successful' => ['success', 'delivered', 'completed'],
-    'success' => ['success', 'delivered', 'completed'],
-    'failed' => ['failed']
-];
-
 // Build query
 $where_conditions = ["bo.user_id = ?"];
 $params = [$current_user['id']];
@@ -121,13 +110,9 @@ if (!empty($network_filter)) {
 }
 
 if (!empty($status_filter)) {
-    $status_values = $status_filter_groups[$status_filter] ?? [$status_filter];
-    $status_placeholders = implode(', ', array_fill(0, count($status_values), '?'));
-    $where_conditions[] = "bo.status IN ({$status_placeholders})";
-    foreach ($status_values as $status_value) {
-        $params[] = $status_value;
-        $types .= "s";
-    }
+    $where_conditions[] = "bo.status = ?";
+    $params[] = $status_filter;
+    $types .= "s";
 }
 
 if (!empty($date_from)) {
@@ -164,78 +149,43 @@ $orders_query = "
     SELECT bo.*, dp.name as package_name, dp.data_size, dp.validity_days,
            n.name as network_name, n.color as network_color,
            t.amount as transaction_amount,
-           bo.amount as customer_price,
-           0 AS has_open_issue
+           COALESCE(pp.price, 0) as customer_price,
+           CASE WHEN oir.id IS NULL THEN 0 ELSE 1 END AS has_open_issue
     FROM bundle_orders bo
     JOIN data_packages dp ON dp.id = bo.package_id
     JOIN networks n ON n.id = dp.network_id
     LEFT JOIN transactions t ON t.id = bo.transaction_id
-    LEFT JOIN package_pricing pp ON pp.package_id = dp.id AND pp.user_type = ?
-    LEFT JOIN package_pricing pp_customer_fallback ON pp_customer_fallback.package_id = dp.id AND pp_customer_fallback.user_type = 'customer'
+    LEFT JOIN package_pricing pp ON pp.package_id = dp.id AND pp.user_type = 'customer'
+    LEFT JOIN order_issue_reports oir ON oir.order_id = bo.id AND oir.reporter_id = ? AND oir.status IN ('open','in_progress')
     $where_clause
     ORDER BY bo.created_at DESC
     LIMIT ? OFFSET ?
 ";
 
-$orders_params = array_merge([$customer_pricing_type], $params, [$limit, $offset]);
-$orders_types = 's' . $types . 'ii';
+$params[] = $current_user['id'];
+$params[] = $limit;
+$params[] = $offset;
+$types .= "iii";
 
 $stmt = $db->prepare($orders_query);
-$stmt->bind_param($orders_types, ...$orders_params);
+$stmt->bind_param($types, ...$params);
 $stmt->execute();
 $orders_rs = $stmt->get_result();
 
 $orders = [];
 while ($row = $orders_rs->fetch_assoc()) { $orders[] = $row; }
 
-if (!empty($orders) && function_exists('dbh_table_exists') && dbh_table_exists('order_issue_reports')) {
-    $order_ids = array_map(static function ($order) {
-        return (int) ($order['id'] ?? 0);
-    }, $orders);
-    $order_ids = array_values(array_filter($order_ids));
-
-    if (!empty($order_ids)) {
-        $placeholders = implode(',', array_fill(0, count($order_ids), '?'));
-        $issue_query = "
-            SELECT order_id
-            FROM order_issue_reports
-            WHERE reporter_id = ?
-              AND status IN ('open','in_progress')
-              AND order_id IN ($placeholders)
-        ";
-
-        $issue_stmt = $db->prepare($issue_query);
-        if ($issue_stmt) {
-            $issue_params = array_merge([(int) $current_user['id']], $order_ids);
-            $issue_types = 'i' . str_repeat('i', count($order_ids));
-            $issue_stmt->bind_param($issue_types, ...$issue_params);
-            $issue_stmt->execute();
-            $issue_rs = $issue_stmt->get_result();
-
-            $open_issue_map = [];
-            while ($issue_row = $issue_rs->fetch_assoc()) {
-                $open_issue_map[(int) ($issue_row['order_id'] ?? 0)] = true;
-            }
-
-            foreach ($orders as &$order) {
-                $order['has_open_issue'] = !empty($open_issue_map[(int) ($order['id'] ?? 0)]) ? 1 : 0;
-            }
-            unset($order);
-        }
-    }
-}
-
 // Get summary statistics
 $stats_query = "
     SELECT 
         COUNT(*) as total_orders,
-        SUM(CASE WHEN bo.status IN ('success', 'delivered', 'completed') THEN 1 ELSE 0 END) as successful_orders,
-        SUM(CASE WHEN bo.status = 'processing' THEN 1 ELSE 0 END) as processing_orders,
+        SUM(CASE WHEN bo.status = 'success' THEN 1 ELSE 0 END) as successful_orders,
         SUM(CASE WHEN bo.status = 'pending' THEN 1 ELSE 0 END) as pending_orders,
         SUM(CASE WHEN bo.status = 'failed' THEN 1 ELSE 0 END) as failed_orders,
-        SUM(CASE WHEN bo.status IN ('success', 'delivered', 'completed', 'processing', 'pending') THEN COALESCE(bo.amount, 0) ELSE 0 END) as total_spent
+        SUM(CASE WHEN bo.status = 'success' THEN COALESCE(pp.price, 0) ELSE 0 END) as total_spent
     FROM bundle_orders bo
     JOIN data_packages dp ON dp.id = bo.package_id
+    LEFT JOIN package_pricing pp ON pp.package_id = dp.id AND pp.user_type = 'customer'
     WHERE bo.user_id = ?
 ";
 
@@ -251,21 +201,6 @@ $networks = [];
 while ($row = $networks_rs->fetch_assoc()) { $networks[] = $row; }
 
 $flash = getFlashMessage();
-$active_filters = array_filter([
-    'network' => $network_filter,
-    'status' => $status_filter,
-    'date_from' => $date_from,
-    'date_to' => $date_to
-], static function ($value) {
-    return $value !== null && $value !== '';
-});
-$active_filter_count = count($active_filters);
-$visible_order_count = count($orders);
-$total_orders_count = (int) ($total_orders ?? 0);
-$success_rate = $total_orders_count > 0
-    ? (int) round((((int) ($stats['successful_orders'] ?? 0)) / $total_orders_count) * 100)
-    : 0;
-$latest_order = $orders[0] ?? null;
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="light">
@@ -273,211 +208,17 @@ $latest_order = $orders[0] ?? null;
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Order History - <?php echo SITE_NAME; ?></title>
-    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>"">
-    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>"">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>">
     <style>
-        .history-overview {
-            display: grid;
-            grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.9fr);
-            gap: 1rem;
-            margin-bottom: 1.5rem;
-        }
-
-        .summary-chip-row {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.75rem;
-            margin-bottom: 1rem;
-        }
-
-        .summary-chip {
-            min-width: 120px;
-            padding: 0.85rem 0.95rem;
-            border: 1px solid var(--border-color);
-            border-radius: 14px;
-            background: var(--bg-primary);
-        }
-
-        .summary-chip__label {
-            display: block;
-            font-size: 0.75rem;
-            color: var(--text-muted);
-            margin-bottom: 0.35rem;
-            text-transform: uppercase;
-            letter-spacing: 0.04em;
-        }
-
-        .summary-chip__value {
-            font-size: 1rem;
-            font-weight: 700;
-            color: var(--text-primary);
-        }
-
-        .history-highlight {
-            padding: 1rem 1.1rem;
-            border-radius: 16px;
-            background: linear-gradient(135deg, rgba(139, 92, 246, 0.12), rgba(139, 92, 246, 0.04));
-            border: 1px solid rgba(139, 92, 246, 0.16);
-        }
-
-        .history-highlight__eyebrow {
-            font-size: 0.75rem;
-            text-transform: uppercase;
-            letter-spacing: 0.06em;
-            color: var(--text-muted);
-            margin-bottom: 0.45rem;
-        }
-
-        .history-highlight h4,
-        .history-guide h4 {
-            margin-bottom: 0.35rem;
-        }
-
-        .history-highlight p,
-        .history-guide p {
-            margin-bottom: 0;
-            color: var(--text-secondary);
-        }
-
-        .history-highlight__meta {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 0.75rem;
-            align-items: center;
-            margin-top: 0.85rem;
-            color: var(--text-secondary);
-            font-size: 0.875rem;
-        }
-
-        .history-guide {
-            margin-top: 1rem;
-            padding-top: 1rem;
-            border-top: 1px solid var(--border-color);
-        }
-
-        .history-guide-list {
-            margin: 0.75rem 0 0;
-            padding-left: 1.1rem;
-            color: var(--text-secondary);
-        }
-
-        .history-guide-list li + li {
-            margin-top: 0.45rem;
-        }
-
-        .quick-link-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-            gap: 0.85rem;
-        }
-
-        .quick-link-card {
-            display: flex;
-            flex-direction: column;
-            align-items: flex-start;
-            gap: 0.55rem;
-            padding: 1rem;
-            border: 1px solid var(--border-color);
-            border-radius: 14px;
-            background: var(--bg-primary);
-            color: var(--text-primary);
-            transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
-        }
-
-        .quick-link-card:hover {
-            transform: translateY(-2px);
-            border-color: var(--brand-primary);
-            box-shadow: 0 14px 24px rgba(15, 23, 42, 0.08);
-            color: var(--text-primary);
-        }
-
-        .quick-link-card i {
-            width: 2.25rem;
-            height: 2.25rem;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 12px;
-            background: rgba(139, 92, 246, 0.14);
-            color: var(--brand-primary);
-        }
-
-        .empty-state .btn-row {
-            display: flex;
-            flex-wrap: wrap;
-            justify-content: center;
-            gap: 0.75rem;
-            margin-top: 1rem;
-        }
-
-        .order-actions {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 0.5rem;
-            margin-bottom: 0;
-        }
-
-        .order-actions .btn {
-            width: 40px;
-            height: 40px;
-            min-width: 40px;
-            min-height: 40px;
-            padding: 0;
-            border-radius: 12px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            border-width: 1px;
-            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
-        }
-
-        .order-actions .btn i {
-            font-size: 0.95rem;
-        }
-
-        .order-actions .btn-outline-primary {
-            background: rgba(59, 130, 246, 0.1);
-            color: #2563eb;
-            border-color: rgba(37, 99, 235, 0.22);
-        }
-
-        .order-actions .btn-outline-success {
-            background: rgba(34, 197, 94, 0.1);
-            color: #15803d;
-            border-color: rgba(21, 128, 61, 0.22);
-        }
-
-        .order-actions .btn-outline-danger {
-            background: rgba(239, 68, 68, 0.1);
-            color: #dc2626;
-            border-color: rgba(220, 38, 38, 0.22);
-        }
-
-        .order-actions .btn:hover {
-            transform: translateY(-1px);
-            box-shadow: 0 12px 22px rgba(15, 23, 42, 0.12);
+        /* Prevent body/html horizontal scrollbar */
+        html, body {
+            max-width: 100%;
+            overflow-x: hidden;
         }
 
         @media (max-width: 768px) {
-            .history-overview {
-                grid-template-columns: 1fr;
-            }
-
-            .summary-chip-row {
-                gap: 0.6rem;
-            }
-
-            .summary-chip {
-                flex: 1 1 calc(50% - 0.6rem);
-                min-width: 0;
-            }
-
-            .quick-link-grid {
-                grid-template-columns: 1fr;
-            }
-
             body,
             .dashboard-wrapper,
             .main-content {
@@ -490,8 +231,9 @@ $latest_order = $orders[0] ?? null;
 
             .mobile-responsive-table {
                 border: 0;
-                width: 100%;
-                max-width: 100%;
+                width: 100% !important;
+                max-width: 100% !important;
+                min-width: 0 !important;
                 font-size: 0.85rem;
             }
 
@@ -519,7 +261,7 @@ $latest_order = $orders[0] ?? null;
                 padding: 1rem;
                 margin-bottom: 1rem;
                 background: var(--bg-primary);
-                box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+                box-shadow: 0 2px 6px rgba(46, 41, 78, 0.08);
             }
 
             .mobile-responsive-table td {
@@ -551,34 +293,23 @@ $latest_order = $orders[0] ?? null;
                 display: none;
             }
 
-            .mobile-responsive-table td[data-label="Actions"] {
-                padding-top: 0.75rem;
-            }
-
-            .mobile-responsive-table td[data-label="Actions"]:before {
-                margin-bottom: 0.45rem;
-            }
-
-            .mobile-responsive-table td[data-label="Actions"] .order-actions {
-                display: inline-flex;
-                flex-direction: row;
+            .action-buttons {
                 flex-wrap: wrap;
-                justify-content: flex-start;
+                gap: 0.5rem;
+            }
+
+            .action-buttons .btn {
+                display: inline-flex;
                 align-items: center;
-                gap: 0.45rem;
+                justify-content: center;
+                width: 36px;
+                height: 36px;
+                padding: 0;
+                border-radius: 8px;
             }
 
-            .mobile-responsive-table td[data-label="Actions"] .order-actions .btn {
-                width: 34px;
-                height: 34px;
-                min-width: 34px;
-                min-height: 34px;
-                border-radius: 10px;
-                box-shadow: none;
-            }
-
-            .mobile-responsive-table td[data-label="Actions"] .order-actions .btn i {
-                font-size: 0.9rem;
+            .action-buttons .btn i {
+                font-size: 1rem;
             }
 
 
@@ -607,26 +338,6 @@ $latest_order = $orders[0] ?? null;
                 grid-template-columns: 1fr;
             }
 
-            .mobile-responsive-table td[data-label="Actions"] .order-actions {
-                gap: 0.35rem;
-            }
-
-            .mobile-responsive-table td[data-label="Actions"] .order-actions .btn {
-                width: 32px;
-                height: 32px;
-                min-width: 32px;
-                min-height: 32px;
-                border-radius: 9px;
-            }
-
-            .mobile-responsive-table td[data-label="Actions"] .order-actions .btn i {
-                font-size: 0.82rem;
-            }
-
-            .summary-chip {
-                flex-basis: 100%;
-            }
-
             .page-title h1 {
                 font-size: 1.5rem;
             }
@@ -636,90 +347,7 @@ $latest_order = $orders[0] ?? null;
 </head>
 <body>
 <div class="dashboard-wrapper">
-    <!-- Sidebar -->
-    <nav class="sidebar">
-        <div class="sidebar-brand">
-            <h3><?php echo $agent_store ? htmlspecialchars($agent_store['store_name']) : htmlspecialchars(getSiteName()); ?></h3>
-        </div>
-        
-        <ul class="sidebar-nav">
-            <li class="nav-section">
-                <div class="nav-section-title">Dashboard</div>
-                <div class="nav-item">
-                    <a href="dashboard.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-home"></i>
-                        Dashboard
-                    </a>
-                </div>
-            </li>
-            
-            <li class="nav-section">
-                <div class="nav-section-title">Services</div>
-                <div class="nav-item">
-                    <a href="buy-data.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-mobile-alt"></i>
-                        Buy Data
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="bulk-mtn.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-layer-group"></i>
-                        Bulk MTN
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="result-checker.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-award"></i>
-                        Result Checker
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="order-history.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link active">
-                        <i class="fas fa-history"></i>
-                        Order History
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="reference.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-search"></i>
-                        Reference
-                    </a>
-                </div>
-            </li>
-            
-            <li class="nav-section">
-                <div class="nav-section-title">Account</div>
-                <div class="nav-item">
-                    <a href="wallet.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-wallet"></i>
-                        Wallet
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="profile.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-user"></i>
-                        Profile
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="support.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-life-ring"></i>
-                        Support
-                    </a>
-                </div>
-            </li>
-            
-            <li class="nav-section">
-                <div class="nav-section-title">Settings</div>
-                <div class="nav-item">
-                    <a href="../logout.php" class="nav-link">
-                        <i class="fas fa-sign-out-alt"></i>
-                        Logout
-                    </a>
-                </div>
-            </li>
-        </ul>
-    </nav>
+    <?php require_once '../includes/customer_sidebar.php'; ?>
 
     <!-- Main Content -->
     <main class="main-content">
@@ -744,7 +372,7 @@ $latest_order = $orders[0] ?? null;
                         </div>
                         <div>
                             <div style="font-weight: 500;">&nbsp;<?php echo htmlspecialchars($current_user['full_name'] ?? $_SESSION['username']); ?></div>
-                            <div style="font-size: 0.75rem; color: var(--text-muted);"><?php echo htmlspecialchars($portal_role_label); ?></div>
+                            <div style="font-size: 0.75rem; color: var(--text-muted);">Customer</div>
                         </div>
                         <i class="fas fa-chevron-down" style="margin-left: 0.5rem;"></i>
                     </button>
@@ -765,6 +393,9 @@ $latest_order = $orders[0] ?? null;
             </div>
         </header>
 
+<?php echo renderNotificationSlides('customers'); ?>
+
+
         <div class="dashboard-content">
             <div class="page-title">
                 <h1>Order History</h1>
@@ -776,102 +407,6 @@ $latest_order = $orders[0] ?? null;
                     <?php echo htmlspecialchars($flash['message']); ?>
                 </div>
             <?php endif; ?>
-
-            <?php echo renderNotificationSlides('customers'); ?>
-
-            <div class="history-overview">
-                <div class="widget">
-                    <div class="widget-header">
-                        <h3>Order Snapshot</h3>
-                    </div>
-                    <div class="widget-body">
-                        <div class="summary-chip-row">
-                            <div class="summary-chip">
-                                <span class="summary-chip__label">Visible Orders</span>
-                                <span class="summary-chip__value"><?php echo number_format($visible_order_count); ?></span>
-                            </div>
-                            <div class="summary-chip">
-                                <span class="summary-chip__label">All Orders</span>
-                                <span class="summary-chip__value"><?php echo number_format($total_orders_count); ?></span>
-                            </div>
-                            <div class="summary-chip">
-                                <span class="summary-chip__label">Success Rate</span>
-                                <span class="summary-chip__value"><?php echo $success_rate; ?>%</span>
-                            </div>
-                            <div class="summary-chip">
-                                <span class="summary-chip__label">Active Filters</span>
-                                <span class="summary-chip__value"><?php echo $active_filter_count; ?></span>
-                            </div>
-                        </div>
-
-                        <?php if ($latest_order): ?>
-                            <?php $latest_status = getOrderStatusDisplay($latest_order['status']); ?>
-                            <div class="history-highlight">
-                                <div class="history-highlight__eyebrow">Latest Order</div>
-                                <h4>#<?php echo str_pad($latest_order['id'], 6, '0', STR_PAD_LEFT); ?> · <?php echo htmlspecialchars($latest_order['network_name']); ?></h4>
-                                <p>
-                                    <?php echo htmlspecialchars($latest_order['package_name']); ?> for
-                                    <?php echo htmlspecialchars($latest_order['beneficiary_number']); ?> on
-                                    <?php echo date('M j, Y g:i A', strtotime($latest_order['created_at'])); ?>.
-                                </p>
-                                <div class="history-highlight__meta">
-                                    <span><?php echo CURRENCY . number_format((float) ($latest_order['customer_price'] ?? 0), 2); ?></span>
-                                    <span><?php echo htmlspecialchars($latest_status['label']); ?></span>
-                                    <?php if (!empty($agent_store['store_name'])): ?>
-                                        <span><?php echo htmlspecialchars($agent_store['store_name']); ?></span>
-                                    <?php endif; ?>
-                                </div>
-                            </div>
-                        <?php else: ?>
-                            <div class="history-highlight">
-                                <div class="history-highlight__eyebrow">Getting Started</div>
-                                <h4>Your order timeline will appear here</h4>
-                                <p>
-                                    Once you place your first data order, this page will show recent activity,
-                                    delivery status, spending, and follow-up actions in one place.
-                                </p>
-                            </div>
-                        <?php endif; ?>
-                    </div>
-                </div>
-
-                <div class="widget">
-                    <div class="widget-header">
-                        <h3>Quick Actions</h3>
-                    </div>
-                    <div class="widget-body">
-                        <div class="quick-link-grid">
-                            <a href="buy-data.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="quick-link-card">
-                                <i class="fas fa-mobile-alt"></i>
-                                <strong>Buy Data</strong>
-                                <span class="text-muted">Purchase another bundle</span>
-                            </a>
-                            <a href="wallet.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="quick-link-card">
-                                <i class="fas fa-wallet"></i>
-                                <strong>Fund Wallet</strong>
-                                <span class="text-muted">Top up for your next order</span>
-                            </a>
-                            <a href="support.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="quick-link-card">
-                                <i class="fas fa-life-ring"></i>
-                                <strong>Get Support</strong>
-                                <span class="text-muted">Report an issue or ask for help</span>
-                            </a>
-                        </div>
-
-                        <?php if ($total_orders_count === 0): ?>
-                            <div class="history-guide">
-                                <h4>How to use this page</h4>
-                                <p>This page becomes much more useful after your first purchase.</p>
-                                <ul class="history-guide-list">
-                                    <li>Buy a data bundle from this store.</li>
-                                    <li>Come back here to track status, package details, and delivery timing.</li>
-                                    <li>Use support actions if an order needs follow-up.</li>
-                                </ul>
-                            </div>
-                        <?php endif; ?>
-                    </div>
-                </div>
-            </div>
 
             <!-- Summary Stats -->
             <div class="stats-grid">
@@ -891,15 +426,6 @@ $latest_order = $orders[0] ?? null;
                     <div class="stat-content">
                         <div class="stat-value"><?php echo number_format((int)($stats['successful_orders'] ?? 0)); ?></div>
                         <div class="stat-label">Successful</div>
-                    </div>
-                </div>
-                <div class="stat-card warning">
-                    <div class="stat-icon">
-                        <i class="fas fa-spinner"></i>
-                    </div>
-                    <div class="stat-content">
-                        <div class="stat-value"><?php echo number_format((int)($stats['processing_orders'] ?? 0)); ?></div>
-                        <div class="stat-label">Processing</div>
                     </div>
                 </div>
                 <div class="stat-card warning">
@@ -931,62 +457,59 @@ $latest_order = $orders[0] ?? null;
                 </div>
             </div>
 
-            <?php if ($total_orders_count > 0 || $active_filter_count > 0): ?>
-                <!-- Filters -->
-                <div class="widget">
-                    <div class="widget-header">
-                        <h3>Filter Orders</h3>
-                    </div>
-                    <div class="widget-body">
-                        <form method="GET" class="filter-form">
-                            <?php if (!empty($store_slug)): ?>
-                                <input type="hidden" name="store" value="<?php echo htmlspecialchars($store_slug); ?>">
-                            <?php endif; ?>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label for="network">Network</label>
-                                    <select name="network" id="network" class="form-control">
-                                        <option value="">All Networks</option>
-                                        <?php foreach ($networks as $network): ?>
-                                            <option value="<?php echo htmlspecialchars($network['name']); ?>" 
-                                                    <?php echo $network_filter === $network['name'] ? 'selected' : ''; ?>>
-                                                <?php echo htmlspecialchars($network['name']); ?>
-                                            </option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label for="status">Status</label>
-                                    <select name="status" id="status" class="form-control">
-                                        <option value="">All Status</option>
-                                        <option value="pending" <?php echo $status_filter === 'pending' ? 'selected' : ''; ?>>Pending</option>
-                                        <option value="processing" <?php echo $status_filter === 'processing' ? 'selected' : ''; ?>>Processing</option>
-                                        <option value="successful" <?php echo in_array($status_filter, ['successful', 'success'], true) ? 'selected' : ''; ?>>Successful</option>
-                                        <option value="failed" <?php echo $status_filter === 'failed' ? 'selected' : ''; ?>>Failed</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label for="date_from">From Date</label>
-                                    <input type="date" name="date_from" id="date_from" class="form-control" value="<?php echo htmlspecialchars($date_from); ?>">
-                                </div>
-                                <div class="form-group">
-                                    <label for="date_to">To Date</label>
-                                    <input type="date" name="date_to" id="date_to" class="form-control" value="<?php echo htmlspecialchars($date_to); ?>">
-                                </div>
-                                <div class="form-group">
-                                    <label>&nbsp;</label>
-                                    <button type="submit" class="btn btn-primary">
-                                        <i class="fas fa-filter"></i> Filter
-                                    </button>
-                                    <a href="order-history.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="btn btn-secondary">
-                                        <i class="fas fa-times"></i> Clear
-                                    </a>
-                                </div>
-                            </div>
-                        </form>
-                    </div>
+            <!-- Filters -->
+            <div class="widget">
+                <div class="widget-header">
+                    <h3>Filter Orders</h3>
                 </div>
-            <?php endif; ?>
+                <div class="widget-body">
+                    <form method="GET" class="filter-form">
+                        <?php if (!empty($store_slug)): ?>
+                            <input type="hidden" name="store" value="<?php echo htmlspecialchars($store_slug); ?>">
+                        <?php endif; ?>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="network">Network</label>
+                                <select name="network" id="network" class="form-control">
+                                    <option value="">All Networks</option>
+                                    <?php foreach ($networks as $network): ?>
+                                        <option value="<?php echo htmlspecialchars($network['name']); ?>" 
+                                                <?php echo $network_filter === $network['name'] ? 'selected' : ''; ?>>
+                                            <?php echo htmlspecialchars($network['name']); ?>
+                                        </option>
+                                    <?php endforeach; ?>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="status">Status</label>
+                                <select name="status" id="status" class="form-control">
+                                    <option value="">All Status</option>
+                                    <option value="pending" <?php echo $status_filter === 'pending' ? 'selected' : ''; ?>>Pending</option>
+                                    <option value="success" <?php echo $status_filter === 'success' ? 'selected' : ''; ?>>Success</option>
+                                    <option value="failed" <?php echo $status_filter === 'failed' ? 'selected' : ''; ?>>Failed</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="date_from">From Date</label>
+                                <input type="date" name="date_from" id="date_from" class="form-control" value="<?php echo htmlspecialchars($date_from); ?>">
+                            </div>
+                            <div class="form-group">
+                                <label for="date_to">To Date</label>
+                                <input type="date" name="date_to" id="date_to" class="form-control" value="<?php echo htmlspecialchars($date_to); ?>">
+                            </div>
+                            <div class="form-group">
+                                <label>&nbsp;</label>
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fas fa-filter"></i> Filter
+                                </button>
+                                <a href="order-history.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="btn btn-secondary">
+                                    <i class="fas fa-times"></i> Clear
+                                </a>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+            </div>
 
             <!-- Orders Table -->
             <div class="widget">
@@ -1002,10 +525,7 @@ $latest_order = $orders[0] ?? null;
                             <i class="fas fa-history"></i>
                             <h3>No Orders Found</h3>
                             <p>You haven't made any orders yet or no orders match your filters.</p>
-                            <div class="btn-row">
-                                <a href="buy-data.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="btn btn-primary">Buy Data Bundle</a>
-                                <a href="wallet.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="btn btn-outline">Fund Wallet</a>
-                            </div>
+                            <a href="buy-data.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="btn btn-primary">Buy Data Bundle</a>
                         </div>
                     <?php else: ?>
                         <div class="table-responsive">
@@ -1033,7 +553,7 @@ $latest_order = $orders[0] ?? null;
                                             </td>
                                             <td data-label="Network">
                                                 <div class="network-badge">
-                                                    <span class="network-indicator" style="background-color: <?php echo htmlspecialchars($order['network_color'] ?? '#007bff'); ?>"></span>
+                                                    <span class="network-indicator" style="background-color: <?php echo htmlspecialchars($order['network_color'] ?? '#541388'); ?>"></span>
                                                     <?php echo htmlspecialchars($order['network_name']); ?>
                                                 </div>
                                             </td>
@@ -1051,7 +571,7 @@ $latest_order = $orders[0] ?? null;
                                             </td>
                                             <?php $status_info = getOrderStatusDisplay($order['status']); ?>
                                             <td data-label="Status">
-                                                <span class="badge" style="background-color: <?php echo $status_info['color']; ?>; color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem;" title="<?php echo htmlspecialchars($status_info['description']); ?>">
+                                                <span class="badge" style="background-color: <?php echo $status_info['color']; ?>; color: #F1E9DA; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem;" title="<?php echo htmlspecialchars($status_info['description']); ?>">
                                                     <i class="fas <?php echo $status_info['icon']; ?>"></i> <?php echo $status_info['label']; ?>
                                                 </span>
                                             </td>
@@ -1089,7 +609,7 @@ $latest_order = $orders[0] ?? null;
                                                 $orderPayloadJson = htmlspecialchars(json_encode($orderPayload, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP), ENT_QUOTES, 'UTF-8');
                                             ?>
                                             <td data-label="Actions">
-                                                <div class="action-buttons order-actions">
+                                                <div class="action-buttons">
                                                     <button class="btn btn-sm btn-outline-primary" onclick="viewOrderDetails(<?php echo $order['id']; ?>)" title="View details">
                                                         <i class="fas fa-eye"></i>
                                                     </button>
@@ -1296,6 +816,8 @@ window.ORDER_ESCALATION_SETTINGS = {
 <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/order-escalation.js')); ?>""></script>
     <!-- IMMEDIATE Icon Fix for square placeholder issues -->
     <script src="../immediate_icon_fix.js"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
 

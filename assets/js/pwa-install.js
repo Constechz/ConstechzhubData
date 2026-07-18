@@ -45,40 +45,7 @@ class PWAInstallManager {
     async registerServiceWorker() {
         if ('serviceWorker' in navigator) {
             try {
-                let swPath = '';
-                
-                // 1. Try to detect base path from the script element itself
-                const pwaScript = document.querySelector('script[src*="pwa-install.js"]');
-                if (pwaScript) {
-                    try {
-                        const scriptUrl = new URL(pwaScript.src);
-                        // If same origin, we can trust the script's resolved URL path
-                        if (scriptUrl.origin === window.location.origin) {
-                            swPath = scriptUrl.pathname.replace(/assets\/js\/pwa-install\.js(\?.*)?$/, 'sw.js');
-                        }
-                    } catch (e) {
-                        console.error('PWA: Error parsing script URL:', e);
-                    }
-                }
-                
-                // 2. If same-origin detection from script failed, fall back to parsing window.location.pathname
-                if (!swPath) {
-                    const pathParts = window.location.pathname.split('/').filter(p => p !== '');
-                    if (pathParts.length > 0) {
-                        const firstSegment = pathParts[0];
-                        if (!firstSegment.endsWith('.php') && !['admin', 'agent', 'customer', 'vip'].includes(firstSegment)) {
-                            swPath = '/' + firstSegment + '/sw.js';
-                        }
-                    }
-                }
-                
-                // 3. Ultimate fallback
-                if (!swPath) {
-                    swPath = '/sw.js';
-                }
-                
-                console.log('PWA: Registering ServiceWorker with path:', swPath);
-                const registration = await navigator.serviceWorker.register(swPath);
+                const registration = await navigator.serviceWorker.register('/sw.js');
                 console.log('PWA: ServiceWorker registered successfully:', registration.scope);
                 
                 // Check for updates
@@ -105,6 +72,15 @@ class PWAInstallManager {
         }
         
         installButton.style.display = 'block';
+        
+        // Auto-show install prompt after 5 seconds on mobile
+        if (this.isAndroid) {
+            setTimeout(() => {
+                if (!this.isStandalone && this.deferredPrompt) {
+                    this.showInstallPrompt();
+                }
+            }, 5000);
+        }
     }
     
     createInstallButton() {
@@ -121,15 +97,15 @@ class PWAInstallManager {
             position: fixed;
             bottom: 20px;
             right: 20px;
-            background: #6366f1;
-            color: white;
+            background: #541388;
+            color: #F1E9DA;
             border: none;
             padding: 12px 20px;
             border-radius: 25px;
             font-weight: 500;
             font-size: 14px;
             cursor: pointer;
-            box-shadow: 0 4px 12px rgba(99, 102, 241, 0.3);
+            box-shadow: 0 4px 12px rgba(84, 19, 136, 0.3);
             z-index: 1000;
             display: none;
             align-items: center;
@@ -141,11 +117,11 @@ class PWAInstallManager {
         button.addEventListener('click', () => this.showInstallPrompt());
         button.addEventListener('mouseenter', () => {
             button.style.transform = 'translateY(-2px)';
-            button.style.boxShadow = '0 6px 20px rgba(99, 102, 241, 0.4)';
+            button.style.boxShadow = '0 6px 20px rgba(84, 19, 136, 0.4)';
         });
         button.addEventListener('mouseleave', () => {
             button.style.transform = 'translateY(0)';
-            button.style.boxShadow = '0 4px 12px rgba(99, 102, 241, 0.3)';
+            button.style.boxShadow = '0 4px 12px rgba(84, 19, 136, 0.3)';
         });
         
         return button;
@@ -199,7 +175,7 @@ class PWAInstallManager {
             left: 0;
             right: 0;
             bottom: 0;
-            background: rgba(0, 0, 0, 0.8);
+            background: rgba(46, 41, 78, 0.8);
             display: none;
             align-items: center;
             justify-content: center;
@@ -208,20 +184,20 @@ class PWAInstallManager {
         `;
         
         modal.innerHTML = `
-            <div style="background: white; border-radius: 12px; padding: 24px; max-width: 350px; text-align: center;">
-                <h3 style="margin: 0 0 16px 0; color: #333;">Install Constechzhub</h3>
-                <p style="color: #666; margin: 0 0 20px 0; line-height: 1.4;">
+            <div style="background: #F1E9DA; border-radius: 12px; padding: 24px; max-width: 350px; text-align: center;">
+                <h3 style="margin: 0 0 16px 0; color: #2E294E;">Install Constechzhub</h3>
+                <p style="color: #2E294E; margin: 0 0 20px 0; line-height: 1.4;">
                     To install this app on your iPhone, tap the Share button 
-                    <svg width="16" height="16" style="vertical-align: middle; margin: 0 4px;" viewBox="0 0 24 24" fill="#007AFF">
+                    <svg width="16" height="16" style="vertical-align: middle; margin: 0 4px;" viewBox="0 0 24 24" fill="#541388">
                         <path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81 1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9c-1.66 0-3 1.34-3 3s1.34 3 3 3c.79 0 1.50-.31 2.04-.81l7.12 4.16c-.05.21-.08.43-.08.65 0 1.61 1.31 2.92 2.92 2.92s2.92-1.31 2.92-2.92S19.61 16.08 18 16.08z"/>
                     </svg>
                     and then "Add to Home Screen"
-                    <svg width="16" height="16" style="vertical-align: middle; margin: 0 4px;" viewBox="0 0 24 24" fill="#007AFF">
+                    <svg width="16" height="16" style="vertical-align: middle; margin: 0 4px;" viewBox="0 0 24 24" fill="#541388">
                         <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/>
                     </svg>
                 </p>
                 <button onclick="this.parentElement.parentElement.remove()" 
-                        style="background: #007AFF; color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-weight: 500;">
+                        style="background: #541388; color: #F1E9DA; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-weight: 500;">
                     Got it!
                 </button>
             </div>
@@ -249,11 +225,11 @@ class PWAInstallManager {
             position: fixed;
             top: 20px;
             right: 20px;
-            background: #4CAF50;
-            color: white;
+            background: #2E294E;
+            color: #F1E9DA;
             padding: 16px 20px;
             border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            box-shadow: 0 4px 12px rgba(46, 41, 78, 0.15);
             z-index: 10000;
             max-width: 300px;
             font-size: 14px;
@@ -263,7 +239,7 @@ class PWAInstallManager {
             <div style="display: flex; align-items: center; gap: 12px;">
                 <div>App updated! Refresh to get the latest version.</div>
                 <button onclick="window.location.reload()" 
-                        style="background: none; border: 1px solid rgba(255,255,255,0.5); color: white; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                        style="background: none; border: 1px solid rgba(241, 233, 218, 0.5); color: #F1E9DA; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">
                     Refresh
                 </button>
             </div>
@@ -309,3 +285,4 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // Export for manual usage
 window.PWAInstallManager = PWAInstallManager;
+

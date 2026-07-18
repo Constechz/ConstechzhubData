@@ -128,18 +128,18 @@ require_once '../includes/admin_header.php';
     }
 
     .health-status.ok {
-        background: rgba(34, 197, 94, 0.15);
-        color: #15803d;
+        background: rgba(46, 41, 78, 0.15);
+        color: #2E294E;
     }
 
     .health-status.fail {
-        background: rgba(239, 68, 68, 0.15);
-        color: #b91c1c;
+        background: rgba(217, 3, 104, 0.15);
+        color: #D90368;
     }
 
     .health-status.warn {
-        background: rgba(234, 179, 8, 0.15);
-        color: #a16207;
+        background: rgba(255, 212, 0, 0.15);
+        color: #2E294E;
     }
 
     .health-list {

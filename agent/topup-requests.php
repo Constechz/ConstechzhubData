@@ -1,157 +1,10 @@
 <?php
 require_once '../config/config.php';
-require_once '../includes/email.php';
 requireRole('agent');
-
-if (function_exists('ensureTopupSettingsTable')) {
-    ensureTopupSettingsTable();
-}
-if (function_exists('ensureTopupRequestTables')) {
-    ensureTopupRequestTables();
-}
 
 $current_user = getCurrentUser();
 $success = '';
 $error = '';
-$limits = getEffectiveTopupLimits($current_user['id'], 'agent');
-$min_allowed = (float) ($limits['min'] ?? 5.00);
-$max_allowed = (float) ($limits['max'] ?? 1000.00);
-
-function generateAgentTopupRequestId($db) {
-    do {
-        $requestId = 'TR' . date('Ymd') . mt_rand(10000, 99999);
-        $stmt = $db->prepare("SELECT id FROM topup_requests WHERE request_id = ? LIMIT 1");
-        $stmt->bind_param('s', $requestId);
-        $stmt->execute();
-        $exists = $stmt->get_result()->fetch_assoc();
-    } while ($exists);
-
-    return $requestId;
-}
-
-function getAdminTopupPaymentDetails($db) {
-    $stmt = $db->prepare("SELECT setting_key, setting_value FROM topup_settings WHERE user_id IS NULL AND setting_key IN ('admin_topup_account_network', 'admin_topup_account_name', 'admin_topup_account_number', 'admin_topup_instructions')");
-    $stmt->execute();
-    $result = $stmt->get_result();
-
-    $settings = [
-        'network' => 'MTN MOMO',
-        'name' => 'Constechzhub Admin',
-        'number' => '0245152060',
-        'instructions' => 'Send payment to this account, then submit your request with your sender details and transaction reference.'
-    ];
-
-    while ($row = $result->fetch_assoc()) {
-        $key = $row['setting_key'];
-        $value = trim((string) ($row['setting_value'] ?? ''));
-        if ($key === 'admin_topup_account_network' && $value !== '') {
-            $settings['network'] = $value;
-        } elseif ($key === 'admin_topup_account_name' && $value !== '') {
-            $settings['name'] = $value;
-        } elseif ($key === 'admin_topup_account_number' && $value !== '') {
-            $settings['number'] = $value;
-        } elseif ($key === 'admin_topup_instructions' && $value !== '') {
-            $settings['instructions'] = $value;
-        }
-    }
-
-    return $settings;
-}
-
-function notifyAdminForAgentTopupRequest($db, array $currentUser, array $requestData) {
-    $adminId = 0;
-    $recipientEmail = '';
-    $recipientPhone = '';
-
-    $adminStmt = $db->prepare("SELECT id, full_name, email, phone FROM users WHERE role = 'admin' ORDER BY id ASC LIMIT 1");
-    if ($adminStmt && $adminStmt->execute()) {
-        $admin = $adminStmt->get_result()->fetch_assoc();
-        if ($admin) {
-            $adminId = (int) ($admin['id'] ?? 0);
-            $recipientEmail = trim((string) ($admin['email'] ?? ''));
-            $recipientPhone = trim((string) ($admin['phone'] ?? ''));
-        }
-    }
-
-    if ($recipientEmail === '' && defined('ADMIN_EMAIL')) {
-        $recipientEmail = trim((string) ADMIN_EMAIL);
-    }
-
-    $emailSent = false;
-    $errorMessage = '';
-
-    $safeRequestId = htmlspecialchars((string) ($requestData['request_id'] ?? ''), ENT_QUOTES, 'UTF-8');
-    $safeAmount = htmlspecialchars(number_format((float) ($requestData['amount'] ?? 0), 2), ENT_QUOTES, 'UTF-8');
-    $safeAgentName = htmlspecialchars((string) ($currentUser['full_name'] ?? 'Agent'), ENT_QUOTES, 'UTF-8');
-    $safeAgentEmail = htmlspecialchars((string) ($currentUser['email'] ?? ''), ENT_QUOTES, 'UTF-8');
-    $safeUserEmail = htmlspecialchars((string) ($requestData['user_email'] ?? ''), ENT_QUOTES, 'UTF-8');
-    $safeSenderNetwork = htmlspecialchars((string) ($requestData['sender_network'] ?? ''), ENT_QUOTES, 'UTF-8');
-    $safeSenderName = htmlspecialchars((string) ($requestData['sender_name'] ?? ''), ENT_QUOTES, 'UTF-8');
-    $safeSenderNumber = htmlspecialchars((string) ($requestData['sender_number'] ?? ''), ENT_QUOTES, 'UTF-8');
-    $safePaymentReference = htmlspecialchars((string) ($requestData['payment_reference'] ?? ''), ENT_QUOTES, 'UTF-8');
-
-    $subject = "New Agent Topup Request - " . ($requestData['request_id'] ?? '');
-    $bodyHtml = "
-        <h3>New Agent Topup Request Received</h3>
-        <p><strong>Request ID:</strong> {$safeRequestId}</p>
-        <p><strong>Amount:</strong> " . CURRENCY . "{$safeAmount}</p>
-        <p><strong>Agent:</strong> {$safeAgentName}</p>
-        <p><strong>Agent Email:</strong> {$safeAgentEmail}</p>
-        <p><strong>Submitted Email:</strong> {$safeUserEmail}</p>
-        <p><strong>Sender Network:</strong> {$safeSenderNetwork}</p>
-        <p><strong>Sender Name:</strong> {$safeSenderName}</p>
-        <p><strong>Sender Number:</strong> {$safeSenderNumber}</p>
-        <p><strong>Payment Reference:</strong> {$safePaymentReference}</p>
-        <p>Please review and process this request in the admin portal.</p>
-    ";
-    $bodyText = "New agent topup request received.\n"
-        . "Request ID: " . ($requestData['request_id'] ?? '') . "\n"
-        . "Amount: " . CURRENCY . number_format((float) ($requestData['amount'] ?? 0), 2) . "\n"
-        . "Agent: " . ($currentUser['full_name'] ?? 'Agent') . "\n"
-        . "Agent Email: " . ($currentUser['email'] ?? '') . "\n"
-        . "Submitted Email: " . ($requestData['user_email'] ?? '') . "\n"
-        . "Sender Network: " . ($requestData['sender_network'] ?? '') . "\n"
-        . "Sender Name: " . ($requestData['sender_name'] ?? '') . "\n"
-        . "Sender Number: " . ($requestData['sender_number'] ?? '') . "\n"
-        . "Payment Reference: " . ($requestData['payment_reference'] ?? '') . "\n";
-
-    try {
-        if ($recipientEmail !== '') {
-            $emailSent = sendEmail($recipientEmail, $subject, $bodyHtml, $bodyText, 'agent_topup_request_admin');
-        } else {
-            $errorMessage = 'Admin email not configured';
-        }
-    } catch (Throwable $e) {
-        $errorMessage = $e->getMessage();
-        error_log('Agent topup request email notification failed: ' . $e->getMessage());
-    }
-
-    $notificationStatus = $emailSent ? 'sent' : 'failed';
-    $logError = $emailSent ? '' : ($errorMessage !== '' ? $errorMessage : 'Failed to send email');
-    $notifStmt = $db->prepare("INSERT INTO topup_request_notifications (request_id, notification_type, recipient_email, recipient_phone, status, sms_sent, error_message) VALUES (?, 'email', ?, ?, ?, 0, ?)");
-    if ($notifStmt) {
-        $requestId = (string) ($requestData['request_id'] ?? '');
-        $notifStmt->bind_param('sssss', $requestId, $recipientEmail, $recipientPhone, $notificationStatus, $logError);
-        $notifStmt->execute();
-    }
-
-    if ($adminId > 0) {
-        logActivity($adminId, 'admin_topup_request_received', json_encode([
-            'request_id' => $requestData['request_id'] ?? '',
-            'amount' => (float) ($requestData['amount'] ?? 0),
-            'from_agent_id' => (int) ($currentUser['id'] ?? 0),
-            'from_agent_name' => $currentUser['full_name'] ?? '',
-            'email_sent' => $emailSent ? 1 : 0
-        ]));
-    }
-
-    return [
-        'email_sent' => $emailSent,
-        'error' => $logError
-    ];
-}
-
-$adminPaymentDetails = getAdminTopupPaymentDetails($db);
 
 // Handle request processing
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -160,71 +13,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $action = $_POST['action'] ?? '';
         
-        if ($action === 'submit_admin_request') {
-            $amount = (float) ($_POST['amount'] ?? 0);
-            $userEmail = trim((string) ($_POST['user_email'] ?? ''));
-            $senderNetwork = trim((string) ($_POST['sender_network'] ?? ''));
-            $senderName = trim((string) ($_POST['sender_name'] ?? ''));
-            $senderNumber = trim((string) ($_POST['sender_number'] ?? ''));
-            $paymentReference = trim((string) ($_POST['payment_reference'] ?? ''));
-            $paymentConfirmed = isset($_POST['payment_confirmed']) && $_POST['payment_confirmed'] === '1';
-
-            if ($amount < $min_allowed || $amount > $max_allowed) {
-                $error = 'Invalid amount. Please use the allowed topup range.';
-            } elseif (!filter_var($userEmail, FILTER_VALIDATE_EMAIL)) {
-                $error = 'Please provide a valid email address.';
-            } elseif ($senderNetwork === '' || $senderName === '' || $senderNumber === '') {
-                $error = 'Sender payment details are required.';
-            } elseif ($paymentReference === '') {
-                $error = 'Payment reference is required.';
-            } elseif (!$paymentConfirmed) {
-                $error = 'You must confirm payment before submitting a topup request.';
-            } else {
-                $requestId = generateAgentTopupRequestId($db);
-                $requesterType = 'agent';
-                $targetType = 'admin';
-
-                $stmt = $db->prepare("INSERT INTO topup_requests (request_id, requester_id, requester_type, target_type, target_agent_id, amount, user_email, network, wallet_name, wallet_number, payment_reference) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)");
-                $stmt->bind_param(
-                    'sissdsssss',
-                    $requestId,
-                    $current_user['id'],
-                    $requesterType,
-                    $targetType,
-                    $amount,
-                    $userEmail,
-                    $senderNetwork,
-                    $senderName,
-                    $senderNumber,
-                    $paymentReference
-                );
-
-                if ($stmt->execute()) {
-                    $notificationResult = notifyAdminForAgentTopupRequest($db, $current_user, [
-                        'request_id' => $requestId,
-                        'amount' => $amount,
-                        'user_email' => $userEmail,
-                        'sender_network' => $senderNetwork,
-                        'sender_name' => $senderName,
-                        'sender_number' => $senderNumber,
-                        'payment_reference' => $paymentReference
-                    ]);
-
-                    logActivity($current_user['id'], 'agent_topup_request_submitted_to_admin', json_encode([
-                        'request_id' => $requestId,
-                        'amount' => $amount,
-                        'payment_reference' => $paymentReference,
-                        'admin_email_notified' => $notificationResult['email_sent'] ? 1 : 0
-                    ]));
-                    $success = "Topup request submitted successfully. Request ID: {$requestId}";
-                    if (!$notificationResult['email_sent']) {
-                        $success .= ' Request was saved, but admin email notification failed.';
-                    }
-                } else {
-                    $error = 'Failed to submit topup request. Please try again.';
-                }
-            }
-        } elseif ($action === 'process_request') {
+        if ($action === 'process_request') {
             $requestId = intval($_POST['request_id'] ?? 0);
             $status = $_POST['status'] ?? '';
             $notes = trim($_POST['notes'] ?? '');
@@ -276,51 +65,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
             }
-        } elseif ($action === 'delete_request') {
-            $requestId = intval($_POST['request_id'] ?? 0);
-
-            if ($requestId <= 0) {
-                $error = 'Invalid request ID.';
-            } else {
-                $stmt = $db->prepare("SELECT id, request_id FROM topup_requests WHERE id = ? AND target_type = 'agent' AND target_agent_id = ? LIMIT 1");
-                $stmt->bind_param('ii', $requestId, $current_user['id']);
-                $stmt->execute();
-                $request = $stmt->get_result()->fetch_assoc();
-
-                if (!$request) {
-                    $error = 'Request not found.';
-                } else {
-                    $stmt = $db->prepare("DELETE FROM topup_requests WHERE id = ? AND target_type = 'agent' AND target_agent_id = ? LIMIT 1");
-                    $stmt->bind_param('ii', $requestId, $current_user['id']);
-
-                    if ($stmt->execute() && $stmt->affected_rows > 0) {
-                        logActivity($current_user['id'], 'agent_topup_request_deleted', json_encode([
-                            'request_id' => $request['request_id'],
-                            'target_type' => 'agent'
-                        ]));
-                        $success = "Request {$request['request_id']} deleted successfully.";
-                    } else {
-                        $error = 'Failed to delete request. Please try again.';
-                    }
-                }
-            }
-        } elseif ($action === 'delete_all_requests') {
-            $stmt = $db->prepare("DELETE FROM topup_requests WHERE target_type = 'agent' AND target_agent_id = ?");
-            $stmt->bind_param('i', $current_user['id']);
-
-            if ($stmt->execute()) {
-                $deletedCount = (int) $stmt->affected_rows;
-                logActivity($current_user['id'], 'agent_topup_requests_deleted_all', json_encode([
-                    'target_type' => 'agent',
-                    'target_agent_id' => $current_user['id'],
-                    'deleted_count' => $deletedCount
-                ]));
-                $success = $deletedCount > 0
-                    ? "Deleted {$deletedCount} topup request(s)."
-                    : 'No topup requests found to delete.';
-            } else {
-                $error = 'Failed to delete requests. Please try again.';
-            }
         }
     }
 }
@@ -369,29 +113,6 @@ $stmt->execute();
 if ($row = $stmt->get_result()->fetch_assoc()) {
     $pendingCount = $row['count'];
 }
-
-// Recent requests submitted by this agent to admin
-$myAdminRequests = [];
-$myPendingToAdminCount = 0;
-
-$stmt = $db->prepare("
-    SELECT tr.*, p.full_name AS processed_by_name
-    FROM topup_requests tr
-    LEFT JOIN users p ON tr.processed_by = p.id
-    WHERE tr.requester_id = ? AND tr.target_type = 'admin'
-    ORDER BY tr.created_at DESC
-    LIMIT 15
-");
-$stmt->bind_param('i', $current_user['id']);
-$stmt->execute();
-$myAdminRequests = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-
-$stmt = $db->prepare("SELECT COUNT(*) AS count FROM topup_requests WHERE requester_id = ? AND target_type = 'admin' AND status = 'pending'");
-$stmt->bind_param('i', $current_user['id']);
-$stmt->execute();
-if ($row = $stmt->get_result()->fetch_assoc()) {
-    $myPendingToAdminCount = (int) $row['count'];
-}
 ?>
 <!DOCTYPE html>
 <html lang="en" data-theme="light">
@@ -410,7 +131,6 @@ if ($row = $stmt->get_result()->fetch_assoc()) {
     <script src="../immediate_icon_fix.js"></script>
 </head>
 <body>
-<div class="mobile-overlay" id="mobileOverlay" aria-hidden="true"></div>
 <div class="dashboard-wrapper">
     <!-- Sidebar -->
     <nav class="sidebar">
@@ -418,7 +138,143 @@ if ($row = $stmt->get_result()->fetch_assoc()) {
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
         
-        <?php renderAgentSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item">
+                    <a href="dashboard.php" class="nav-link">
+                        <i class="fas fa-home"></i>
+                        Dashboard
+                    </a>
+                </div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Services</div>
+                <div class="nav-item">
+                    <a href="at-business.php" class="nav-link">
+                        <i class="fas fa-mobile-alt"></i>
+                        AT Business
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="mtn-business.php" class="nav-link">
+                        <i class="fas fa-mobile-alt"></i>
+                        MTN Business
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="bulk-mtn.php" class="nav-link">
+                        <i class="fas fa-layer-group"></i>
+                        Bulk MTN
+                    </a>
+                </div>
+                    <div class="nav-item">
+                        <a href="result-checker.php" class="nav-link">
+                            <i class="fas fa-award"></i>
+                            Result Checker
+                        </a>
+                    </div>
+                <div class="nav-item">
+                    <a href="telecel-business.php" class="nav-link">
+                        <i class="fas fa-signal"></i>
+                        Telecel Business
+                    </a>
+                </div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Transaction</div>
+                <div class="nav-item">
+                    <a href="transactions.php" class="nav-link">
+                        <i class="fas fa-money-bill-wave"></i>
+                        Transactions
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="histories.php" class="nav-link">
+                        <i class="fas fa-history"></i>
+                        Data Histories
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="reference.php" class="nav-link">
+                        <i class="fas fa-search"></i>
+                        Reference
+                    </a>
+                </div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Operations</div>
+                <div class="nav-item">
+                    <a href="customer_topup.php" class="nav-link">
+                        <i class="fas fa-user-plus"></i>
+                        Customer Top-up
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="topup-requests.php" class="nav-link active">
+                        <i class="fas fa-hand-holding-usd"></i>
+                        Topup Requests
+                        <?php if ($pendingCount > 0): ?>
+                            <span class="badge badge-warning"><?php echo $pendingCount; ?></span>
+                        <?php endif; ?>
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="support.php" class="nav-link">
+                        <i class="fas fa-life-ring"></i>
+                        Support
+                    </a>
+                </div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Business</div>
+                <div class="nav-item">
+                    <a href="pricing.php" class="nav-link">
+                        <i class="fas fa-tags"></i>
+                        Custom Pricing
+                    </a>
+                </div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Users</div>
+                <div class="nav-item">
+                    <a href="customers.php" class="nav-link">
+                        <i class="fas fa-user-friends"></i>
+                        Customers
+                    </a>
+                </div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Commission</div>
+                <div class="nav-item">
+                    <a href="commission.php" class="nav-link">
+                        <i class="fas fa-percentage"></i>
+                        Commission
+                    </a>
+                </div>
+                    <div class="nav-item">
+                        <a href="withdraw-profit.php" class="nav-link">
+                            <i class="fas fa-wallet"></i>
+                            Withdraw Profit
+                        </a>
+                    </div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item">
+                    <a href="settings.php" class="nav-link">
+                        <i class="fas fa-cog"></i>
+                        Settings
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="api-access.php" class="nav-link">
+                        <i class="fas fa-key"></i>
+                        API Access
+                    </a>
+                </div>
+            </li>
+        </ul>
     </nav>
 
     <main class="main-content">
@@ -460,6 +316,9 @@ if ($row = $stmt->get_result()->fetch_assoc()) {
             </div>
         </header>
 
+<?php echo renderNotificationSlides('agents'); ?>
+
+
         <div class="dashboard-content">
             <div class="page-title">
                 <h1>Customer Topup Requests</h1>
@@ -474,182 +333,7 @@ if ($row = $stmt->get_result()->fetch_assoc()) {
                 <div class="alert alert-success"><?php echo htmlspecialchars($success); ?></div>
             <?php endif; ?>
 
-            <div class="widget">
-                <div class="widget-header">
-                    <h3 class="widget-title">
-                        <i class="fas fa-paper-plane"></i>
-                        Send Topup Request To Admin
-                        <?php if ($myPendingToAdminCount > 0): ?>
-                            <span class="badge badge-warning"><?php echo (int) $myPendingToAdminCount; ?> Pending</span>
-                        <?php endif; ?>
-                    </h3>
-                </div>
-                <div class="widget-body">
-                    <div class="alert alert-info">
-                        <strong>Payment is compulsory:</strong> Pay to the admin account below first, then submit your request with your sender details and payment reference.
-                    </div>
-
-                    <div class="payment-details-card">
-                        <div class="payment-detail-row">
-                            <span class="label">Admin Account Network:</span>
-                            <span class="value"><?php echo htmlspecialchars($adminPaymentDetails['network']); ?></span>
-                        </div>
-                        <div class="payment-detail-row">
-                            <span class="label">Admin Account Name:</span>
-                            <span class="value"><?php echo htmlspecialchars($adminPaymentDetails['name']); ?></span>
-                        </div>
-                        <div class="payment-detail-row">
-                            <span class="label">Admin Account Number:</span>
-                            <span class="value"><?php echo htmlspecialchars($adminPaymentDetails['number']); ?></span>
-                        </div>
-                        <div class="payment-instructions">
-                            <?php echo nl2br(htmlspecialchars($adminPaymentDetails['instructions'])); ?>
-                        </div>
-                    </div>
-
-                    <form method="post" class="request-form-grid">
-                        <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                        <input type="hidden" name="action" value="submit_admin_request">
-
-                        <div class="form-group">
-                            <label class="form-label" for="amount">Amount (<?php echo CURRENCY; ?>) *</label>
-                            <input
-                                type="number"
-                                id="amount"
-                                name="amount"
-                                class="form-control"
-                                min="<?php echo htmlspecialchars(number_format($min_allowed, 2, '.', '')); ?>"
-                                max="<?php echo htmlspecialchars(number_format($max_allowed, 2, '.', '')); ?>"
-                                step="0.01"
-                                required
-                            >
-                            <small class="text-muted">Min: <?php echo CURRENCY; ?><?php echo htmlspecialchars(number_format($min_allowed, 2)); ?>, Max: <?php echo CURRENCY; ?><?php echo htmlspecialchars(number_format($max_allowed, 2)); ?></small>
-                        </div>
-
-                        <div class="form-group">
-                            <label class="form-label" for="user_email">Your Email *</label>
-                            <input
-                                type="email"
-                                id="user_email"
-                                name="user_email"
-                                class="form-control"
-                                value="<?php echo htmlspecialchars($current_user['email'] ?? ''); ?>"
-                                required
-                            >
-                        </div>
-
-                        <div class="form-group">
-                            <label class="form-label" for="sender_network">Payment Network Used *</label>
-                            <select id="sender_network" name="sender_network" class="form-control" required>
-                                <option value="">Select network</option>
-                                <option value="MTN MOMO">MTN Mobile Money</option>
-                                <option value="VODAFONE CASH">Vodafone Cash</option>
-                                <option value="AIRTELTIGO MONEY">AirtelTigo Money</option>
-                                <option value="BANK TRANSFER">Bank Transfer</option>
-                                <option value="OTHER">Other</option>
-                            </select>
-                        </div>
-
-                        <div class="form-group">
-                            <label class="form-label" for="sender_name">Sender Name *</label>
-                            <input
-                                type="text"
-                                id="sender_name"
-                                name="sender_name"
-                                class="form-control"
-                                value="<?php echo htmlspecialchars($current_user['full_name'] ?? ''); ?>"
-                                required
-                            >
-                        </div>
-
-                        <div class="form-group">
-                            <label class="form-label" for="sender_number">Sender Phone/Account Number *</label>
-                            <input
-                                type="text"
-                                id="sender_number"
-                                name="sender_number"
-                                class="form-control"
-                                required
-                            >
-                        </div>
-
-                        <div class="form-group">
-                            <label class="form-label" for="payment_reference">Payment Reference / Transaction ID *</label>
-                            <input
-                                type="text"
-                                id="payment_reference"
-                                name="payment_reference"
-                                class="form-control"
-                                required
-                            >
-                        </div>
-
-                        <div class="form-group full-width">
-                            <label class="payment-confirm-check">
-                                <input type="checkbox" name="payment_confirmed" value="1" required>
-                                <span>I confirm I have already made this payment to the admin account above.</span>
-                            </label>
-                        </div>
-
-                        <div class="form-group full-width">
-                            <button type="submit" class="btn btn-primary">
-                                <i class="fas fa-paper-plane"></i> Submit Request To Admin
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-
-            <div class="widget">
-                <div class="widget-header">
-                    <h3 class="widget-title">
-                        <i class="fas fa-clock"></i>
-                        My Topup Requests To Admin
-                    </h3>
-                </div>
-                <div class="widget-body">
-                    <?php if (empty($myAdminRequests)): ?>
-                        <div class="empty-state" style="text-align: center; padding: 2rem 1rem; color: var(--text-muted);">
-                            <h3>No requests submitted yet</h3>
-                        </div>
-                    <?php else: ?>
-                        <div class="table-responsive">
-                            <table class="table topup-request-table">
-                                <thead>
-                                    <tr>
-                                        <th>Request ID</th>
-                                        <th>Amount</th>
-                                        <th>Payment Reference</th>
-                                        <th>Status</th>
-                                        <th>Submitted</th>
-                                        <th>Processed By</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($myAdminRequests as $request): ?>
-                                        <?php
-                                        $statusClass = 'badge-secondary';
-                                        if ($request['status'] === 'approved') $statusClass = 'badge-success';
-                                        elseif ($request['status'] === 'rejected') $statusClass = 'badge-danger';
-                                        elseif ($request['status'] === 'pending') $statusClass = 'badge-warning';
-                                        ?>
-                                        <tr>
-                                            <td data-label="Request ID"><strong><?php echo htmlspecialchars($request['request_id']); ?></strong></td>
-                                            <td data-label="Amount"><strong style="color: var(--primary-color);"><?php echo CURRENCY; ?><?php echo number_format((float) $request['amount'], 2); ?></strong></td>
-                                            <td data-label="Payment Reference"><?php echo htmlspecialchars($request['payment_reference'] ?? 'N/A'); ?></td>
-                                            <td data-label="Status"><span class="badge <?php echo $statusClass; ?>"><?php echo ucfirst($request['status']); ?></span></td>
-                                            <td data-label="Submitted"><?php echo date('M j, Y g:i A', strtotime($request['created_at'])); ?></td>
-                                            <td data-label="Processed By"><?php echo htmlspecialchars($request['processed_by_name'] ?? '-'); ?></td>
-                                        </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        </div>
-                    <?php endif; ?>
-                </div>
-            </div>
-
-            <div class="filters-bar" style="margin-bottom: 1.5rem; display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;">
+            <div class="filters-bar" style="margin-bottom: 1.5rem;">
                 <form method="get">
                     <select name="status" class="form-control" style="width: auto; min-width: 150px;" onchange="this.form.submit()">
                         <option value="all" <?php echo $status_filter === 'all' ? 'selected' : ''; ?>>All Requests</option>
@@ -657,13 +341,6 @@ if ($row = $stmt->get_result()->fetch_assoc()) {
                         <option value="approved" <?php echo $status_filter === 'approved' ? 'selected' : ''; ?>>Approved</option>
                         <option value="rejected" <?php echo $status_filter === 'rejected' ? 'selected' : ''; ?>>Rejected</option>
                     </select>
-                </form>
-                <form method="post" style="margin-left: auto;" onsubmit="return confirm('Delete ALL topup requests sent to you? This cannot be undone.');">
-                    <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                    <input type="hidden" name="action" value="delete_all_requests">
-                    <button type="submit" class="btn btn-danger btn-sm">
-                        <i class="fas fa-trash"></i> Delete All
-                    </button>
                 </form>
             </div>
 
@@ -686,7 +363,7 @@ if ($row = $stmt->get_result()->fetch_assoc()) {
                         </div>
                     <?php else: ?>
                         <div class="table-responsive">
-                            <table class="table topup-request-table">
+                            <table class="table">
                                 <thead>
                                     <tr>
                                         <th>Request ID</th>
@@ -701,22 +378,22 @@ if ($row = $stmt->get_result()->fetch_assoc()) {
                                 <tbody>
                                     <?php foreach ($requests as $request): ?>
                                         <tr>
-                                            <td data-label="Request ID"><strong><?php echo htmlspecialchars($request['request_id']); ?></strong></td>
-                                            <td data-label="Customer">
+                                            <td><strong><?php echo htmlspecialchars($request['request_id']); ?></strong></td>
+                                            <td>
                                                 <div>
                                                     <strong><?php echo htmlspecialchars($request['requester_name']); ?></strong><br>
                                                     <small class="text-muted"><?php echo htmlspecialchars($request['requester_email']); ?></small>
                                                 </div>
                                             </td>
-                                            <td data-label="Amount"><strong style="color: var(--primary-color);"><?php echo CURRENCY; ?><?php echo number_format($request['amount'], 2); ?></strong></td>
-                                            <td data-label="Payment Details">
+                                            <td><strong style="color: var(--primary-color);"><?php echo CURRENCY; ?><?php echo number_format($request['amount'], 2); ?></strong></td>
+                                            <td>
                                                 <div style="font-size: 0.875rem;">
                                                     <div><strong><?php echo htmlspecialchars($request['network']); ?></strong></div>
                                                     <div><?php echo htmlspecialchars($request['wallet_name']); ?></div>
                                                     <div><?php echo htmlspecialchars($request['wallet_number']); ?></div>
                                                 </div>
                                             </td>
-                                            <td data-label="Status">
+                                            <td>
                                                 <?php
                                                 $statusClass = 'badge-secondary';
                                                 if ($request['status'] === 'approved') $statusClass = 'badge-success';
@@ -727,8 +404,8 @@ if ($row = $stmt->get_result()->fetch_assoc()) {
                                                     <?php echo ucfirst($request['status']); ?>
                                                 </span>
                                             </td>
-                                            <td data-label="Date"><?php echo date('M j, Y g:i A', strtotime($request['created_at'])); ?></td>
-                                            <td data-label="Actions" class="actions-cell">
+                                            <td><?php echo date('M j, Y g:i A', strtotime($request['created_at'])); ?></td>
+                                            <td>
                                                 <?php if ($request['status'] === 'pending'): ?>
                                                     <button class="btn btn-sm btn-primary" onclick="openProcessModal(<?php echo htmlspecialchars(json_encode($request)); ?>)">
                                                         <i class="fas fa-edit"></i> Process
@@ -738,14 +415,6 @@ if ($row = $stmt->get_result()->fetch_assoc()) {
                                                         <i class="fas fa-eye"></i> View
                                                     </button>
                                                 <?php endif; ?>
-                                                <form method="post" class="inline-action-form" onsubmit="return confirm('Delete this topup request permanently?');">
-                                                    <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                                                    <input type="hidden" name="action" value="delete_request">
-                                                    <input type="hidden" name="request_id" value="<?php echo intval($request['id']); ?>">
-                                                    <button type="submit" class="btn btn-sm btn-danger">
-                                                        <i class="fas fa-trash"></i> Delete
-                                                    </button>
-                                                </form>
                                             </td>
                                         </tr>
                                     <?php endforeach; ?>
@@ -815,52 +484,52 @@ if ($row = $stmt->get_result()->fetch_assoc()) {
 }
 
 .badge-success {
-    background-color: var(--success-bg, #d1fae5);
-    color: var(--success-text, #065f46);
-    border: 1px solid var(--success-border, #10b981);
+    background-color: var(--success-bg, #F1E9DA);
+    color: var(--success-text, #2E294E);
+    border: 1px solid var(--success-border, #2E294E);
 }
 
 .badge-danger {
-    background-color: var(--danger-bg, #fecaca);
-    color: var(--danger-text, #991b1b);
-    border: 1px solid var(--danger-border, #ef4444);
+    background-color: var(--danger-bg, #F1E9DA);
+    color: var(--danger-text, #D90368);
+    border: 1px solid var(--danger-border, #D90368);
 }
 
 .badge-warning {
-    background-color: var(--warning-bg, #fef3c7);
-    color: var(--warning-text, #92400e);
-    border: 1px solid var(--warning-border, #f59e0b);
+    background-color: var(--warning-bg, #F1E9DA);
+    color: var(--warning-text, #2E294E);
+    border: 1px solid var(--warning-border, #FFD400);
 }
 
 .badge-secondary {
-    background-color: var(--secondary-bg, #f3f4f6);
-    color: var(--secondary-text, #374151);
-    border: 1px solid var(--secondary-border, #6b7280);
+    background-color: var(--secondary-bg, #F1E9DA);
+    color: var(--secondary-text, #2E294E);
+    border: 1px solid var(--secondary-border, #541388);
 }
 
 /* Dark mode badge adjustments */
 [data-theme="dark"] .badge-success {
-    background-color: var(--success-bg, #064e3b);
-    color: var(--success-text, #a7f3d0);
-    border-color: var(--success-border, #059669);
+    background-color: var(--success-bg, #2E294E);
+    color: var(--success-text, #F1E9DA);
+    border-color: var(--success-border, #2E294E);
 }
 
 [data-theme="dark"] .badge-danger {
-    background-color: var(--danger-bg, #7f1d1d);
-    color: var(--danger-text, #fca5a5);
-    border-color: var(--danger-border, #dc2626);
+    background-color: var(--danger-bg, #2E294E);
+    color: var(--danger-text, #F1E9DA);
+    border-color: var(--danger-border, #D90368);
 }
 
 [data-theme="dark"] .badge-warning {
-    background-color: var(--warning-bg, #78350f);
-    color: var(--warning-text, #fbbf24);
-    border-color: var(--warning-border, #d97706);
+    background-color: var(--warning-bg, #2E294E);
+    color: var(--warning-text, #FFD400);
+    border-color: var(--warning-border, #FFD400);
 }
 
 [data-theme="dark"] .badge-secondary {
-    background-color: var(--secondary-bg, #374151);
-    color: var(--secondary-text, #d1d5db);
-    border-color: var(--secondary-border, #4b5563);
+    background-color: var(--secondary-bg, #2E294E);
+    color: var(--secondary-text, #F1E9DA);
+    border-color: var(--secondary-border, #2E294E);
 }
 
 /* Enhanced table styling */
@@ -900,26 +569,11 @@ if ($row = $stmt->get_result()->fetch_assoc()) {
 }
 
 .table tbody tr:nth-child(even) {
-    background-color: var(--bg-subtle, rgba(0, 0, 0, 0.02));
+    background-color: var(--bg-subtle, rgba(46, 41, 78, 0.02));
 }
 
 [data-theme="dark"] .table tbody tr:nth-child(even) {
-    background-color: var(--bg-subtle, rgba(255, 255, 255, 0.02));
-}
-
-.actions-cell {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    align-items: center;
-}
-
-.actions-cell .inline-action-form {
-    margin: 0;
-}
-
-.actions-cell .btn {
-    white-space: nowrap;
+    background-color: var(--bg-subtle, rgba(241, 233, 218, 0.02));
 }
 
 /* Enhanced table responsiveness */
@@ -980,7 +634,7 @@ if ($row = $stmt->get_result()->fetch_assoc()) {
     top: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 0.6);
+    background-color: rgba(46, 41, 78, 0.6);
     backdrop-filter: blur(4px);
     animation: fadeIn 0.2s ease;
 }
@@ -1182,72 +836,13 @@ if ($row = $stmt->get_result()->fetch_assoc()) {
 .form-control:focus {
     outline: none;
     border-color: var(--brand-primary);
-    box-shadow: 0 0 0 3px var(--brand-primary-alpha, rgba(99, 102, 241, 0.1));
+    box-shadow: 0 0 0 3px var(--brand-primary-alpha, rgba(84, 19, 136, 0.1));
 }
 
 .form-control:disabled {
     background: var(--bg-muted);
     color: var(--text-muted);
     cursor: not-allowed;
-}
-
-.payment-details-card {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: 0.75rem;
-    padding: 1rem;
-    margin-bottom: 1rem;
-}
-
-.payment-detail-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 0.75rem;
-    padding: 0.45rem 0;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.payment-detail-row:last-of-type {
-    border-bottom: none;
-}
-
-.payment-detail-row .label {
-    color: var(--text-muted);
-    font-weight: 500;
-}
-
-.payment-detail-row .value {
-    color: var(--text-primary);
-    font-weight: 600;
-    text-align: right;
-}
-
-.payment-instructions {
-    margin-top: 0.85rem;
-    font-size: 0.875rem;
-    color: var(--text-muted);
-}
-
-.request-form-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0.85rem;
-}
-
-.request-form-grid .full-width {
-    grid-column: 1 / -1;
-}
-
-.payment-confirm-check {
-    display: flex;
-    align-items: flex-start;
-    gap: 0.65rem;
-    font-size: 0.9rem;
-    color: var(--text-primary);
-}
-
-.payment-confirm-check input {
-    margin-top: 0.25rem;
 }
 
 /* Enhanced buttons */
@@ -1268,7 +863,7 @@ if ($row = $stmt->get_result()->fetch_assoc()) {
 
 .btn-primary {
     background: var(--brand-primary);
-    color: white;
+    color: #F1E9DA;
     border-color: var(--brand-primary);
 }
 
@@ -1344,21 +939,93 @@ if ($row = $stmt->get_result()->fetch_assoc()) {
     color: var(--brand-primary);
 }
 
-/* Mobile overlay and stacked-card table behavior */
-.mobile-overlay {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.45);
-    z-index: 1190;
-    opacity: 0;
-    transition: opacity 0.2s ease;
-    pointer-events: none;
-}
+/* Responsive design */
+@media (max-width: 768px) {
+    .mobile-menu-toggle {
+        display: block;
+    }
+    
+    .sidebar {
+        transform: translateX(-100%);
+    }
+    
+    .sidebar.mobile-open {
+        transform: translateX(0);
+    }
+    
+    .main-content {
+        margin-left: 0;
+    }
+    
+    .modal-content {
+        margin: 1rem;
+        width: calc(100% - 2rem);
+        max-height: calc(100vh - 2rem);
+    }
+    
+    .modal-header,
+    .modal-body,
+    .modal-footer {
+        padding-left: 1rem;
+        padding-right: 1rem;
+    }
+    
+    .request-grid {
+        grid-template-columns: 1fr;
+    }
+    
+    .request-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+    
+    .table th,
+    .table td {
+        padding: 0.75rem 0.5rem;
+        font-size: 0.8125rem;
+    }
+    
+    .payment-info {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 0.5rem;
+    }
+    
+    .wallet-number {
+        margin-left: 0;
+        align-self: stretch;
+        text-align: center;
+    }
 
-.mobile-overlay.active {
-    opacity: 1;
-    pointer-events: auto;
+    .header-actions {
+        display: flex !important;
+        width: auto;
+        margin-left: auto;
+    }
+
+    .header-actions .theme-toggle,
+    .header-actions .user-dropdown-toggle {
+        display: inline-flex !important;
+        visibility: visible;
+    }
+
+    .dashboard-header {
+        position: sticky;
+        overflow: visible;
+    }
+
+    .header-actions {
+        position: fixed;
+        right: 0.75rem;
+        top: 0.75rem;
+        transform: none;
+        z-index: 1200;
+    }
+
+    .header-left {
+        width: 100%;
+        padding-right: 0;
+    }
 }
 
 /* Loading states */
@@ -1413,214 +1080,6 @@ if ($row = $stmt->get_result()->fetch_assoc()) {
         transition-duration: 0.01ms !important;
     }
 }
-
-@media (max-width: 991px) {
-    .mobile-menu-toggle {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-    }
-
-    .mobile-overlay {
-        display: block;
-    }
-
-    .sidebar {
-        position: fixed;
-        top: 0;
-        left: 0;
-        height: 100vh;
-        width: min(86vw, 320px);
-        z-index: 1200;
-        transform: translateX(-105%);
-        transition: transform 0.25s ease;
-    }
-
-    .sidebar.show,
-    .sidebar.mobile-open {
-        transform: translateX(0);
-    }
-
-    .main-content {
-        margin-left: 0;
-        width: 100%;
-    }
-
-    .dashboard-content,
-    .widget,
-    .widget-body {
-        max-width: 100%;
-        overflow-x: hidden;
-    }
-
-    .dashboard-header {
-        flex-wrap: wrap;
-        gap: 0.75rem;
-        align-items: center;
-    }
-
-    .header-left {
-        min-width: 0;
-        flex: 1 1 auto;
-    }
-
-    .breadcrumb {
-        min-width: 0;
-    }
-
-    .breadcrumb .breadcrumb-item:last-child {
-        max-width: 56vw;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-    }
-
-    .header-actions {
-        position: static;
-        margin-left: auto;
-        z-index: auto;
-    }
-
-    .filters-bar {
-        align-items: stretch !important;
-    }
-
-    .filters-bar form {
-        width: 100%;
-        margin-left: 0 !important;
-    }
-
-    .filters-bar .form-control {
-        width: 100% !important;
-        min-width: 0 !important;
-    }
-
-    .filters-bar .btn {
-        width: 100%;
-        justify-content: center;
-    }
-
-    .request-form-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .payment-detail-row {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 0.35rem;
-    }
-
-    .payment-detail-row .value {
-        text-align: left;
-    }
-
-    .table-scroll-wrapper {
-        overflow: visible;
-    }
-
-    .topup-request-table thead {
-        display: none;
-    }
-
-    .topup-request-table,
-    .topup-request-table tbody,
-    .topup-request-table tr,
-    .topup-request-table td {
-        display: block;
-        width: 100%;
-    }
-
-    .topup-request-table tr {
-        border: 1px solid var(--border-color);
-        border-radius: 0.75rem;
-        background: var(--bg-primary);
-        margin-bottom: 0.85rem;
-        padding: 0.75rem;
-    }
-
-    .topup-request-table td {
-        border: none;
-        padding: 0.45rem 0;
-        font-size: 0.875rem;
-        overflow-wrap: anywhere;
-        word-break: break-word;
-        white-space: normal;
-    }
-
-    .topup-request-table td::before {
-        content: attr(data-label);
-        display: block;
-        margin-bottom: 0.2rem;
-        font-size: 0.75rem;
-        font-weight: 600;
-        color: var(--text-muted);
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-    }
-
-    .actions-cell {
-        display: block;
-        padding-top: 0.65rem !important;
-    }
-
-    .actions-cell .inline-action-form {
-        width: 100%;
-        margin-top: 0.5rem;
-    }
-
-    .actions-cell .btn {
-        width: 100%;
-        justify-content: center;
-    }
-
-    .modal-content {
-        margin: 1rem auto;
-        width: calc(100% - 1rem);
-        max-height: calc(100vh - 2rem);
-    }
-
-    .modal-header,
-    .modal-body,
-    .modal-footer {
-        padding-left: 1rem;
-        padding-right: 1rem;
-    }
-
-    .request-grid {
-        grid-template-columns: 1fr;
-    }
-
-    .request-header {
-        flex-direction: column;
-        align-items: flex-start;
-    }
-
-    .payment-info {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 0.5rem;
-    }
-
-    .wallet-number {
-        margin-left: 0;
-        align-self: stretch;
-        text-align: center;
-    }
-}
-
-@media (max-width: 480px) {
-    .page-title h1 {
-        font-size: 1.15rem;
-    }
-
-    .page-subtitle {
-        font-size: 0.85rem;
-    }
-
-    .topup-request-table tr {
-        padding: 0.65rem;
-    }
-}
 </style>
 
 <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/theme.js')); ?>"></script>
@@ -1652,24 +1111,10 @@ document.addEventListener('click', function(event) {
 // Mobile menu toggle
 function toggleMobileMenu() {
     const sidebar = document.querySelector('.sidebar');
-    const overlay = document.getElementById('mobileOverlay');
-    if (!sidebar || !overlay) return;
-
-    const shouldOpen = !sidebar.classList.contains('show') && !sidebar.classList.contains('mobile-open');
-    sidebar.classList.toggle('show', shouldOpen);
-    sidebar.classList.toggle('mobile-open', shouldOpen);
-    overlay.classList.toggle('active', shouldOpen);
-    document.body.style.overflow = shouldOpen ? 'hidden' : '';
-}
-
-function closeMobileMenu() {
-    const sidebar = document.querySelector('.sidebar');
-    const overlay = document.getElementById('mobileOverlay');
-    if (!sidebar || !overlay) return;
-
-    sidebar.classList.remove('show', 'mobile-open');
-    overlay.classList.remove('active');
-    document.body.style.overflow = '';
+    
+    if (sidebar) {
+        sidebar.classList.toggle('show');
+    }
 }
 
 // Modal functions with enhanced UX
@@ -1799,37 +1244,11 @@ document.addEventListener('keydown', function(event) {
     const modal = document.getElementById('processModal');
     if (modal.style.display === 'block' && event.key === 'Escape') {
         closeModal();
-        return;
-    }
-
-    if (event.key === 'Escape') {
-        closeMobileMenu();
     }
 });
 
 // Enhanced form handling
 document.addEventListener('DOMContentLoaded', function() {
-    const overlay = document.getElementById('mobileOverlay');
-    if (overlay) {
-        overlay.addEventListener('click', function() {
-            closeMobileMenu();
-        });
-    }
-
-    document.querySelectorAll('.sidebar .nav-link').forEach(link => {
-        link.addEventListener('click', function() {
-            if (window.innerWidth <= 991) {
-                closeMobileMenu();
-            }
-        });
-    });
-
-    window.addEventListener('resize', function() {
-        if (window.innerWidth > 991) {
-            closeMobileMenu();
-        }
-    });
-
     // Auto-focus first input in forms
     const forms = document.querySelectorAll('form');
     forms.forEach(form => {
@@ -1867,10 +1286,6 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!element) return;
         let lastTouch = 0;
         const wrapped = (event) => {
-            if (event.type === 'pointerup' && event.pointerType === 'mouse') {
-                // Mouse will trigger click immediately after pointerup; handle it only once via click.
-                return;
-            }
             if (event.type === 'pointerup' && event.pointerType === 'touch') {
                 lastTouch = Date.now();
             }
@@ -1932,7 +1347,8 @@ document.addEventListener('DOMContentLoaded', function() {
 </script>
     <!-- IMMEDIATE Icon Fix for square placeholder issues -->
     <script src="../immediate_icon_fix.js"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
-
 

@@ -119,10 +119,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['resend_verification']
 <head>
     <?php echo generateSeoMeta('Verify ' . $verification_label, 'Verify your ' . $verification_target . ' to secure your account.'); ?>
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/public-polish.css')); ?>">
     <link rel="preload" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>" as="style" onload="this.onload=null;this.rel='stylesheet'">
     <noscript><link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>"></noscript>
     <link rel="manifest" href="manifest.php">
-    <meta name="theme-color" content="#6366f1">
+    <meta name="theme-color" content="#541388">
 </head>
 <body>
     <div class="login-container">
@@ -208,3 +209,4 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['resend_verification']
     <?php endif; ?>
 </body>
 </html>
+

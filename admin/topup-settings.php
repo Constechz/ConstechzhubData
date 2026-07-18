@@ -63,8 +63,7 @@ $csrf_token = generateCSRF();
     
     <!-- PWA Meta Tags -->
     <link rel="manifest" href="../manifest.php">
-    <link rel="icon" type="image/png" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-192.png')); ?>">
-    <meta name="theme-color" content="#6366f1">
+    <meta name="theme-color" content="#541388">
     
     <!-- Stylesheets -->
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>"">
@@ -85,7 +84,150 @@ $csrf_token = generateCSRF();
                 <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
             </div>
             
-                        <?php renderAdminSidebar(); ?>
+            <ul class="sidebar-nav">
+                <li class="nav-section">
+                    <div class="nav-section-title">Dashboard</div>
+                    <div class="nav-item">
+                        <a href="dashboard.php" class="nav-link">
+                            <i class="fas fa-home"></i>
+                            Dashboard
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Management</div>
+                    <div class="nav-item">
+                        <a href="packages.php" class="nav-link">
+                            <i class="fas fa-box"></i>
+                            Data Packages
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="pricing.php" class="nav-link">
+                            <i class="fas fa-tags"></i>
+                            Pricing
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="afa-registration.php" class="nav-link">
+                            <i class="fas fa-user-check"></i>
+                            AFA Registration
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="users.php" class="nav-link">
+                            <i class="fas fa-users"></i>
+                            Users
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="agents.php" class="nav-link">
+                            <i class="fas fa-user-tie"></i>
+                            Agents
+                        </a>
+                    </div>
+                
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Operations</div>
+                    <div class="nav-item">
+                        <a href="manual_topup.php" class="nav-link">
+                            <i class="fas fa-plus-circle"></i>
+                            Manual Top-up
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="support.php" class="nav-link">
+                            <i class="fas fa-life-ring"></i>
+                            Support
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Analytics</div>
+                    <div class="nav-item">
+                        <a href="transactions.php" class="nav-link">
+                            <i class="fas fa-history"></i>
+                            Transactions
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="reports.php" class="nav-link">
+                            <i class="fas fa-chart-bar"></i>
+                            Reports
+                        </a>
+                    </div>
+                    <div class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Settings</div>
+                    <div class="nav-item">
+                        <a href="settings.php" class="nav-link">
+                            <i class="fas fa-cog"></i>
+                            System Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="system-reset.php" class="nav-link">
+                            <i class="fas fa-broom"></i>
+                            System Reset
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="topup-settings.php" class="nav-link active">
+                            <i class="fas fa-university"></i>
+                            Topup Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="topup-requests.php" class="nav-link">
+                            <i class="fas fa-file-invoice"></i>
+                            Topup Requests
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="commission-settings.php" class="nav-link">
+                            <i class="fas fa-percentage"></i>
+                            Commission Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="pwa-settings.php" class="nav-link">
+                            <i class="fas fa-mobile-alt"></i>
+                            PWA Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="sms-settings.php" class="nav-link">
+                            <i class="fas fa-sms"></i>
+                            SMS Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="seo-settings.php" class="nav-link">
+                            <i class="fas fa-globe"></i>
+                            SEO Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="smtp-settings.php" class="nav-link">
+                            <i class="fas fa-envelope"></i>
+                            SMTP Email Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="email-broadcast.php" class="nav-link">
+                            <i class="fas fa-paper-plane"></i>
+                            Email Broadcasts
+                        </a>
+                    </div>
+                </li>
+            </ul>
                 <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
         </nav>
 
@@ -314,7 +456,7 @@ $csrf_token = generateCSRF();
         }
 
         .payment-details-preview {
-            background: var(--widget-bg, #f8f9fa);
+            background: var(--widget-bg, #F1E9DA);
             border: 1px solid var(--border-color);
             border-radius: 8px;
             padding: 1.5rem;
@@ -359,44 +501,44 @@ $csrf_token = generateCSRF();
 
         /* Dark mode enhancements */
         [data-theme="dark"] .payment-details-preview {
-            background: var(--widget-bg, #2a2a2a);
-            border: 1px solid var(--border-color, #444);
-            color: var(--text-color, #f0f0f0);
+            background: var(--widget-bg, #2E294E);
+            border: 1px solid var(--border-color, #2E294E);
+            color: var(--text-color, #F1E9DA);
         }
 
         [data-theme="dark"] .detail-label {
-            color: var(--text-muted, #bbb);
+            color: var(--text-muted, #F1E9DA);
         }
 
         [data-theme="dark"] .detail-value {
-            color: var(--text-color, #f0f0f0);
+            color: var(--text-color, #F1E9DA);
         }
 
         [data-theme="dark"] .payment-detail-item {
-            border-bottom: 1px solid var(--border-color, #444);
+            border-bottom: 1px solid var(--border-color, #2E294E);
         }
 
         [data-theme="dark"] .payment-instructions {
-            border-top: 1px solid var(--border-color, #444);
+            border-top: 1px solid var(--border-color, #2E294E);
         }
 
         [data-theme="dark"] .payment-instructions strong {
-            color: var(--text-color, #f0f0f0);
+            color: var(--text-color, #F1E9DA);
         }
 
         [data-theme="dark"] .payment-instructions p {
-            color: var(--text-muted, #bbb);
+            color: var(--text-muted, #F1E9DA);
         }
 
         [data-theme="dark"] .form-actions {
-            border-top: 1px solid var(--border-color, #444);
+            border-top: 1px solid var(--border-color, #2E294E);
         }
 
         /* Form styling improvements */
         .form-control {
-            background: var(--input-bg, #fff);
-            border: 1px solid var(--border-color, #ddd);
-            color: var(--text-color, #333);
+            background: var(--input-bg, #F1E9DA);
+            border: 1px solid var(--border-color, #F1E9DA);
+            color: var(--text-color, #2E294E);
             border-radius: 4px;
             padding: 0.75rem;
             font-size: 1rem;
@@ -404,66 +546,66 @@ $csrf_token = generateCSRF();
         }
 
         .form-control:focus {
-            border-color: var(--primary-color, #6366f1);
+            border-color: var(--primary-color, #541388);
             outline: none;
-            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+            box-shadow: 0 0 0 3px rgba(84, 19, 136, 0.1);
         }
 
         [data-theme="dark"] .form-control {
-            background: var(--input-bg, #333);
-            border: 1px solid var(--border-color, #555);
-            color: var(--text-color, #f0f0f0);
+            background: var(--input-bg, #2E294E);
+            border: 1px solid var(--border-color, #2E294E);
+            color: var(--text-color, #F1E9DA);
         }
 
         [data-theme="dark"] .form-control:focus {
-            border-color: var(--primary-color, #6366f1);
-            box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+            border-color: var(--primary-color, #541388);
+            box-shadow: 0 0 0 3px rgba(84, 19, 136, 0.2);
         }
 
         /* Widget styling */
         .widget {
-            background: var(--widget-bg, #fff);
-            border: 1px solid var(--border-color, #e5e7eb);
+            background: var(--widget-bg, #F1E9DA);
+            border: 1px solid var(--border-color, #F1E9DA);
             border-radius: 8px;
             margin-bottom: 2rem;
         }
 
         [data-theme="dark"] .widget {
-            background: var(--widget-bg, #1f1f1f);
-            border: 1px solid var(--border-color, #333);
+            background: var(--widget-bg, #2E294E);
+            border: 1px solid var(--border-color, #2E294E);
         }
 
         .widget-header {
             padding: 1.5rem;
-            border-bottom: 1px solid var(--border-color, #e5e7eb);
+            border-bottom: 1px solid var(--border-color, #F1E9DA);
         }
 
         [data-theme="dark"] .widget-header {
-            border-bottom: 1px solid var(--border-color, #333);
+            border-bottom: 1px solid var(--border-color, #2E294E);
         }
 
         .widget-title {
             margin: 0;
             font-size: 1.25rem;
             font-weight: 600;
-            color: var(--text-color, #111827);
+            color: var(--text-color, #2E294E);
             display: flex;
             align-items: center;
             gap: 0.5rem;
         }
 
         [data-theme="dark"] .widget-title {
-            color: var(--text-color, #f9fafb);
+            color: var(--text-color, #F1E9DA);
         }
 
         .widget-subtitle {
             margin: 0.5rem 0 0 0;
-            color: var(--text-muted, #6b7280);
+            color: var(--text-muted, #541388);
             font-size: 0.875rem;
         }
 
         [data-theme="dark"] .widget-subtitle {
-            color: var(--text-muted, #9ca3af);
+            color: var(--text-muted, #F1E9DA);
         }
 
         .widget-body {
@@ -486,32 +628,32 @@ $csrf_token = generateCSRF();
         }
 
         .btn-primary {
-            background: var(--primary-color, #6366f1);
-            color: white;
+            background: var(--primary-color, #541388);
+            color: #F1E9DA;
         }
 
         .btn-primary:hover {
-            background: var(--primary-hover, #5855eb);
+            background: var(--primary-hover, #541388);
         }
 
         .btn-secondary {
-            background: var(--secondary-bg, #f3f4f6);
-            color: var(--text-color, #374151);
-            border: 1px solid var(--border-color, #d1d5db);
+            background: var(--secondary-bg, #F1E9DA);
+            color: var(--text-color, #2E294E);
+            border: 1px solid var(--border-color, #F1E9DA);
         }
 
         .btn-secondary:hover {
-            background: var(--secondary-hover, #e5e7eb);
+            background: var(--secondary-hover, #F1E9DA);
         }
 
         [data-theme="dark"] .btn-secondary {
-            background: var(--secondary-bg, #374151);
-            color: var(--text-color, #f9fafb);
-            border: 1px solid var(--border-color, #4b5563);
+            background: var(--secondary-bg, #2E294E);
+            color: var(--text-color, #F1E9DA);
+            border: 1px solid var(--border-color, #2E294E);
         }
 
         [data-theme="dark"] .btn-secondary:hover {
-            background: var(--secondary-hover, #4b5563);
+            background: var(--secondary-hover, #2E294E);
         }
 
         /* Alert styling */
@@ -525,27 +667,27 @@ $csrf_token = generateCSRF();
         }
 
         .alert-success {
-            background: #f0f9ff;
-            color: #0369a1;
-            border: 1px solid #7dd3fc;
+            background: #F1E9DA;
+            color: #2E294E;
+            border: 1px solid #F1E9DA;
         }
 
         .alert-danger {
-            background: #fef2f2;
-            color: #dc2626;
-            border: 1px solid #fca5a5;
+            background: #F1E9DA;
+            color: #D90368;
+            border: 1px solid #F1E9DA;
         }
 
         [data-theme="dark"] .alert-success {
-            background: #1e3a8a;
-            color: #93c5fd;
-            border: 1px solid #3b82f6;
+            background: #2E294E;
+            color: #F1E9DA;
+            border: 1px solid #541388;
         }
 
         [data-theme="dark"] .alert-danger {
-            background: #7f1d1d;
-            color: #fca5a5;
-            border: 1px solid #ef4444;
+            background: #2E294E;
+            color: #F1E9DA;
+            border: 1px solid #D90368;
         }
 
         /* Page title styling */
@@ -553,21 +695,21 @@ $csrf_token = generateCSRF();
             margin: 0 0 0.5rem 0;
             font-size: 2rem;
             font-weight: 700;
-            color: var(--text-color, #111827);
+            color: var(--text-color, #2E294E);
         }
 
         [data-theme="dark"] .page-title h1 {
-            color: var(--text-color, #f9fafb);
+            color: var(--text-color, #F1E9DA);
         }
 
         .page-subtitle {
             margin: 0;
-            color: var(--text-muted, #6b7280);
+            color: var(--text-muted, #541388);
             font-size: 1rem;
         }
 
         [data-theme="dark"] .page-subtitle {
-            color: var(--text-muted, #9ca3af);
+            color: var(--text-muted, #F1E9DA);
         }
 
         /* Responsive design */
@@ -700,6 +842,7 @@ $csrf_token = generateCSRF();
     <script src="../immediate_icon_fix.js"></script>
 </body>
 </html>
+
 
 
 

@@ -6,33 +6,11 @@ require_once '../includes/mnotify_sms.php';
 requireRole('agent');
 
 ensureSmsSupportTables();
-ensureAgentSmsSettingsTable();
 ensureAgentPaymentSettingsTable();
-if (function_exists('ensureAgentStoreOrderEmailSettingColumn')) {
-    ensureAgentStoreOrderEmailSettingColumn();
-}
-if (function_exists('ensureAgentStoresCustomizationColumns')) {
-    ensureAgentStoresCustomizationColumns();
-}
 
 $current_user = getCurrentUser();
 $error = '';
 $success = '';
-$agentStore = null;
-$agentStoreSlug = '';
-
-try {
-    $storeStmt = $db->prepare("SELECT id, store_slug, primary_color, welcome_text, banner_image, is_active, admin_active FROM agent_stores WHERE agent_id = ? ORDER BY id DESC LIMIT 1");
-    if ($storeStmt) {
-        $storeStmt->bind_param('i', $current_user['id']);
-        $storeStmt->execute();
-        $agentStore = $storeStmt->get_result()->fetch_assoc();
-        $agentStoreSlug = (string) ($agentStore['store_slug'] ?? '');
-        $storeStmt->close();
-    }
-} catch (Exception $e) {
-    error_log('Agent settings store load failed: ' . $e->getMessage());
-}
 
 $smsEnabled = isSMSFeatureEnabled();
 
@@ -66,16 +44,16 @@ $agentSmsStatusColor = 'var(--text-muted)';
 
 if (!$agentSmsConfigured) {
     $agentSmsStatusLabel = 'Pending Agent Setup';
-    $agentSmsStatusColor = 'var(--warning-color, #f5a524)';
+    $agentSmsStatusColor = 'var(--warning-color, #FFD400)';
 } elseif (!$agentSmsActive) {
     $agentSmsStatusLabel = 'Paused';
-    $agentSmsStatusColor = 'var(--warning-color, #f5a524)';
+    $agentSmsStatusColor = 'var(--warning-color, #FFD400)';
 } elseif (!$smsEnabled) {
     $agentSmsStatusLabel = 'Active (Admin SMS Off)';
-    $agentSmsStatusColor = 'var(--warning-color, #f5a524)';
+    $agentSmsStatusColor = 'var(--warning-color, #FFD400)';
 } else {
     $agentSmsStatusLabel = 'Active';
-    $agentSmsStatusColor = 'var(--success-color, #1ab394)';
+    $agentSmsStatusColor = 'var(--success-color, #2E294E)';
 }
 
 $agentCustomers = [];
@@ -210,126 +188,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $error = 'Failed to remove logo from database.';
                 }
             }
-        } elseif ($action === 'toggle_store_visibility') {
-            if (!$agentStore) {
-                $error = 'You do not have a store configured yet.';
-            } else {
-                $is_active_input = isset($_POST['is_active']) && $_POST['is_active'] === '1' ? 1 : 0;
-                $global_enabled = getSetting('enable_agent_stores', '1') === '1';
-                $admin_active = isset($agentStore['admin_active']) ? (int)$agentStore['admin_active'] : 1;
-                
-                if (!$global_enabled) {
-                    $error = 'Agent store feature is disabled globally by the administrator.';
-                } elseif ($admin_active === 0) {
-                    $error = 'Your store is blocked by the administrator and cannot be modified.';
-                } else {
-                    $stmt = $db->prepare("UPDATE agent_stores SET is_active = ? WHERE id = ?");
-                    if ($stmt) {
-                        $stmt->bind_param("ii", $is_active_input, $agentStore['id']);
-                        if ($stmt->execute()) {
-                            $success = 'Storefront visibility updated successfully!';
-                            $agentStore['is_active'] = $is_active_input;
-                        } else {
-                            $error = 'Failed to update store visibility.';
-                        }
-                        $stmt->close();
-                    } else {
-                        $error = 'Database statement failed.';
-                    }
-                }
-            }
-        } elseif ($action === 'update_store_appearance') {
-            if (!$agentStore) {
-                $error = 'You must have an active store created before you can customize its appearance.';
-            } else {
-                $primaryColor = trim($_POST['primary_color'] ?? '');
-                $welcomeText = trim($_POST['welcome_text'] ?? '');
-                
-                // Validate HEX color
-                if (!empty($primaryColor) && !preg_match('/^#[a-fA-F0-9]{6}$/', $primaryColor)) {
-                    $error = 'Invalid color format. Please select a valid hex color code (e.g. #ff0000).';
-                } else {
-                    $bannerFilename = $agentStore['banner_image'];
-                    
-                    // Handle banner image upload
-                    if (isset($_FILES['banner_image']) && $_FILES['banner_image']['error'] === UPLOAD_ERR_OK) {
-                        $file = $_FILES['banner_image'];
-                        $allowed_types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-                        $max_size = 2 * 1024 * 1024; // 2MB
-                        
-                        if (!in_array($file['type'], $allowed_types)) {
-                            $error = 'Invalid file type. Please upload JPG, PNG, GIF, or WebP images only for the banner.';
-                        } elseif ($file['size'] > $max_size) {
-                            $error = 'File too large. Banner image must be 2MB or less.';
-                        } else {
-                            $upload_dir = '../uploads/agent_banners/';
-                            if (!is_dir($upload_dir)) {
-                                mkdir($upload_dir, 0755, true);
-                            }
-                            
-                            // Generate unique filename
-                            $extension = pathinfo($file['name'], PATHINFO_EXTENSION);
-                            $filename = 'banner_' . $current_user['id'] . '_' . time() . '.' . $extension;
-                            $filepath = $upload_dir . $filename;
-                            
-                            if (move_uploaded_file($file['tmp_name'], $filepath)) {
-                                if (!empty($agentStore['banner_image'])) {
-                                    $old_path = $upload_dir . $agentStore['banner_image'];
-                                    if (file_exists($old_path)) {
-                                        @unlink($old_path);
-                                    }
-                                }
-                                $bannerFilename = $filename;
-                            } else {
-                                $error = 'Failed to upload banner image. Please try again.';
-                            }
-                        }
-                    }
-                    
-                    if (empty($error)) {
-                        $primaryColorVal = !empty($primaryColor) ? $primaryColor : null;
-                        $welcomeTextVal = !empty($welcomeText) ? $welcomeText : null;
-                        
-                        $stmt = $db->prepare("UPDATE agent_stores SET primary_color = ?, welcome_text = ?, banner_image = ? WHERE id = ?");
-                        if ($stmt) {
-                            $stmt->bind_param("sssi", $primaryColorVal, $welcomeTextVal, $bannerFilename, $agentStore['id']);
-                            if ($stmt->execute()) {
-                                $success = 'Sub-Store appearance updated successfully!';
-                                $agentStore['primary_color'] = $primaryColorVal;
-                                $agentStore['welcome_text'] = $welcomeTextVal;
-                                $agentStore['banner_image'] = $bannerFilename;
-                            } else {
-                                $error = 'Database error: Failed to save appearance settings.';
-                            }
-                            $stmt->close();
-                        } else {
-                            $error = 'Database statement failed.';
-                        }
-                    }
-                }
-            }
-        } elseif ($action === 'remove_banner') {
-            if (!$agentStore || empty($agentStore['banner_image'])) {
-                $error = 'No banner image to remove.';
-            } else {
-                $upload_dir = '../uploads/agent_banners/';
-                $old_path = $upload_dir . $agentStore['banner_image'];
-                if (file_exists($old_path)) {
-                    @unlink($old_path);
-                }
-                
-                $stmt = $db->prepare("UPDATE agent_stores SET banner_image = NULL WHERE id = ?");
-                if ($stmt) {
-                    $stmt->bind_param("i", $agentStore['id']);
-                    if ($stmt->execute()) {
-                        $success = 'Banner image removed successfully!';
-                        $agentStore['banner_image'] = null;
-                    } else {
-                        $error = 'Failed to remove banner from database.';
-                    }
-                    $stmt->close();
-                }
-            }
         } elseif ($action === 'update_payment_methods') {
             // Handle payment method settings update
             $allowPaystack = isset($_POST['allow_paystack']) ? 1 : 0;
@@ -400,16 +258,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     $agentSmsActive = $agentSmsConfigured && !empty($agentSmsSettings['mnotify_is_active']);
                     if (!$agentSmsConfigured) {
                         $agentSmsStatusLabel = 'Pending Agent Setup';
-                        $agentSmsStatusColor = 'var(--warning-color, #f5a524)';
+                        $agentSmsStatusColor = 'var(--warning-color, #FFD400)';
                     } elseif (!$agentSmsActive) {
                         $agentSmsStatusLabel = 'Paused';
-                        $agentSmsStatusColor = 'var(--warning-color, #f5a524)';
+                        $agentSmsStatusColor = 'var(--warning-color, #FFD400)';
                     } elseif (!$smsEnabled) {
                         $agentSmsStatusLabel = 'Active (Admin SMS Off)';
-                        $agentSmsStatusColor = 'var(--warning-color, #f5a524)';
+                        $agentSmsStatusColor = 'var(--warning-color, #FFD400)';
                     } else {
                         $agentSmsStatusLabel = 'Active';
-                        $agentSmsStatusColor = 'var(--success-color, #1ab394)';
+                        $agentSmsStatusColor = 'var(--success-color, #2E294E)';
                     }
                 } else {
                     $error = 'Failed to update SMS preferences.';
@@ -417,26 +275,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             } catch (Exception $e) {
                 $error = 'Database error while saving SMS preferences: ' . $e->getMessage();
             }
-        } elseif ($action === 'update_email_preferences') {
-            $receiveStoreOrderEmails = isset($_POST['receive_store_order_emails']) ? 1 : 0;
-            
-            if (function_exists('ensureAgentStoreOrderEmailSettingColumn')) {
-                ensureAgentStoreOrderEmailSettingColumn();
-            }
-
-            $stmt = $db->prepare("UPDATE users SET receive_store_order_emails = ? WHERE id = ?");
-            $stmt->bind_param('ii', $receiveStoreOrderEmails, $current_user['id']);
-            
-            if ($stmt->execute()) {
-                $success = 'Email preferences updated successfully!';
-                $current_user['receive_store_order_emails'] = $receiveStoreOrderEmails;
-                logActivity($current_user['id'], 'agent_email_preferences_updated', json_encode([
-                    'receive_store_order_emails' => (bool)$receiveStoreOrderEmails
-                ]));
-            } else {
-                $error = 'Failed to update email preferences.';
-            }
-        } elseif ($action === 'send_customer_sms') {
+} elseif ($action === 'send_customer_sms') {
             if (!$agentSmsConfigured) {
                 $error = 'Please enter your mNotify API key and Sender ID in the SMS Preferences section before sending messages.';
             } elseif (empty($agentSmsSettings['mnotify_is_active'])) {
@@ -651,7 +490,50 @@ try {
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-        <?php renderAgentSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Business</div>
+                <div class="nav-item"><a href="at-business.php" class="nav-link"><i class="fas fa-mobile-alt"></i> AT Business</a></div>
+                <div class="nav-item">
+                    <a href="mtn-business.php" class="nav-link">
+                        <i class="fas fa-mobile-alt"></i>
+                        MTN Business
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="afa-registration.php" class="nav-link">
+                        <i class="fas fa-user-check"></i>
+                        AFA Registration
+                    </a>
+                </div>
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+                <div class="nav-item"><a href="customers.php" class="nav-link"><i class="fas fa-users"></i> My Customers</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Financial</div>
+                <div class="nav-item"><a href="customer_topup.php" class="nav-link"><i class="fas fa-plus-circle"></i> Customer Top-up</a></div>
+                <div class="nav-item"><a href="transactions.php" class="nav-link"><i class="fas fa-history"></i> Transactions</a></div>
+                <div class="nav-item"><a href="commissions.php" class="nav-link"><i class="fas fa-percentage"></i> Commissions</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Support</div>
+                <div class="nav-item"><a href="support.php" class="nav-link"><i class="fas fa-headset"></i> Support</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item"><a href="settings.php" class="nav-link active"><i class="fas fa-cog"></i> Settings</a></div>
+            </li>
+        </ul>
+                    <div class="nav-item">
+                        <a href="withdraw-profit.php" class="nav-link">
+                            <i class="fas fa-wallet"></i>
+                            Withdraw Profit
+                        </a>
+                    </div>
     </nav>
 
     <!-- Main Content -->
@@ -696,6 +578,9 @@ try {
                 </div>
             </div>
         </header>
+
+<?php echo renderNotificationSlides('agents'); ?>
+
 
         <div class="dashboard-content">
             <div class="page-title">
@@ -787,88 +672,6 @@ try {
                 </div>
             </div>
 
-            <!-- Shop Appearance Settings -->
-            <div class="widget">
-                <div class="widget-header">
-                    <h3 class="widget-title">Sub-Store Appearance</h3>
-                    <p class="widget-subtitle">Customize the colors, header banner, and welcome announcement for your personalized store landing page.</p>
-                </div>
-                <div class="widget-content">
-                    <?php if (!$agentStore): ?>
-                        <div class="alert alert-warning" style="margin: 0;">
-                            <i class="fas fa-exclamation-triangle"></i> You do not have an active store storefront created yet. Please contact the administrator to create your agent storefront.
-                        </div>
-                    <?php else: ?>
-                        <form method="post" enctype="multipart/form-data">
-                            <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                            <input type="hidden" name="action" value="update_store_appearance">
-
-                            <div style="display: flex; gap: 2rem; align-items: flex-start; flex-wrap: wrap;">
-                                <!-- Primary Accent Color Picker -->
-                                <div style="flex: 1; min-width: 250px;">
-                                    <div class="form-group">
-                                        <label class="form-label" for="primary_color">Store Primary Theme Color</label>
-                                        <div style="display: flex; gap: 0.5rem; align-items: center;">
-                                            <input type="color" id="primary_color_picker" style="width: 50px; height: 48px; border: 1px solid var(--border-color); border-radius: var(--radius-md); cursor: pointer; padding: 0;" value="<?php echo htmlspecialchars($agentStore['primary_color'] ?? '#E63B2C'); ?>" onchange="document.getElementById('primary_color').value = this.value">
-                                            <input type="text" class="form-control" id="primary_color" name="primary_color" maxlength="7" placeholder="#E63B2C" value="<?php echo htmlspecialchars($agentStore['primary_color'] ?? '#E63B2C'); ?>" onchange="document.getElementById('primary_color_picker').value = this.value">
-                                        </div>
-                                        <small class="form-help">Choose a custom color to override the store's default primary brand accent (buttons, icons, header highlights).</small>
-                                    </div>
-
-                                    <div class="form-group">
-                                        <label class="form-label" for="welcome_text">Custom Welcome Announcement</label>
-                                        <textarea class="form-control" id="welcome_text" name="welcome_text" rows="4" placeholder="e.g. Welcome to Moses's Store! Buy cheap MTN and Telecel data bundles here. Fast and automatic delivery." maxlength="500"><?php echo htmlspecialchars($agentStore['welcome_text'] ?? ''); ?></textarea>
-                                        <small class="form-help">This message will be shown prominently to guest visitors on your storefront landing page.</small>
-                                    </div>
-                                </div>
-
-                                <!-- Banner Image Uploader -->
-                                <div style="flex: 1; min-width: 280px;">
-                                    <div class="form-group">
-                                        <label class="form-label">Store Banner Image</label>
-                                        <div style="margin-bottom: 1rem; width: 100%; height: 120px; border: 2px dashed var(--border-color); border-radius: 8px; display: flex; align-items: center; justify-content: center; background: var(--bg-secondary); overflow: hidden; position: relative;">
-                                            <?php if (!empty($agentStore['banner_image'])): ?>
-                                                <img src="../uploads/agent_banners/<?php echo htmlspecialchars($agentStore['banner_image']); ?>" 
-                                                     alt="Store Banner" 
-                                                     style="width: 100%; height: 100%; object-fit: cover;">
-                                            <?php else: ?>
-                                                <div style="text-align: center; color: var(--text-muted); padding: 1rem;">
-                                                    <i class="fas fa-image" style="font-size: 2rem; margin-bottom: 0.5rem;"></i>
-                                                    <div>No banner uploaded</div>
-                                                </div>
-                                            <?php endif; ?>
-                                        </div>
-                                        
-                                        <input type="file" id="banner_image" name="banner_image" class="form-control" accept="image/*">
-                                        <small class="form-help">Supported formats: JPG, PNG, GIF, WebP. Recommended ratio: 16:9 or similar (max 2MB).</small>
-                                    </div>
-
-                                    <?php if (!empty($agentStore['banner_image'])): ?>
-                                        <button type="button" class="btn btn-danger btn-sm" onclick="if(confirm('Are you sure you want to remove the banner?')) { document.getElementById('removeBannerForm').submit(); }">
-                                            <i class="fas fa-trash"></i> Remove Banner
-                                        </button>
-                                    <?php endif; ?>
-                                </div>
-                            </div>
-
-                            <div class="form-actions" style="margin-top: 1.5rem; border-top: 1px solid var(--border-color); padding-top: 1.5rem;">
-                                <button type="submit" class="btn btn-primary">
-                                    <i class="fas fa-save"></i> Save Appearance Settings
-                                </button>
-                            </div>
-                        </form>
-
-                        <!-- Invisible form to handle banner removal -->
-                        <?php if (!empty($agentStore['banner_image'])): ?>
-                            <form id="removeBannerForm" method="post" style="display:none;">
-                                <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                                <input type="hidden" name="action" value="remove_banner">
-                            </form>
-                        <?php endif; ?>
-                    <?php endif; ?>
-                </div>
-            </div>
-
             <!-- Payment Method Settings -->
             <div class="widget">
                 <div class="widget-header">
@@ -886,7 +689,7 @@ try {
                                 <div class="payment-method-header">
                                     <div class="payment-method-info">
                                         <h4 style="margin: 0; color: var(--text-primary); display: flex; align-items: center; gap: 0.5rem;">
-                                            <i class="fas fa-credit-card" style="color: #00C851;"></i>
+                                            <i class="fas fa-credit-card" style="color: #2E294E;"></i>
                                             Paystack Payment
                                         </h4>
                                         <p style="margin: 0.25rem 0 0 0; color: var(--text-muted); font-size: 0.875rem;">Allow customers to pay with cards, bank transfers, and mobile money through Paystack.</p>
@@ -913,7 +716,7 @@ try {
                                 <div class="payment-method-header">
                                     <div class="payment-method-info">
                                         <h4 style="margin: 0; color: var(--text-primary); display: flex; align-items: center; gap: 0.5rem;">
-                                            <i class="fas fa-hand-holding-usd" style="color: #FF8800;"></i>
+                                            <i class="fas fa-hand-holding-usd" style="color: #FFD400;"></i>
                                             Topup Request
                                         </h4>
                                         <p style="margin: 0.25rem 0 0 0; color: var(--text-muted); font-size: 0.875rem;">Allow customers to request manual topup with payment to your mobile money account.</p>
@@ -1057,37 +860,10 @@ try {
                                 <li>Log in to <a href="https://bms.mnotify.com" target="_blank" rel="noopener">bms.mnotify.com</a> and open <strong>API &amp; SMS &gt; API Keys</strong> to copy your key.</li>
                                 <li>Visit <strong>Messaging &gt; Sender IDs</strong> to create/request an 11-character sender ID, then copy the approved value.</li>
                                 <li>Paste both details above and save. mNotify may take a few minutes to approve new sender IDs.</li>
-                                <li>Toggle “Enable agent SMS” after saving to activate sending from your dashboard.</li>
+                                <li>Toggle "Enable agent SMS" after saving to activate sending from your dashboard.</li>
                             </ol>
                             <p>Need help? Contact the admin team or email <a href="mailto:support@mnotify.com">support@mnotify.com</a> for sender ID approval status.</p>
                         </div>
-                </div>
-            </div>
-
-            <!-- Email Preferences -->
-            <div class="widget">
-                <div class="widget-header">
-                    <h3 class="widget-title">Email Notification Preferences</h3>
-                    <p class="widget-subtitle">Choose which email alerts you want to receive regarding your store activity.</p>
-                </div>
-                <div class="widget-content">
-                    <form method="post">
-                        <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                        <input type="hidden" name="action" value="update_email_preferences">
-
-                        <div class="form-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem;">
-                            <div class="form-check">
-                                <input type="checkbox" id="receive_store_order_emails" name="receive_store_order_emails" <?php echo (!isset($current_user['receive_store_order_emails']) || (int)$current_user['receive_store_order_emails'] !== 0) ? 'checked' : ''; ?>>
-                                <label for="receive_store_order_emails">Receive email alerts when customers place orders on your store link</label>
-                            </div>
-                        </div>
-
-                        <div class="form-actions" style="margin-top: 1.5rem;">
-                            <button type="submit" class="btn btn-primary">
-                                <i class="fas fa-save"></i> Save Email Preferences
-                            </button>
-                        </div>
-                    </form>
                 </div>
             </div>
 
@@ -1239,77 +1015,22 @@ try {
                     <p class="widget-subtitle">Your personalized agent store details.</p>
                 </div>
                 <div class="widget-content">
-                    <?php if ($agentStore): ?>
-                        <?php 
-                            $global_enabled = getSetting('enable_agent_stores', '1') === '1';
-                            $admin_active = isset($agentStore['admin_active']) ? (int)$agentStore['admin_active'] : 1;
-                            $store_is_active = isset($agentStore['is_active']) ? (int)$agentStore['is_active'] : 1;
-                        ?>
-
-                        <?php if (!$global_enabled): ?>
-                            <div class="alert alert-warning" style="margin-bottom: 1rem;">
-                                <i class="fas fa-exclamation-triangle"></i> <strong>Feature Disabled:</strong> The agent store feature is currently disabled system-wide by the administrator.
-                            </div>
-                        <?php elseif ($admin_active === 0): ?>
-                            <div class="alert alert-danger" style="margin-bottom: 1rem;">
-                                <i class="fas fa-ban"></i> <strong>Store Blocked:</strong> Your storefront has been suspended by the administrator. Please contact support.
-                            </div>
-                        <?php endif; ?>
-
-                        <div class="info-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
-                            <div class="info-item">
-                                <div class="info-label">Store URL</div>
-                                <div class="info-value">
-                                    <?php if ($store_is_active && $admin_active && $global_enabled): ?>
-                                        <a href="<?php echo htmlspecialchars(rtrim(SITE_URL, '/') . '/s/' . rawurlencode($agentStoreSlug)); ?>" target="_blank">
-                                            <code><?php echo htmlspecialchars(rtrim(SITE_URL, '/') . '/s/' . rawurlencode($agentStoreSlug)); ?></code> <i class="fas fa-external-link-alt" style="font-size:0.8rem;"></i>
-                                        </a>
-                                    <?php else: ?>
-                                        <code style="text-decoration: line-through; color: var(--text-muted);"><?php echo htmlspecialchars(rtrim(SITE_URL, '/') . '/s/' . rawurlencode($agentStoreSlug)); ?></code>
-                                        <span class="text-danger" style="font-size: 0.8rem; display:block; margin-top: 0.25rem;">(Store Offline)</span>
-                                    <?php endif; ?>
-                                </div>
-                            </div>
-                            <div class="info-item">
-                                <div class="info-label">Agent ID</div>
-                                <div class="info-value"><?php echo $current_user['id']; ?></div>
-                            </div>
-                            <div class="info-item">
-                                <div class="info-label">Store Name</div>
-                                <div class="info-value"><?php echo htmlspecialchars($current_user['full_name']); ?>'s Store</div>
+                    <div class="info-grid" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;">
+                        <div class="info-item">
+                            <div class="info-label">Store URL</div>
+                            <div class="info-value">
+                                <code><?php echo SITE_URL; ?>/store/?agent=<?php echo $current_user['id']; ?></code>
                             </div>
                         </div>
-
-                        <hr style="margin: 1.5rem 0; border: none; border-top: 1px solid var(--border-color);">
-
-                        <form method="post">
-                            <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                            <input type="hidden" name="action" value="toggle_store_visibility">
-                            
-                            <div class="form-group">
-                                <label class="form-label" for="is_active">Storefront Visibility</label>
-                                <select class="form-select" id="is_active" name="is_active" <?php echo ($admin_active === 0 || !$global_enabled) ? 'disabled' : ''; ?>>
-                                    <option value="1" <?php echo $store_is_active ? 'selected' : ''; ?>>Online (Visible to Customers)</option>
-                                    <option value="0" <?php echo $store_is_active ? '' : 'selected'; ?>>Offline (Hidden/Paused)</option>
-                                </select>
-                                <p class="form-help">
-                                    <?php if (!$global_enabled): ?>
-                                        This feature is globally disabled by the administrator.
-                                    <?php elseif ($admin_active === 0): ?>
-                                        Your store is blocked by the administrator and cannot be enabled.
-                                    <?php else: ?>
-                                        Turn this off to temporarily take your storefront offline without deleting any data.
-                                    <?php endif; ?>
-                                </p>
-                            </div>
-                            
-                            <button type="submit" class="btn btn-primary" <?php echo ($admin_active === 0 || !$global_enabled) ? 'disabled' : ''; ?>>
-                                <i class="fas fa-save"></i> Save Visibility Setting
-                            </button>
-                        </form>
-                    <?php else: ?>
-                        <p class="text-muted">No store configured for your account. Please contact support.</p>
-                    <?php endif; ?>
+                        <div class="info-item">
+                            <div class="info-label">Agent ID</div>
+                            <div class="info-value"><?php echo $current_user['id']; ?></div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Store Name</div>
+                            <div class="info-value"><?php echo htmlspecialchars($current_user['full_name']); ?>'s Store</div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1528,7 +1249,7 @@ document.getElementById('logo').addEventListener('change', function(event) {
 
 .payment-method-option:hover {
     border-color: var(--primary-color);
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 2px 8px rgba(46, 41, 78, 0.1);
 }
 
 .payment-method-header {
@@ -1563,7 +1284,7 @@ document.getElementById('logo').addEventListener('change', function(event) {
     left: 0;
     right: 0;
     bottom: 0;
-    background-color: #ccc;
+    background-color: #F1E9DA;
     transition: .4s;
 }
 
@@ -1574,7 +1295,7 @@ document.getElementById('logo').addEventListener('change', function(event) {
     width: 26px;
     left: 4px;
     bottom: 4px;
-    background-color: white;
+    background-color: #F1E9DA;
     transition: .4s;
 }
 
@@ -1598,10 +1319,10 @@ input:checked + .slider:before {
     border-radius: 50%;
 }
 </style>
-    <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/phone-paste.js')); ?>"></script>
     <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/password-toggle.js')); ?>""></script>
     <!-- IMMEDIATE Icon Fix for square placeholder issues -->
     <script src="../immediate_icon_fix.js"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
-

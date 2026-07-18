@@ -1,10 +1,8 @@
 <?php
 require_once '../config/config.php';
-require_once '../includes/paystack_fees.php';
-
-if (function_exists('mysqli_report')) {
-    mysqli_report(MYSQLI_REPORT_OFF);
-}
+ini_set('display_errors', 1);
+ini_set('display_startup_errors', 1);
+error_reporting(E_ALL);
 
 // Require admin role
 requireRole('admin');
@@ -15,440 +13,6 @@ $report_csrf_token = $page_csrf_token;
 
 $redirect_base = 'transactions.php';
 $redirect_query = !empty($_SERVER['QUERY_STRING']) ? '?' . $_SERVER['QUERY_STRING'] : '';
-
-// Fetch filters
-$selected_type = isset($_GET['type']) ? sanitize($_GET['type']) : '';
-$selected_status = isset($_GET['status']) ? sanitize($_GET['status']) : '';
-$date_from = isset($_GET['date_from']) ? sanitize($_GET['date_from']) : '';
-$date_to = isset($_GET['date_to']) ? sanitize($_GET['date_to']) : '';
-$search = isset($_GET['search']) ? sanitize($_GET['search']) : '';
-$page = isset($_GET['page']) ? max(1, (int) $_GET['page']) : 1;
-$page_limit = 50;
-$offset = ($page - 1) * $page_limit;
-$fetch_limit = min(1000, $offset + $page_limit);
-if ($fetch_limit < $page_limit) {
-    $fetch_limit = $page_limit;
-}
-
-// Separate transaction categories
-$transaction_category = isset($_GET['category']) ? sanitize($_GET['category']) : 'all';
-
-function normalizeTransactionDateTimeInput($value, $isEnd = false) {
-    $value = trim((string) $value);
-    if ($value === '') {
-        return '';
-    }
-
-    $value = str_replace('T', ' ', $value);
-
-    if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $value)) {
-        return $value . ($isEnd ? ' 23:59:59' : ' 00:00:00');
-    }
-
-    if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/', $value)) {
-        return $value . ($isEnd ? ':59' : ':00');
-    }
-
-    if (preg_match('/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/', $value)) {
-        return $value;
-    }
-
-    $timestamp = strtotime($value);
-    return $timestamp !== false ? date('Y-m-d H:i:s', $timestamp) : '';
-}
-
-function findBulkCompletableOrderIds(mysqli $db, array $filters, $timeFrom = '', $timeTo = '') {
-    if (function_exists('dbh_table_exists') && !dbh_table_exists('bundle_orders')) {
-        return [];
-    }
-
-    $conditions = [
-        "t.id IS NOT NULL",
-        "LOWER(COALESCE(bo.status, '')) <> 'delivered'"
-    ];
-    $types = '';
-    $params = [];
-
-    $transactionCategory = strtolower((string) ($filters['category'] ?? 'all'));
-    if ($transactionCategory === 'topup') {
-        return [];
-    }
-    if ($transactionCategory === 'purchase') {
-        $conditions[] = "t.transaction_type IN ('purchase', 'order_cost', 'debit')";
-    }
-
-    $selectedType = strtolower((string) ($filters['type'] ?? ''));
-    if ($selectedType !== '') {
-        if ($selectedType === 'credit' || $selectedType === 'topup' || $selectedType === 'commission') {
-            return [];
-        }
-        if ($selectedType === 'debit') {
-            $conditions[] = "t.transaction_type IN ('debit', 'order_cost')";
-        } elseif ($selectedType === 'purchase') {
-            $conditions[] = "t.transaction_type IN ('purchase', 'order_cost')";
-        } else {
-            $conditions[] = "t.transaction_type = ?";
-            $types .= 's';
-            $params[] = $selectedType;
-        }
-    }
-
-    $selectedStatus = strtolower((string) ($filters['status'] ?? ''));
-    if ($selectedStatus !== '') {
-        $conditions[] = "(LOWER(t.status) = ? OR LOWER(COALESCE(bo.status, '')) = ?)";
-        $types .= 'ss';
-        $params[] = $selectedStatus;
-        $params[] = $selectedStatus;
-    }
-
-    $dateFrom = trim((string) ($filters['date_from'] ?? ''));
-    if ($dateFrom !== '') {
-        $conditions[] = "DATE(t.created_at) >= ?";
-        $types .= 's';
-        $params[] = $dateFrom;
-    }
-
-    $dateTo = trim((string) ($filters['date_to'] ?? ''));
-    if ($dateTo !== '') {
-        $conditions[] = "DATE(t.created_at) <= ?";
-        $types .= 's';
-        $params[] = $dateTo;
-    }
-
-    if ($timeFrom !== '') {
-        $conditions[] = "t.created_at >= ?";
-        $types .= 's';
-        $params[] = $timeFrom;
-    }
-
-    if ($timeTo !== '') {
-        $conditions[] = "t.created_at <= ?";
-        $types .= 's';
-        $params[] = $timeTo;
-    }
-
-    $searchTerm = trim((string) ($filters['search'] ?? ''));
-    if ($searchTerm !== '') {
-        $like = '%' . $searchTerm . '%';
-        $searchParts = [
-            't.description LIKE ?',
-            't.reference LIKE ?',
-            't.status LIKE ?',
-            'bo.order_reference LIKE ?',
-            'bo.beneficiary_number LIKE ?',
-            'u.full_name LIKE ?',
-            'u.email LIKE ?',
-            'u.username LIKE ?'
-        ];
-        $types .= 'ssssssss';
-        array_push($params, $like, $like, $like, $like, $like, $like, $like, $like);
-        if (ctype_digit($searchTerm)) {
-            $searchParts[] = 't.id = ?';
-            $types .= 'i';
-            $params[] = (int) $searchTerm;
-        }
-        $conditions[] = '(' . implode(' OR ', $searchParts) . ')';
-    }
-
-    $sql = "
-        SELECT DISTINCT bo.id
-        FROM bundle_orders bo
-        INNER JOIN transactions t
-            ON (
-                bo.transaction_id = t.id
-                OR (
-                    bo.order_reference IS NOT NULL
-                    AND bo.order_reference <> ''
-                    AND bo.order_reference = t.reference
-                )
-            )
-        LEFT JOIN users u ON u.id = t.user_id
-        WHERE " . implode(' AND ', $conditions) . "
-        ORDER BY t.created_at DESC
-        LIMIT 5000
-    ";
-
-    $stmt = $db->prepare($sql);
-    if (!$stmt) {
-        return [];
-    }
-
-    if ($types !== '') {
-        $stmt->bind_param($types, ...$params);
-    }
-
-    $stmt->execute();
-    $result = $stmt->get_result();
-    $orderIds = [];
-    while ($row = $result->fetch_assoc()) {
-        $orderId = (int) ($row['id'] ?? 0);
-        if ($orderId > 0) {
-            $orderIds[] = $orderId;
-        }
-    }
-
-    return array_values(array_unique($orderIds));
-}
-
-function findBulkFailingTopupTransactionIds(mysqli $db, array $filters) {
-    $conditions = [
-        "LOWER(COALESCE(t.transaction_type, '')) = 'topup'",
-        "LOWER(COALESCE(t.status, '')) IN ('pending', 'processing')"
-    ];
-    $types = '';
-    $params = [];
-
-    $dateFrom = trim((string) ($filters['date_from'] ?? ''));
-    if ($dateFrom !== '') {
-        $conditions[] = "DATE(t.created_at) >= ?";
-        $types .= 's';
-        $params[] = $dateFrom;
-    }
-
-    $dateTo = trim((string) ($filters['date_to'] ?? ''));
-    if ($dateTo !== '') {
-        $conditions[] = "DATE(t.created_at) <= ?";
-        $types .= 's';
-        $params[] = $dateTo;
-    }
-
-    $searchTerm = trim((string) ($filters['search'] ?? ''));
-    if ($searchTerm !== '') {
-        $like = '%' . $searchTerm . '%';
-        $searchParts = [
-            't.description LIKE ?',
-            't.reference LIKE ?',
-            't.status LIKE ?',
-            'u.full_name LIKE ?',
-            'u.email LIKE ?',
-            'u.username LIKE ?'
-        ];
-        $types .= 'ssssss';
-        array_push($params, $like, $like, $like, $like, $like, $like);
-        if (ctype_digit($searchTerm)) {
-            $searchParts[] = 't.id = ?';
-            $types .= 'i';
-            $params[] = (int) $searchTerm;
-        }
-        $conditions[] = '(' . implode(' OR ', $searchParts) . ')';
-    }
-
-    $sql = "
-        SELECT DISTINCT t.id
-        FROM transactions t
-        LEFT JOIN users u ON u.id = t.user_id
-        WHERE " . implode(' AND ', $conditions) . "
-        ORDER BY t.created_at DESC
-        LIMIT 5000
-    ";
-
-    $stmt = $db->prepare($sql);
-    if (!$stmt) {
-        return [];
-    }
-
-    if ($types !== '') {
-        $stmt->bind_param($types, ...$params);
-    }
-
-    $stmt->execute();
-    $result = $stmt->get_result();
-    $transactionIds = [];
-    while ($row = $result->fetch_assoc()) {
-        $transactionId = (int) ($row['id'] ?? 0);
-        if ($transactionId > 0) {
-            $transactionIds[] = $transactionId;
-        }
-    }
-
-    return array_values(array_unique($transactionIds));
-}
-
-function reconcilePendingPaystackTopups($db, $limit = 100) {
-    if ($db instanceof Database) {
-        $db = $db->getConnection();
-    }
-
-    if (!$db instanceof mysqli) {
-        return [
-            'checked' => 0,
-            'credited' => 0,
-            'failed' => 0,
-            'still_pending' => 0,
-            'skipped' => 0,
-            'errors' => 1,
-            'messages' => ['Database connection is not available.'],
-        ];
-    }
-
-    $limit = max(1, min(200, (int) $limit));
-    $summary = [
-        'checked' => 0,
-        'credited' => 0,
-        'failed' => 0,
-        'still_pending' => 0,
-        'skipped' => 0,
-        'errors' => 0,
-        'messages' => [],
-    ];
-
-    $paystack_secret_key = trim((string) dbh_env('PAYSTACK_SECRET_KEY', PAYSTACK_SECRET_KEY));
-    if ($paystack_secret_key === '') {
-        $summary['messages'][] = 'Paystack secret key is not configured.';
-        return $summary;
-    }
-
-    $stmt = $db->prepare("
-        SELECT id, user_id, amount, reference, status
-        FROM transactions
-        WHERE transaction_type = 'topup'
-          AND payment_method = 'paystack'
-          AND status = 'pending'
-          AND reference LIKE 'PAY_%'
-          AND created_at <= (NOW() - INTERVAL 5 MINUTE)
-        ORDER BY created_at ASC
-        LIMIT ?
-    ");
-    if (!$stmt) {
-        $summary['messages'][] = 'Could not load pending Paystack top-ups.';
-        return $summary;
-    }
-    $stmt->bind_param('i', $limit);
-    $stmt->execute();
-    $pending = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-    $stmt->close();
-
-    foreach ($pending as $transaction) {
-        $summary['checked']++;
-        $reference = trim((string) ($transaction['reference'] ?? ''));
-        $amount = round((float) ($transaction['amount'] ?? 0), 2);
-        $user_id = (int) ($transaction['user_id'] ?? 0);
-
-        if ($reference === '' || $amount <= 0 || $user_id <= 0) {
-            $summary['skipped']++;
-            continue;
-        }
-
-        $curl = curl_init();
-        curl_setopt_array($curl, [
-            CURLOPT_URL => 'https://api.paystack.co/transaction/verify/' . rawurlencode($reference),
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_ENCODING => '',
-            CURLOPT_MAXREDIRS => 10,
-            CURLOPT_TIMEOUT => 30,
-            CURLOPT_CONNECTTIMEOUT => 15,
-            CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
-            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-            CURLOPT_CUSTOMREQUEST => 'GET',
-            CURLOPT_HTTPHEADER => [
-                'Authorization: Bearer ' . $paystack_secret_key,
-                'Cache-Control: no-cache',
-            ],
-        ]);
-
-        $response = curl_exec($curl);
-        $curl_error = curl_error($curl);
-        $http_code = (int) curl_getinfo($curl, CURLINFO_HTTP_CODE);
-        curl_close($curl);
-
-        if ($curl_error !== '') {
-            $summary['errors']++;
-            $summary['messages'][] = "{$reference}: Paystack request failed.";
-            continue;
-        }
-
-        $paystack_result = json_decode((string) $response, true);
-        if (!$paystack_result || !($paystack_result['status'] ?? false) || empty($paystack_result['data'])) {
-            $summary['errors']++;
-            $summary['messages'][] = "{$reference}: Paystack verification failed" . ($http_code ? " (HTTP {$http_code})" : '') . '.';
-            continue;
-        }
-
-        $gateway_data = $paystack_result['data'];
-        $gateway_status = strtolower(trim((string) ($gateway_data['status'] ?? '')));
-        $gateway_reference = trim((string) ($gateway_data['reference'] ?? ''));
-        $gateway_amount = round(((float) ($gateway_data['amount'] ?? 0)) / 100, 2);
-
-        if ($gateway_reference === '' || strcasecmp($gateway_reference, $reference) !== 0) {
-            $summary['errors']++;
-            $summary['messages'][] = "{$reference}: Paystack returned a mismatched reference.";
-            continue;
-        }
-
-        if ($gateway_status === 'success') {
-            $valid_amount = true;
-            if (function_exists('validatePaystackAmount')) {
-                $validation = validatePaystackAmount($gateway_amount, $amount);
-                $valid_amount = !empty($validation['is_valid']);
-            } elseif (abs($gateway_amount - $amount) > 0.01) {
-                $valid_amount = false;
-            }
-
-            if (!$valid_amount) {
-                $summary['errors']++;
-                $summary['messages'][] = "{$reference}: amount mismatch. Expected " . CURRENCY . number_format($amount, 2) . ', Paystack returned ' . CURRENCY . number_format($gateway_amount, 2) . '.';
-                continue;
-            }
-
-            if (function_exists('walletReferenceExists') && walletReferenceExists($user_id, $reference)) {
-                $stmt = $db->prepare("UPDATE transactions SET status = 'success', updated_at = NOW() WHERE id = ? AND status = 'pending'");
-                if ($stmt) {
-                    $transaction_id = (int) $transaction['id'];
-                    $stmt->bind_param('i', $transaction_id);
-                    $stmt->execute();
-                    $stmt->close();
-                }
-                $summary['credited']++;
-                continue;
-            }
-
-            if (!updateWalletBalanceWithSMS($user_id, $amount, 'credit', $reference, 'Wallet top-up via Paystack reconciliation', 'paystack_reconciliation')) {
-                $summary['errors']++;
-                $summary['messages'][] = "{$reference}: wallet credit failed.";
-                continue;
-            }
-
-            $paystack_reference = $gateway_reference;
-            if (function_exists('dbh_table_has_column') && dbh_table_has_column('transactions', 'paystack_reference')) {
-                $stmt = $db->prepare("UPDATE transactions SET status = 'success', paystack_reference = ?, updated_at = NOW() WHERE id = ? AND status = 'pending'");
-                if ($stmt) {
-                    $transaction_id = (int) $transaction['id'];
-                    $stmt->bind_param('si', $paystack_reference, $transaction_id);
-                    $stmt->execute();
-                    $stmt->close();
-                }
-            } else {
-                $stmt = $db->prepare("UPDATE transactions SET status = 'success', updated_at = NOW() WHERE id = ? AND status = 'pending'");
-                if ($stmt) {
-                    $transaction_id = (int) $transaction['id'];
-                    $stmt->bind_param('i', $transaction_id);
-                    $stmt->execute();
-                    $stmt->close();
-                }
-            }
-
-            $summary['credited']++;
-            continue;
-        }
-
-        if (in_array($gateway_status, ['failed', 'abandoned', 'reversed'], true)) {
-            $failure_note = PHP_EOL . '[Paystack reconciliation marked failed: ' . $gateway_status . ' on ' . date('Y-m-d H:i:s') . ']';
-            $stmt = $db->prepare("UPDATE transactions SET status = 'failed', description = CONCAT(COALESCE(description, ''), ?), updated_at = NOW() WHERE id = ? AND status = 'pending'");
-            if ($stmt) {
-                $transaction_id = (int) $transaction['id'];
-                $stmt->bind_param('si', $failure_note, $transaction_id);
-                $stmt->execute();
-                $stmt->close();
-            }
-            $summary['failed']++;
-            continue;
-        }
-
-        $summary['still_pending']++;
-    }
-
-    return $summary;
-}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['transaction_action'] ?? '') === 'approve_transaction') {
     $csrf_token = $_POST['csrf_token'] ?? '';
@@ -528,158 +92,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['transaction_action'] ?? ''
     exit();
 }
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['transaction_action'] ?? '') === 'reconcile_paystack_topups') {
-    $csrf_token = $_POST['csrf_token'] ?? '';
-    if (!validateCSRF($csrf_token)) {
-        setFlashMessage('error', 'Invalid security token. Please try again.');
-        header('Location: ' . $redirect_base . $redirect_query);
-        exit();
-    }
-
-    try {
-        $summary = reconcilePendingPaystackTopups($db, 100);
-        $admin_id = (int) ($current_admin['id'] ?? 0);
-        if ($admin_id) {
-            logActivity($admin_id, 'paystack_pending_reconciliation', json_encode($summary));
-        }
-
-        $message = 'Paystack reconciliation checked ' . (int) $summary['checked'] . ' pending top-up(s). '
-            . (int) $summary['credited'] . ' credited, '
-            . (int) $summary['failed'] . ' marked failed, '
-            . (int) $summary['still_pending'] . ' still pending, '
-            . (int) $summary['errors'] . ' error(s).';
-
-        if (!empty($summary['messages'])) {
-            $message .= ' First issue: ' . $summary['messages'][0];
-        }
-
-        setFlashMessage($summary['errors'] > 0 ? 'warning' : 'success', $message);
-    } catch (Throwable $e) {
-        error_log('Paystack reconciliation failed: ' . $e->getMessage());
-        setFlashMessage('error', 'Paystack reconciliation failed: ' . $e->getMessage());
-    }
-
-    header('Location: ' . $redirect_base . $redirect_query);
-    exit();
-}
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['transaction_action'] ?? ''), ['fail_transaction', 'bulk_fail_filtered_topups'], true)) {
-    $csrf_token = $_POST['csrf_token'] ?? '';
-    if (!validateCSRF($csrf_token)) {
-        setFlashMessage('error', 'Invalid security token. Please try again.');
-        header('Location: ' . $redirect_base . $redirect_query);
-        exit();
-    }
-
-    $action = $_POST['transaction_action'] ?? '';
-    $transaction_ids = [];
-
-    if ($action === 'fail_transaction') {
-        $single_transaction_id = isset($_POST['transaction_id']) ? (int) $_POST['transaction_id'] : 0;
-        if ($single_transaction_id > 0) {
-            $transaction_ids[] = $single_transaction_id;
-        }
-    } else {
-        $transaction_ids = findBulkFailingTopupTransactionIds($db, [
-            'date_from' => $date_from,
-            'date_to' => $date_to,
-            'search' => $search,
-        ]);
-    }
-
-    $transaction_ids = array_values(array_unique(array_filter(array_map('intval', $transaction_ids))));
-    if (empty($transaction_ids)) {
-        setFlashMessage('error', $action === 'bulk_fail_filtered_topups'
-            ? 'No pending top-up transactions matched the current filters.'
-            : 'Invalid transaction selected.');
-        header('Location: ' . $redirect_base . $redirect_query);
-        exit();
-    }
-
-    $admin_name = $current_admin['full_name'] ?? ($current_admin['username'] ?? 'Admin');
-    $admin_id = (int) ($current_admin['id'] ?? 0);
-    $failure_note = PHP_EOL . '[Marked failed manually by ' . $admin_name;
-    if ($admin_id) {
-        $failure_note .= ' (ID ' . $admin_id . ')';
-    }
-    $failure_note .= ' on ' . date('Y-m-d H:i:s') . ']';
-
-    $select_stmt = $db->prepare("SELECT id, transaction_type, status, reference, amount, user_id FROM transactions WHERE id = ? LIMIT 1");
-    $update_stmt = $db->prepare("
-        UPDATE transactions
-        SET status = 'failed', description = CONCAT(COALESCE(description, ''), ?), updated_at = NOW()
-        WHERE id = ?
-          AND LOWER(COALESCE(transaction_type, '')) = 'topup'
-          AND LOWER(COALESCE(status, '')) IN ('pending', 'processing')
-    ");
-
-    $updated = 0;
-    $skipped = 0;
-    $missing = 0;
-    $updated_refs = [];
-
-    foreach ($transaction_ids as $transaction_id) {
-        $select_stmt->bind_param('i', $transaction_id);
-        $select_stmt->execute();
-        $transaction = $select_stmt->get_result()->fetch_assoc();
-
-        if (!$transaction) {
-            $missing++;
-            continue;
-        }
-
-        $type_value = strtolower((string) ($transaction['transaction_type'] ?? ''));
-        $status_value = strtolower((string) ($transaction['status'] ?? ''));
-        if ($type_value !== 'topup' || !in_array($status_value, ['pending', 'processing'], true)) {
-            $skipped++;
-            continue;
-        }
-
-        $update_stmt->bind_param('si', $failure_note, $transaction_id);
-        $update_stmt->execute();
-        if ($update_stmt->affected_rows > 0) {
-            $updated++;
-            $updated_refs[] = $transaction['reference'] ?? ('TXN-' . $transaction_id);
-        } else {
-            $skipped++;
-        }
-    }
-
-    if ($admin_id) {
-        logActivity($admin_id, 'transaction_manual_fail', json_encode([
-            'transaction_ids' => $transaction_ids,
-            'references' => $updated_refs,
-            'updated' => $updated,
-            'skipped' => $skipped,
-            'missing' => $missing,
-            'filters' => [
-                'date_from' => $date_from,
-                'date_to' => $date_to,
-                'search' => $search,
-            ]
-        ]));
-    }
-
-    $message_parts = [];
-    if ($updated > 0) {
-        $message_parts[] = $updated . ' pending top-up transaction(s) marked failed';
-    }
-    if ($skipped > 0) {
-        $message_parts[] = $skipped . ' transaction(s) skipped';
-    }
-    if ($missing > 0) {
-        $message_parts[] = $missing . ' transaction(s) not found';
-    }
-    if (empty($message_parts)) {
-        $message_parts[] = 'No transactions updated.';
-    }
-
-    setFlashMessage('success', implode('. ', $message_parts) . '.');
-    header('Location: ' . $redirect_base . $redirect_query);
-    exit();
-}
-
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['order_action'] ?? ''), ['complete_order', 'bulk_complete_orders', 'bulk_complete_orders_by_time'], true)) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['order_action'] ?? ''), ['complete_order', 'bulk_complete_orders'], true)) {
     $csrf_token = $_POST['csrf_token'] ?? '';
     if (!validateCSRF($csrf_token)) {
         setFlashMessage('error', 'Invalid security token. Please try again.');
@@ -694,30 +107,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['order_action'] ??
         if ($single_order_id > 0) {
             $order_ids[] = $single_order_id;
         }
-    } elseif ($action === 'bulk_complete_orders_by_time') {
-        $bulk_time_from = normalizeTransactionDateTimeInput($_POST['bulk_time_from'] ?? '', false);
-        $bulk_time_to = normalizeTransactionDateTimeInput($_POST['bulk_time_to'] ?? '', true);
-
-        if ($bulk_time_from === '' && $bulk_time_to === '') {
-            setFlashMessage('error', 'Choose a start time, end time, or both for the bulk time action.');
-            header('Location: ' . $redirect_base . $redirect_query);
-            exit();
-        }
-
-        if ($bulk_time_from !== '' && $bulk_time_to !== '' && strtotime($bulk_time_from) > strtotime($bulk_time_to)) {
-            setFlashMessage('error', 'The start time must be earlier than the end time.');
-            header('Location: ' . $redirect_base . $redirect_query);
-            exit();
-        }
-
-        $order_ids = findBulkCompletableOrderIds($db, [
-            'category' => $transaction_category,
-            'type' => $selected_type,
-            'status' => $selected_status,
-            'date_from' => $date_from,
-            'date_to' => $date_to,
-            'search' => $search,
-        ], $bulk_time_from, $bulk_time_to);
     } else {
         $raw_ids = $_POST['order_ids'] ?? [];
         foreach ((array) $raw_ids as $raw_id) {
@@ -758,9 +147,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['order_action'] ??
     $updated = 0;
     $skipped = 0;
     $missing = 0;
-    $sms_sent = 0;
-    $sms_failed = 0;
-    $sms_skipped = 0;
     $completed_statuses = ['delivered'];
 
     foreach ($order_ids as $order_id) {
@@ -779,16 +165,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['order_action'] ??
             continue;
         }
 
-        if (updateOrderStatus($order_id, 'delivered', 'manual')) {
+        $update_stmt->bind_param('i', $order_id);
+        $update_stmt->execute();
+        if ($update_stmt->affected_rows > 0) {
             $updated++;
-            
-            // Increment UI stats count for manual complete logging
-            $isEnabled = getSetting('agent_delivery_sms_enabled', '0');
-            if ($isEnabled === '1') {
-                $sms_sent++;
-            } else {
-                $sms_skipped++;
-            }
         } else {
             $skipped++;
         }
@@ -799,10 +179,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['order_action'] ??
             'order_ids' => $order_ids,
             'updated' => $updated,
             'skipped' => $skipped,
-            'missing' => $missing,
-            'agent_delivery_sms_sent' => $sms_sent,
-            'agent_delivery_sms_failed' => $sms_failed,
-            'agent_delivery_sms_skipped' => $sms_skipped
+            'missing' => $missing
         ]));
     }
 
@@ -815,12 +192,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && in_array(($_POST['order_action'] ??
     }
     if ($missing > 0) {
         $message_parts[] = $missing . ' order(s) not found';
-    }
-    if ($sms_sent > 0) {
-        $message_parts[] = $sms_sent . ' agent delivery SMS sent';
-    }
-    if ($sms_failed > 0) {
-        $message_parts[] = $sms_failed . ' agent delivery SMS failed';
     }
 
     if (empty($message_parts)) {
@@ -843,17 +214,32 @@ if (strpos($whatsapp_digits, '233') === 0) {
     $order_report_whatsapp_international = '233249020304';
 }
 
+// Fetch filters
+$selected_type = isset($_GET['type']) ? sanitize($_GET['type']) : '';
+$selected_status = isset($_GET['status']) ? sanitize($_GET['status']) : '';
+$date_from = isset($_GET['date_from']) ? sanitize($_GET['date_from']) : '';
+$date_to = isset($_GET['date_to']) ? sanitize($_GET['date_to']) : '';
+$search = isset($_GET['search']) ? sanitize($_GET['search']) : '';
+$page = isset($_GET['page']) ? max(1, (int) $_GET['page']) : 1;
+$page_limit = 50;
+$offset = ($page - 1) * $page_limit;
+$fetch_limit = min(1000, $offset + $page_limit);
+if ($fetch_limit < $page_limit) {
+    $fetch_limit = $page_limit;
+}
+
+// Separate transaction categories
+$transaction_category = isset($_GET['category']) ? sanitize($_GET['category']) : 'all';
+
 // Build unified transaction dataset including manual top-ups
 $has_transactions = function_exists('dbh_table_exists') ? dbh_table_exists('transactions') : true;
 $has_wallet_transactions = function_exists('dbh_table_exists') ? dbh_table_exists('wallet_transactions') : true;
 $has_wallets = function_exists('dbh_table_exists') ? dbh_table_exists('wallets') : true;
-$has_commissions = function_exists('dbh_table_exists') ? dbh_table_exists('commissions') : false;
-$has_agent_commissions = function_exists('dbh_table_exists') ? dbh_table_exists('agent_commissions') : false;
-$has_agent_profits = function_exists('dbh_table_exists') ? dbh_table_exists('agent_profits') : false;
 $has_metadata = function_exists('dbh_table_has_column') && dbh_table_has_column('transactions', 'metadata');
 $has_payment_method = function_exists('dbh_table_has_column') && dbh_table_has_column('transactions', 'payment_method');
 $has_wallet_balance_before = function_exists('dbh_table_has_column') && dbh_table_has_column('wallet_transactions', 'balance_before');
 $has_wallet_balance_after = function_exists('dbh_table_has_column') && dbh_table_has_column('wallet_transactions', 'balance_after');
+$has_remaining_balance = function_exists('dbh_table_has_column') && dbh_table_has_column('transactions', 'remaining_balance');
 
 $payment_method_expr = $has_payment_method ? 'tx.payment_method' : "'unknown'";
 
@@ -891,32 +277,6 @@ $types_tx = '';
 $params_tx = [];
 $types_wt = '';
 $params_wt = [];
-$normalized_status = $selected_status !== '' ? strtolower($selected_status) : '';
-$matching_order_transaction_ids = [];
-$matching_order_references = [];
-$matching_search_order_transaction_ids = [];
-$matching_search_order_references = [];
-
-if ($normalized_status !== '' && (!function_exists('dbh_table_exists') || dbh_table_exists('bundle_orders'))) {
-    $status_order_stmt = $db->prepare("SELECT transaction_id, order_reference FROM bundle_orders WHERE LOWER(status) = ? LIMIT 5000");
-    if ($status_order_stmt) {
-        $status_order_stmt->bind_param('s', $normalized_status);
-        $status_order_stmt->execute();
-        $status_order_rs = $status_order_stmt->get_result();
-        while ($status_order_row = $status_order_rs->fetch_assoc()) {
-            $status_order_transaction_id = (int) ($status_order_row['transaction_id'] ?? 0);
-            $status_order_reference = trim((string) ($status_order_row['order_reference'] ?? ''));
-            if ($status_order_transaction_id > 0) {
-                $matching_order_transaction_ids[] = $status_order_transaction_id;
-            }
-            if ($status_order_reference !== '') {
-                $matching_order_references[] = $status_order_reference;
-            }
-        }
-        $matching_order_transaction_ids = array_values(array_unique($matching_order_transaction_ids));
-        $matching_order_references = array_values(array_unique($matching_order_references));
-    }
-}
 
 // Transaction category filters
 if ($transaction_category === 'topup') {
@@ -947,36 +307,19 @@ if ($selected_type !== '') {
 }
 
 if ($selected_status !== '') {
-    $status_conditions = ["LOWER(t.status) = ?"];
+    $conditions_tx[] = "t.status = ?";
     $types_tx .= 's';
-    $params_tx[] = $normalized_status;
-
-    if (!empty($matching_order_transaction_ids)) {
-        $placeholders = implode(',', array_fill(0, count($matching_order_transaction_ids), '?'));
-        $status_conditions[] = "t.id IN ($placeholders)";
-        $types_tx .= str_repeat('i', count($matching_order_transaction_ids));
-        $params_tx = array_merge($params_tx, $matching_order_transaction_ids);
-    }
-
-    if (!empty($matching_order_references)) {
-        $placeholders = implode(',', array_fill(0, count($matching_order_references), '?'));
-        $status_conditions[] = "t.reference IN ($placeholders)";
-        $types_tx .= str_repeat('s', count($matching_order_references));
-        $params_tx = array_merge($params_tx, $matching_order_references);
-    }
-
-    $conditions_tx[] = '(' . implode(' OR ', $status_conditions) . ')';
-
+    $params_tx[] = $selected_status;
     if (strtolower($selected_status) !== 'completed') {
         $include_wallet_transactions = false;
     }
 }
 
 if ($date_from !== '') {
-    $conditions_tx[] = "DATE(t.created_at) = ?";
+    $conditions_tx[] = "DATE(t.created_at) >= ?";
     $types_tx .= 's';
     $params_tx[] = $date_from;
-    $conditions_wt[] = "DATE(wt.created_at) = ?";
+    $conditions_wt[] = "DATE(wt.created_at) >= ?";
     $types_wt .= 's';
     $params_wt[] = $date_from;
 }
@@ -993,33 +336,6 @@ if ($date_to !== '') {
 if ($search !== '') {
     $searchTerm = '%' . $search . '%';
     $search_user_ids = [];
-    if (!function_exists('dbh_table_exists') || dbh_table_exists('bundle_orders')) {
-        $order_search_sql = "
-            SELECT transaction_id, order_reference
-            FROM bundle_orders
-            WHERE beneficiary_number LIKE ? OR order_reference LIKE ?
-            LIMIT 5000
-        ";
-        $order_search_stmt = $db->prepare($order_search_sql);
-        if ($order_search_stmt) {
-            $order_search_stmt->bind_param('ss', $searchTerm, $searchTerm);
-            $order_search_stmt->execute();
-            $order_search_rs = $order_search_stmt->get_result();
-            while ($order_search_row = $order_search_rs->fetch_assoc()) {
-                $order_search_transaction_id = (int) ($order_search_row['transaction_id'] ?? 0);
-                $order_search_reference = trim((string) ($order_search_row['order_reference'] ?? ''));
-                if ($order_search_transaction_id > 0) {
-                    $matching_search_order_transaction_ids[] = $order_search_transaction_id;
-                }
-                if ($order_search_reference !== '') {
-                    $matching_search_order_references[] = $order_search_reference;
-                }
-            }
-            $matching_search_order_transaction_ids = array_values(array_unique($matching_search_order_transaction_ids));
-            $matching_search_order_references = array_values(array_unique($matching_search_order_references));
-        }
-    }
-
     $user_search_sql = "SELECT id FROM users WHERE full_name LIKE ? OR email LIKE ? OR username LIKE ? LIMIT 200";
     $user_stmt = $db->prepare($user_search_sql);
     if ($user_stmt) {
@@ -1031,26 +347,9 @@ if ($search !== '') {
         }
     }
 
-    $tx_search_parts = ["t.description LIKE ?", "t.reference LIKE ?", "t.status LIKE ?"];
-    $types_tx .= 'sss';
-    array_push($params_tx, $searchTerm, $searchTerm, $searchTerm);
-    if (ctype_digit($search)) {
-        $tx_search_parts[] = "t.id = ?";
-        $types_tx .= 'i';
-        $params_tx[] = (int) $search;
-    }
-    if (!empty($matching_search_order_transaction_ids)) {
-        $placeholders = implode(',', array_fill(0, count($matching_search_order_transaction_ids), '?'));
-        $tx_search_parts[] = "t.id IN ($placeholders)";
-        $types_tx .= str_repeat('i', count($matching_search_order_transaction_ids));
-        $params_tx = array_merge($params_tx, $matching_search_order_transaction_ids);
-    }
-    if (!empty($matching_search_order_references)) {
-        $placeholders = implode(',', array_fill(0, count($matching_search_order_references), '?'));
-        $tx_search_parts[] = "t.reference IN ($placeholders)";
-        $types_tx .= str_repeat('s', count($matching_search_order_references));
-        $params_tx = array_merge($params_tx, $matching_search_order_references);
-    }
+    $tx_search_parts = ["t.description LIKE ?", "t.reference LIKE ?"];
+    $types_tx .= 'ss';
+    array_push($params_tx, $searchTerm, $searchTerm);
     if (!empty($search_user_ids)) {
         $placeholders = implode(',', array_fill(0, count($search_user_ids), '?'));
         $tx_search_parts[] = "t.user_id IN ($placeholders)";
@@ -1059,14 +358,9 @@ if ($search !== '') {
     }
     $conditions_tx[] = '(' . implode(' OR ', $tx_search_parts) . ')';
 
-    $wt_search_parts = ["wt.description LIKE ?", "wt.reference LIKE ?", "'completed' LIKE ?"];
-    $types_wt .= 'sss';
-    array_push($params_wt, $searchTerm, $searchTerm, $searchTerm);
-    if (ctype_digit($search)) {
-        $wt_search_parts[] = "wt.id = ?";
-        $types_wt .= 'i';
-        $params_wt[] = (int) $search;
-    }
+    $wt_search_parts = ["wt.description LIKE ?", "wt.reference LIKE ?"];
+    $types_wt .= 'ss';
+    array_push($params_wt, $searchTerm, $searchTerm);
     if (!empty($search_user_ids)) {
         $placeholders = implode(',', array_fill(0, count($search_user_ids), '?'));
         $wt_search_parts[] = "w.user_id IN ($placeholders)";
@@ -1080,6 +374,7 @@ $transactions = [];
 
 if ($include_transactions) {
     $payment_select = $has_payment_method ? 't.payment_method' : 'NULL AS payment_method';
+    $remaining_balance_select = $has_remaining_balance ? 't.remaining_balance' : 'NULL';
     $transactions_subquery = "
         SELECT
             t.id,
@@ -1090,10 +385,8 @@ if ($include_transactions) {
             t.description,
             t.created_at,
             t.reference,
-            {$payment_select},
-            t.balance_before,
-            t.balance_after,
-            t.metadata
+            {$remaining_balance_select} AS remaining_balance,
+            {$payment_select}
         FROM transactions t
         WHERE " . implode(' AND ', $conditions_tx) . "
         ORDER BY t.created_at DESC
@@ -1125,14 +418,13 @@ if ($include_transactions) {
             {$metadata_package_name} AS metadata_package_name,
             {$metadata_network_name} AS metadata_network_name,
             {$metadata_network} AS metadata_network,
-            tx.balance_before,
-            tx.balance_after,
+            NULL AS balance_before,
+            tx.remaining_balance AS balance_after,
             'system' AS origin,
             NULL AS full_name,
             NULL AS email,
             NULL AS username,
-            NULL AS role,
-            tx.metadata
+            NULL AS role
         FROM (
             {$transactions_subquery}
         ) AS tx
@@ -1271,19 +563,6 @@ foreach ($transactions as &$txn) {
         $txn['email'] = $user_map[$uid]['email'];
         $txn['username'] = $user_map[$uid]['username'];
         $txn['role'] = $user_map[$uid]['role'];
-    } elseif ($uid === 0 && !empty($txn['metadata'])) {
-        $meta = json_decode($txn['metadata'], true);
-        if (is_array($meta)) {
-            $guest_email = $meta['email'] ?? ($meta['buyer_email'] ?? '');
-            $guest_name = $meta['buyer_name'] ?? 'Guest Customer';
-            
-            if ($guest_email !== '') {
-                $txn['email'] = $guest_email;
-                $txn['full_name'] = $guest_name;
-                $txn['username'] = 'guest';
-                $txn['role'] = 'guest';
-            }
-        }
     }
 }
 unset($txn);
@@ -1328,8 +607,6 @@ if (!empty($tx_ids) || !empty($tx_refs)) {
             bo.order_reference,
             bo.id,
             bo.status,
-            bo.provider_status,
-            bo.agent_cost,
             bo.beneficiary_number,
             dp.name AS package_name,
             dp.data_size,
@@ -1368,12 +645,10 @@ foreach ($transactions as &$txn) {
     if ($order_row) {
         $txn['order_id'] = $order_row['id'];
         $txn['order_status'] = $order_row['status'];
-        $txn['provider_status'] = $order_row['provider_status'];
         $txn['package_name'] = $order_row['package_name'];
         $txn['network_name'] = $order_row['network_name'];
         $txn['beneficiary_number'] = $order_row['beneficiary_number'];
         $txn['data_size'] = $order_row['data_size'];
-        $txn['agent_cost'] = $order_row['agent_cost'];
     }
 }
 unset($txn);
@@ -1501,7 +776,7 @@ $stats_query = "
         COUNT(*) AS total_transactions,
         SUM(CASE WHEN transaction_type IN ('credit', 'topup') THEN amount ELSE 0 END) AS total_credits,
         SUM(CASE WHEN transaction_type IN ('debit', 'purchase', 'order_cost') THEN amount ELSE 0 END) AS total_debits,
-        SUM(CASE WHEN transaction_type = 'commission' THEN amount ELSE 0 END) AS transaction_commissions,
+        SUM(CASE WHEN transaction_type = 'commission' THEN amount ELSE 0 END) AS total_commissions,
         SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS pending_count
     FROM (
         $stats_union
@@ -1517,74 +792,6 @@ $stats = $stats_rs ? $stats_rs->fetch_assoc() : [
     'total_commissions' => 0,
     'pending_count' => 0
 ];
-
-$commission_today_sources = [];
-if ($has_transactions) {
-    $has_transaction_commission_earned = function_exists('dbh_table_has_column') && dbh_table_has_column('transactions', 'commission_earned');
-    if ($has_transaction_commission_earned) {
-        $commission_today_sources[] = "
-            SELECT COALESCE(SUM(commission_earned), 0) AS amount
-            FROM transactions
-            WHERE DATE(created_at) = CURDATE()
-              AND commission_earned > 0
-        ";
-    }
-    $commission_today_sources[] = "
-        SELECT COALESCE(SUM(amount), 0) AS amount
-        FROM transactions
-        WHERE DATE(created_at) = CURDATE()
-          AND transaction_type = 'commission'
-          AND status IN ('success', 'pending')
-    ";
-}
-if ($has_commissions) {
-    $commission_today_sources[] = "
-        SELECT COALESCE(SUM(amount), 0) AS amount
-        FROM commissions
-        WHERE DATE(created_at) = CURDATE()
-          AND status <> 'cancelled'
-    ";
-}
-if ($has_agent_commissions) {
-    $agent_commission_date_column = function_exists('dbh_table_has_column') && dbh_table_has_column('agent_commissions', 'earned_at')
-        ? 'earned_at'
-        : 'created_at';
-    $commission_today_sources[] = "
-        SELECT COALESCE(SUM(amount), 0) AS amount
-        FROM agent_commissions
-        WHERE DATE({$agent_commission_date_column}) = CURDATE()
-          AND status <> 'cancelled'
-    ";
-}
-if ($has_agent_profits) {
-    $has_agent_profit_status = function_exists('dbh_table_has_column') && dbh_table_has_column('agent_profits', 'status');
-    $agent_profit_status_filter = $has_agent_profit_status ? "AND status <> 'cancelled'" : '';
-    $commission_today_sources[] = "
-        SELECT COALESCE(SUM(profit_amount), 0) AS amount
-        FROM agent_profits
-        WHERE DATE(created_at) = CURDATE()
-          AND profit_amount > 0
-          {$agent_profit_status_filter}
-    ";
-}
-if (!empty($commission_today_sources)) {
-    $commission_today_query = "
-        SELECT COALESCE(SUM(amount), 0) AS total_commissions
-        FROM (
-            " . implode("\nUNION ALL\n", $commission_today_sources) . "
-        ) AS commission_today_base
-    ";
-    $commission_today_rs = $db->query($commission_today_query);
-    if ($commission_today_rs && ($commission_today_row = $commission_today_rs->fetch_assoc())) {
-        $stats['total_commissions'] = (float) ($commission_today_row['total_commissions'] ?? 0);
-    }
-}
-
-
-
-$can_bulk_fail_filtered_topups = $transaction_category === 'topup'
-    && $selected_type === 'topup'
-    && in_array($selected_status, ['pending', 'processing'], true);
 
 $flash = getFlashMessage();
 ?>
@@ -1605,7 +812,34 @@ $flash = getFlashMessage();
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-                    <?php renderAdminSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Management</div>
+                <div class="nav-item"><a href="packages.php" class="nav-link"><i class="fas fa-box"></i> Data Packages</a></div>
+                <div class="nav-item"><a href="pricing.php" class="nav-link"><i class="fas fa-tags"></i> Pricing</a></div>
+                <div class="nav-item"><a href="afa-registration.php" class="nav-link"><i class="fas fa-user-check"></i> AFA Registration</a></div>
+                <div class="nav-item"><a href="users.php" class="nav-link"><i class="fas fa-users"></i> Users</a></div>
+                <div class="nav-item"><a href="agents.php" class="nav-link"><i class="fas fa-user-tie"></i> Agents</a></div>
+            
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Analytics</div>
+                <div class="nav-item"><a href="transactions.php" class="nav-link active"><i class="fas fa-history"></i> Transactions</a></div>
+                <div class="nav-item"><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></div>
+                <div class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item"><a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> System Settings</a></div>
+                <div class="nav-item"><a href="email-broadcast.php" class="nav-link"><i class="fas fa-paper-plane"></i> Email Broadcasts</a></div>
+                <div class="nav-item"><a href="system-reset.php" class="nav-link"><i class="fas fa-broom"></i> System Reset</a></div>
+            </li>
+        </ul>
                 <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
     </nav>
 
@@ -1697,8 +931,6 @@ $flash = getFlashMessage();
                 </div>
             </div>
 
-
-
             <!-- Transactions List -->
             <div class="widget">
                 <div class="widget-header stacked-header">
@@ -1725,41 +957,27 @@ $flash = getFlashMessage();
                             <option value="completed" <?php echo $selected_status==='completed'?'selected':''; ?>>Completed</option>
                             <option value="success" <?php echo $selected_status==='success'?'selected':''; ?>>Success</option>
                             <option value="pending" <?php echo $selected_status==='pending'?'selected':''; ?>>Pending</option>
-                            <option value="processing" <?php echo $selected_status==='processing'?'selected':''; ?>>Processing</option>
                             <option value="failed" <?php echo $selected_status==='failed'?'selected':''; ?>>Failed</option>
                         </select>
                         <input type="date" name="date_from" value="<?php echo htmlspecialchars($date_from); ?>" class="form-control">
-                        <input type="text" name="search" value="<?php echo htmlspecialchars($search); ?>" placeholder="Search user, reference, phone number, transaction ID, note, or status..." class="form-control search-input">
+                        <input type="date" name="date_to" value="<?php echo htmlspecialchars($date_to); ?>" class="form-control">
+                        <input type="text" name="search" value="<?php echo htmlspecialchars($search); ?>" placeholder="Search user, reference, or note..." class="form-control search-input">
                         <button type="submit" class="btn btn-primary">Filter</button>
                     </form>
                 </div>
                 <div class="widget-body">
                     <div class="bulk-order-actions">
-                        <?php if ($transaction_category !== 'topup'): ?>
-                            <form id="bulk-order-form" class="bulk-order-form" method="post" onsubmit="return confirmBulkOrderSubmit(event);">
-                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($page_csrf_token); ?>">
-                                <button type="submit" name="order_action" value="bulk_complete_orders" class="btn btn-sm btn-success">
-                                    <i class="fas fa-check-circle"></i> Mark Selected Delivered
-                                </button>
-                                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="clearOrderSelection()">
-                                    Clear Selection
-                                </button>
-                                <span class="form-text text-muted bulk-order-summary" id="bulkOrderSummary">Select orders below to complete them in bulk.</span>
-                            </form>
-                        <?php endif; ?>
-                        <?php if ($can_bulk_fail_filtered_topups): ?>
-                            <form method="post" class="bulk-order-form" onsubmit="return confirm('Mark all pending top-up transactions matching the current filters as failed?');">
-                                <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($page_csrf_token); ?>">
-                                <input type="hidden" name="transaction_action" value="bulk_fail_filtered_topups">
-                                <button type="submit" class="btn btn-sm btn-outline-danger">
-                                    <i class="fas fa-times-circle"></i> Mark Filtered Pending Top-Ups Failed
-                                </button>
-                                <span class="form-text text-muted bulk-order-summary">Uses the current date and search filters to mark matching pending top-ups as failed.</span>
-                            </form>
-                        <?php endif; ?>
+                        <form id="bulk-order-form" method="post" onsubmit="return confirm('Mark selected orders as delivered?');">
+                            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($page_csrf_token); ?>">
+                            <input type="hidden" name="order_action" value="bulk_complete_orders">
+                            <button type="submit" class="btn btn-sm btn-success">
+                                <i class="fas fa-check-circle"></i> Mark Selected Delivered
+                            </button>
+                            <span class="form-text text-muted">Select orders below to complete in bulk.</span>
+                        </form>
                     </div>
-                    <div class="table-responsive transactions-table-wrapper transactions-table-main-wrapper">
-                        <table class="table transactions-table transactions-table-main">
+                    <div class="table-responsive">
+                        <table class="table">
                             <thead>
                                 <tr>
                                     <th>
@@ -1772,7 +990,7 @@ $flash = getFlashMessage();
                                     <th>Network</th>
                                     <th>Type</th>
                                     <th>Amount</th>
-                                    <th>Wallet Balance</th>
+                                    <th>Remaining Balance</th>
                                     <th>Status</th>
                                     <th>Order Status</th>
                                     <th>Date/Time</th>
@@ -1791,8 +1009,7 @@ $flash = getFlashMessage();
                                         $type_value = strtolower($txn['transaction_type'] ?? '');
                                         $order_status_value = strtolower($txn['order_status'] ?? '');
                                         $is_credit = in_array($type_value, ['credit', 'topup', 'commission', 'refund']);
-                                        $display_amount = (isset($txn['agent_cost']) && (float)$txn['agent_cost'] > 0) ? (float)$txn['agent_cost'] : (float)($txn['amount'] ?? 0);
-                                        $amount_formatted = CURRENCY . number_format($display_amount, 2);
+                                        $amount_formatted = CURRENCY . number_format((float)($txn['amount'] ?? 0), 2);
                                         $amount_display = ($is_credit ? '+' : '-') . $amount_formatted;
                                         $amount_class = $is_credit ? 'credit' : 'debit';
                                         if (in_array($status_value, ['completed', 'success'])) {
@@ -1821,15 +1038,10 @@ $flash = getFlashMessage();
                                         $status_label = $status_value ? ucwords(str_replace('_', ' ', $status_value)) : 'N/A';
                                         $order_status_label = $order_status_value ? ucwords(str_replace('_', ' ', $order_status_value)) : 'N/A';
                                         $type_label = $transaction_label;
-                                        if ($type_value === 'topup' && stripos($txn['description'] ?? '', 'profit withdrawal') !== false) {
-                                            $type_label = 'Profit to Wallet';
-                                            $type_class = 'warning text-dark';
-                                        }
                                         $created_at_label = !empty($txn['created_at']) ? date('M j, Y g:i A', strtotime($txn['created_at'])) : 'N/A';
                                         $origin_badge = ($txn['origin'] ?? '') === 'manual' ? '<span class="transaction-origin badge badge-info">Manual</span>' : '';
                                         $reference_label = !empty($txn['reference']) ? htmlspecialchars($txn['reference']) : 'N/A';
                                         $canApprove = in_array($status_value, ['pending', 'processing']) && $type_value === 'topup' && (($txn['origin'] ?? '') !== 'manual');
-                                        $canFailTopup = in_array($status_value, ['pending', 'processing']) && $type_value === 'topup';
                                         $canCompleteOrder = !empty($txn['order_id']) && $order_status_value !== '' && $order_status_value !== 'delivered';
                                         $reportPayload = [
                                             'transaction_id' => (int) ($txn['id'] ?? 0),
@@ -1851,7 +1063,7 @@ $flash = getFlashMessage();
                                     <tr>
                                         <td data-label="Select">
                                             <?php if ($canCompleteOrder): ?>
-                                                <input type="checkbox" class="order-select" form="bulk-order-form" name="order_ids[]" value="<?php echo (int) $txn['order_id']; ?>" data-created-at="<?php echo htmlspecialchars((string) ($txn['created_at'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>">
+                                                <input type="checkbox" class="order-select" form="bulk-order-form" name="order_ids[]" value="<?php echo (int) $txn['order_id']; ?>">
                                             <?php else: ?>
                                                 &mdash;
                                             <?php endif; ?>
@@ -1880,14 +1092,8 @@ $flash = getFlashMessage();
                                                 <?php echo $amount_display; ?>
                                             </span>
                                         </td>
-                                        <td data-label="Wallet Balance">
-                                            <?php if (isset($txn['balance_after']) && $txn['balance_after'] !== null): ?>
-                                                <span class="text-muted" style="font-weight: 500;">
-                                                    <?php echo CURRENCY . number_format((float)$txn['balance_after'], 2); ?>
-                                                </span>
-                                            <?php else: ?>
-                                                <span class="text-muted">&mdash;</span>
-                                            <?php endif; ?>
+                                        <td data-label="Remaining Balance">
+                                            <?php echo ($txn['balance_after'] !== null) ? CURRENCY . number_format((float)$txn['balance_after'], 2) : '&mdash;'; ?>
                                         </td>
                                         <td data-label="Status">
                                             <span class="badge badge-<?php echo $status_class; ?>">
@@ -1924,16 +1130,6 @@ $flash = getFlashMessage();
                                                         <input type="hidden" name="transaction_id" value="<?php echo (int)$txn['id']; ?>">
                                                         <button type="submit" class="btn btn-sm btn-success" title="Approve &amp; Credit Wallet">
                                                             <i class="fas fa-check"></i>
-                                                        </button>
-                                                    </form>
-                                                <?php endif; ?>
-                                                <?php if ($canFailTopup): ?>
-                                                    <form method="post" class="inline-form" onsubmit="return confirm('Mark this pending top-up as failed?');">
-                                                        <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($page_csrf_token); ?>">
-                                                        <input type="hidden" name="transaction_action" value="fail_transaction">
-                                                        <input type="hidden" name="transaction_id" value="<?php echo (int)$txn['id']; ?>">
-                                                        <button type="submit" class="btn btn-sm btn-danger" title="Mark Top-up Failed">
-                                                            <i class="fas fa-times"></i>
                                                         </button>
                                                     </form>
                                                 <?php endif; ?>
@@ -2004,6 +1200,9 @@ $flash = getFlashMessage();
                         <div><dt>Type</dt><dd><?php echo $type_label; ?></dd></div>
                         <div><dt>Status</dt><dd><?php echo $status_label; ?></dd></div>
                         <div><dt>Amount</dt><dd class="transaction-amount <?php echo $amount_class; ?>"><?php echo $amount_display; ?></dd></div>
+                        <?php if ($txn['balance_after'] !== null): ?>
+                            <div><dt>Remaining Balance</dt><dd><?php echo CURRENCY . number_format((float)$txn['balance_after'], 2); ?></dd></div>
+                        <?php endif; ?>
                         <div><dt>Payment Method</dt><dd><?php echo htmlspecialchars($payment_method_label); ?></dd></div>
                         <div><dt>Reference</dt><dd><?php echo $reference_label; ?></dd></div>
                         <div><dt>Created</dt><dd><?php echo $created_at_label; ?></dd></div>
@@ -2031,9 +1230,6 @@ $flash = getFlashMessage();
                     <dl class="detail-list">
                         <div><dt>Order ID</dt><dd><?php echo $txn['order_id'] ? $txn['order_id'] : 'N/A'; ?></dd></div>
                         <div><dt>Order Status</dt><dd><?php echo $order_status_label; ?></dd></div>
-                        <?php if (!empty($txn['provider_status'])): ?>
-                            <div><dt>Provider Status</dt><dd><?php echo htmlspecialchars($txn['provider_status']); ?></dd></div>
-                        <?php endif; ?>
                         <div><dt>Beneficiary</dt><dd><?php echo !empty($txn['derived_msisdn']) ? htmlspecialchars($txn['derived_msisdn']) : 'N/A'; ?></dd></div>
                         <div><dt>Package</dt><dd><?php echo $packageLabel ? htmlspecialchars($packageLabel) : 'N/A'; ?></dd></div>
                         <div><dt>Volume</dt><dd><?php echo !empty($txn['derived_volume']) ? htmlspecialchars($txn['derived_volume']) : 'N/A'; ?></dd></div>
@@ -2090,22 +1286,6 @@ $flash = getFlashMessage();
     margin: 0;
 }
 
-.bulk-order-form {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.5rem;
-    width: 100%;
-}
-
-.bulk-order-time {
-    min-width: 190px;
-}
-
-.bulk-order-summary {
-    flex: 1 1 240px;
-}
-
 .transaction-filter-form {
     display: flex;
     flex-wrap: wrap;
@@ -2130,22 +1310,22 @@ $flash = getFlashMessage();
 
 .transaction-name {
     font-weight: 600;
-    color: var(--text-color, #1f2937);
+    color: var(--text-color, #2E294E);
 }
 
 [data-theme="dark"] .transaction-name {
-    color: #e2e8f0;
+    color: #F1E9DA;
 }
 
 .transaction-email,
 .transaction-reference {
     font-size: 0.8rem;
-    color: var(--text-muted, #64748b);
+    color: var(--text-muted, #541388);
 }
 
 [data-theme="dark"] .transaction-email,
 [data-theme="dark"] .transaction-reference {
-    color: #cbd5f5;
+    color: #F1E9DA;
 }
 
 .transaction-origin {
@@ -2158,11 +1338,11 @@ $flash = getFlashMessage();
 }
 
 .transaction-amount.credit {
-    color: var(--success, #16a34a);
+    color: var(--success, #2E294E);
 }
 
 .transaction-amount.debit {
-    color: var(--danger, #dc2626);
+    color: var(--danger, #D90368);
 }
 
 .table-actions {
@@ -2199,41 +1379,7 @@ $flash = getFlashMessage();
 
 .pagination-info {
     font-size: 0.9rem;
-    color: var(--text-muted, #64748b);
-}
-
-.paystack-monitor-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-    gap: 1rem;
-}
-
-.paystack-monitor-actions {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 0.6rem;
-    flex-wrap: wrap;
-}
-
-.paystack-monitor-actions form {
-    margin: 0;
-}
-
-.paystack-monitor-value {
-    margin: 0;
-    font-size: 1.8rem;
-    font-weight: 700;
-    color: var(--text-color, #1f2937);
-}
-
-[data-theme="dark"] .paystack-monitor-value {
-    color: #e2e8f0;
-}
-
-.paystack-monitor-date {
-    font-size: 1.05rem;
-    line-height: 1.4;
+    color: var(--text-muted, #541388);
 }
 
 .btn.disabled,
@@ -2248,7 +1394,7 @@ $flash = getFlashMessage();
     left: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 0.45);
+    background-color: rgba(46, 41, 78, 0.45);
     z-index: 10000;
     display: none;
     padding: 2rem 1rem;
@@ -2260,18 +1406,18 @@ $flash = getFlashMessage();
 }
 
 .modal-content {
-    background: var(--card-bg, #fff);
+    background: var(--card-bg, #F1E9DA);
     border-radius: 10px;
     margin: 0 auto;
     padding: 24px;
     max-width: 760px;
-    box-shadow: 0 10px 40px rgba(15, 23, 42, 0.2);
+    box-shadow: 0 10px 40px rgba(46, 41, 78, 0.2);
     position: relative;
 }
 
 [data-theme="dark"] .modal-content {
-    background: #1f2937;
-    color: #e2e8f0;
+    background: #2E294E;
+    color: #F1E9DA;
 }
 
 .modal-content .close {
@@ -2280,11 +1426,11 @@ $flash = getFlashMessage();
     right: 20px;
     font-size: 1.5rem;
     cursor: pointer;
-    color: var(--text-muted, #64748b);
+    color: var(--text-muted, #541388);
 }
 
 [data-theme="dark"] .modal-content .close {
-    color: #cbd5f5;
+    color: #F1E9DA;
 }
 
 .detail-grid {
@@ -2295,15 +1441,15 @@ $flash = getFlashMessage();
 }
 
 .detail-card {
-    background: var(--card-muted-bg, #f8fafc);
-    border: 1px solid var(--border-color, #e2e8f0);
+    background: var(--card-muted-bg, #F1E9DA);
+    border: 1px solid var(--border-color, #F1E9DA);
     border-radius: 8px;
     padding: 1rem 1.25rem;
 }
 
 [data-theme="dark"] .detail-card {
-    background: #1f2937;
-    border-color: #374151;
+    background: #2E294E;
+    border-color: #2E294E;
 }
 
 .detail-card h3 {
@@ -2324,220 +1470,537 @@ $flash = getFlashMessage();
 
 .detail-list dt {
     font-weight: 600;
-    color: var(--text-muted, #64748b);
+    color: var(--text-muted, #541388);
 }
 
 .detail-list dd {
     margin: 0;
     text-align: right;
-    color: var(--text-color, #1f2937);
+    color: var(--text-color, #2E294E);
 }
 
 [data-theme="dark"] .detail-list dd {
-    color: #e2e8f0;
+    color: #F1E9DA;
 }
 
 .detail-note {
     margin: 0;
-    color: var(--text-muted, #64748b);
+    color: var(--text-muted, #541388);
     font-size: 0.9rem;
 }
 
 [data-theme="dark"] .detail-note {
-    color: #cbd5f5;
+    color: #F1E9DA;
 }
 
+/* Prevent horizontal page and container scroll */
+body, html {
+    overflow-x: hidden !important;
+}
+
+.main-content {
+    min-width: 0 !important;
+    overflow-x: hidden !important;
+}
+
+/* Responsive table wrapper */
 .table-responsive {
     width: 100%;
-    overflow-x: auto;
 }
 
+/* Premium Stat Cards */
+.stat-card {
+    background-color: #FFFFFF !important;
+    border: 1px solid rgba(84, 19, 136, 0.06) !important;
+    box-shadow: 0 4px 20px rgba(84, 19, 136, 0.02) !important;
+    border-radius: 12px !important;
+    padding: 1.25rem !important;
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s ease !important;
+}
+
+[data-theme="dark"] .stat-card {
+    background-color: #2E294E !important;
+    border-color: rgba(255, 255, 255, 0.06) !important;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15) !important;
+}
+
+.stat-card:hover {
+    transform: translateY(-4px) !important;
+    box-shadow: 0 12px 30px rgba(84, 19, 136, 0.08) !important;
+}
+
+[data-theme="dark"] .stat-card:hover {
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.3) !important;
+}
+
+.stat-icon {
+    width: 46px !important;
+    height: 46px !important;
+    border-radius: 10px !important;
+    background-color: rgba(84, 19, 136, 0.08) !important;
+    color: #541388 !important;
+    font-size: 1.25rem !important;
+}
+
+[data-theme="dark"] .stat-icon {
+    background-color: rgba(255, 255, 255, 0.06) !important;
+    color: #FFFFFF !important;
+}
+
+.stat-value {
+    font-size: 1.6rem !important;
+    font-weight: 700 !important;
+    color: #2E294E !important;
+    letter-spacing: -0.5px;
+}
+
+[data-theme="dark"] .stat-value {
+    color: #FFFFFF !important;
+}
+
+.stat-label {
+    font-size: 0.82rem !important;
+    font-weight: 500 !important;
+    color: #7f8c8d !important;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+}
+
+[data-theme="dark"] .stat-label {
+    color: rgba(255, 255, 255, 0.6) !important;
+}
+
+/* Modern Widget and Form Design */
+.widget {
+    background: #FFFFFF !important;
+    border: 1px solid rgba(84, 19, 136, 0.08) !important;
+    box-shadow: 0 10px 30px rgba(84, 19, 136, 0.02) !important;
+    border-radius: 12px !important;
+    overflow: hidden;
+}
+
+[data-theme="dark"] .widget {
+    background: #2E294E !important;
+    border-color: rgba(255, 255, 255, 0.08) !important;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2) !important;
+}
+
+.widget-header {
+    background-color: rgba(84, 19, 136, 0.01) !important;
+    border-bottom: 1px solid rgba(84, 19, 136, 0.08) !important;
+    padding: 1.25rem 1.5rem !important;
+}
+
+[data-theme="dark"] .widget-header {
+    background-color: rgba(255, 255, 255, 0.01) !important;
+    border-bottom-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+.transaction-filter-form .form-control {
+    background-color: #FFFFFF !important;
+    border: 1px solid rgba(84, 19, 136, 0.15) !important;
+    border-radius: 8px !important;
+    color: #2E294E !important;
+    font-size: 0.9rem !important;
+    height: 40px !important;
+    min-height: 40px !important;
+    padding: 0.5rem 0.75rem !important;
+}
+
+[data-theme="dark"] .transaction-filter-form .form-control {
+    background-color: rgba(255, 255, 255, 0.05) !important;
+    border-color: rgba(255, 255, 255, 0.15) !important;
+    color: #FFFFFF !important;
+}
+
+.transaction-filter-form .btn-primary {
+    height: 40px !important;
+    min-height: 40px !important;
+    border-radius: 8px !important;
+    padding: 0.5rem 1.25rem !important;
+    font-size: 0.9rem !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+/* Premium Status Badges overrides */
+.badge {
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    padding: 0.35rem 0.65rem !important;
+    font-size: 0.72rem !important;
+    font-weight: 700 !important;
+    border-radius: 6px !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.5px !important;
+    border: 1px solid transparent !important;
+}
+
+.badge-success {
+    background-color: rgba(46, 204, 113, 0.12) !important;
+    color: #27ae60 !important;
+    border-color: rgba(46, 204, 113, 0.2) !important;
+}
+
+.badge-danger {
+    background-color: rgba(231, 76, 60, 0.12) !important;
+    color: #c0392b !important;
+    border-color: rgba(231, 76, 60, 0.2) !important;
+}
+
+.badge-warning {
+    background-color: rgba(243, 156, 18, 0.12) !important;
+    color: #d35400 !important;
+    border-color: rgba(243, 156, 18, 0.2) !important;
+}
+
+.badge-info {
+    background-color: rgba(52, 152, 219, 0.12) !important;
+    color: #2980b9 !important;
+    border-color: rgba(52, 152, 219, 0.2) !important;
+}
+
+/* Dark theme status badges */
+[data-theme="dark"] .badge-success {
+    background-color: rgba(46, 204, 113, 0.2) !important;
+    color: #2ecc71 !important;
+    border-color: rgba(46, 204, 113, 0.35) !important;
+}
+
+[data-theme="dark"] .badge-danger {
+    background-color: rgba(231, 76, 60, 0.2) !important;
+    color: #ff7675 !important;
+    border-color: rgba(231, 76, 60, 0.35) !important;
+}
+
+[data-theme="dark"] .badge-warning {
+    background-color: rgba(241, 196, 15, 0.2) !important;
+    color: #f1c40f !important;
+    border-color: rgba(241, 196, 15, 0.35) !important;
+}
+
+[data-theme="dark"] .badge-info {
+    background-color: rgba(52, 152, 219, 0.2) !important;
+    color: #3498db !important;
+    border-color: rgba(52, 152, 219, 0.35) !important;
+}
+
+/* Transaction amounts and contrast hardening */
+.transaction-amount {
+    font-weight: 700 !important;
+}
+
+.transaction-amount.credit {
+    color: #27ae60 !important;
+}
+
+.transaction-amount.debit {
+    color: #c0392b !important;
+}
+
+[data-theme="dark"] .transaction-amount.credit {
+    color: #2ecc71 !important;
+}
+
+[data-theme="dark"] .transaction-amount.debit {
+    color: #ff7675 !important;
+}
+
+/* Clean Row Hover and borders */
+.table {
+    border-collapse: separate;
+    border-spacing: 0;
+    width: 100%;
+}
+
+.table th {
+    background-color: rgba(84, 19, 136, 0.03) !important;
+    color: #541388 !important;
+    font-size: 0.78rem !important;
+    font-weight: 700 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.5px !important;
+    border-bottom: 2px solid rgba(84, 19, 136, 0.08) !important;
+    padding: 12px 16px !important;
+}
+
+[data-theme="dark"] .table th {
+    background-color: rgba(255, 255, 255, 0.03) !important;
+    color: #FFFFFF !important;
+    border-bottom-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+.table td {
+    padding: 14px 16px !important;
+    border-bottom: 1px solid rgba(84, 19, 136, 0.05) !important;
+    color: #2E294E !important;
+    font-size: 0.88rem !important;
+}
+
+[data-theme="dark"] .table td {
+    border-bottom-color: rgba(255, 255, 255, 0.06) !important;
+    color: #F1E9DA !important;
+}
+
+.table tbody tr:hover {
+    background-color: rgba(84, 19, 136, 0.01) !important;
+}
+
+[data-theme="dark"] .table tbody tr:hover {
+    background-color: rgba(255, 255, 255, 0.015) !important;
+}
+
+.order-select {
+    accent-color: #541388;
+    cursor: pointer;
+    width: 16px;
+    height: 16px;
+}
+
+/* User column summary formatting */
+.transaction-summary {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.transaction-name {
+    font-weight: 600 !important;
+    color: #541388 !important;
+    font-size: 0.9rem !important;
+}
+
+[data-theme="dark"] .transaction-name {
+    color: #FFFFFF !important;
+}
+
+.transaction-email {
+    color: #7f8c8d !important;
+    font-size: 0.8rem !important;
+}
+
+[data-theme="dark"] .transaction-email {
+    color: rgba(255, 255, 255, 0.6) !important;
+}
+
+.transaction-reference {
+    font-family: monospace;
+    font-size: 0.76rem !important;
+    color: #95a5a6 !important;
+}
+
+[data-theme="dark"] .transaction-reference {
+    color: rgba(255, 255, 255, 0.5) !important;
+}
+
+/* Action button styles */
+.table-actions .btn {
+    border-radius: 6px !important;
+    min-width: 32px !important;
+    min-height: 32px !important;
+    padding: 0 !important;
+    width: 32px !important;
+    height: 32px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    box-shadow: none !important;
+    border: 1px solid transparent !important;
+    transition: all 0.2s ease !important;
+}
+
+.table-actions .btn-info {
+    background-color: rgba(52, 152, 219, 0.1) !important;
+    color: #2980b9 !important;
+}
+
+.table-actions .btn-info:hover {
+    background-color: #2980b9 !important;
+    color: #FFFFFF !important;
+}
+
+.table-actions .btn-success {
+    background-color: rgba(46, 204, 113, 0.1) !important;
+    color: #27ae60 !important;
+}
+
+.table-actions .btn-success:hover {
+    background-color: #27ae60 !important;
+    color: #FFFFFF !important;
+}
+
+.table-actions .btn-outline-success {
+    border-color: rgba(46, 204, 113, 0.25) !important;
+    color: #27ae60 !important;
+    background-color: transparent !important;
+}
+
+.table-actions .btn-outline-success:hover {
+    background-color: #27ae60 !important;
+    color: #FFFFFF !important;
+}
+
+/* Details modal, dark contrast overrides */
+[data-theme="dark"] .pagination-info {
+    color: var(--text-muted) !important;
+}
+
+[data-theme="dark"] .detail-list dt {
+    color: var(--text-muted) !important;
+}
+
+[data-theme="dark"] .detail-list dd {
+    color: var(--text-primary) !important;
+}
+
+[data-theme="dark"] .detail-card {
+    background-color: rgba(255, 255, 255, 0.02) !important;
+    border-color: rgba(255, 255, 255, 0.08) !important;
+}
+
+[data-theme="dark"] .detail-card h3 {
+    color: var(--text-primary) !important;
+}
+
+[data-theme="dark"] .detail-note {
+    color: var(--text-secondary) !important;
+}
+
+[data-theme="dark"] .modal-content h2 {
+    color: var(--text-primary) !important;
+}
+
+/* Desktop sizing control (no column squishing) */
 @media (min-width: 769px) {
-    .transactions-table-wrapper {
-        overflow-x: hidden;
+    .table-responsive {
+        overflow-x: auto !important; /* Internal scrolling within table card */
     }
 
-    .transactions-table {
-        min-width: 0;
-        table-layout: fixed;
+    .table {
+        min-width: 1300px !important; /* Prevent columns from shrinking below readable size */
     }
 
-    .transactions-table-main-wrapper {
-        overflow-x: hidden;
+    .table th,
+    .table td {
+        white-space: nowrap !important;
     }
 
-    .transactions-table-main {
-        width: 100%;
-        font-size: 0.82rem;
-    }
-
-    .transactions-table-main th,
-    .transactions-table-main td {
-        padding: 0.75rem 0.45rem;
-        vertical-align: middle;
-        white-space: normal;
-        overflow-wrap: normal;
-        word-break: normal;
-    }
-
-    .transactions-table-main th {
-        font-size: 0.76rem;
-        line-height: 1.2;
-        letter-spacing: 0.02em;
-        white-space: nowrap;
-        overflow-wrap: normal;
-        word-break: keep-all;
-        text-align: center;
-    }
-
-    .transactions-table-main td:nth-child(1),
-    .transactions-table-main th:nth-child(1) {
-        width: 34px;
-        text-align: center;
-    }
-
-    .transactions-table-main td:nth-child(2),
-    .transactions-table-main th:nth-child(2) {
-        width: 50px;
-        text-align: center;
-    }
-
-    .transactions-table-main td:nth-child(3),
-    .transactions-table-main th:nth-child(3) {
-        width: 25%;
-    }
-
-    .transactions-table-main td:nth-child(4),
-    .transactions-table-main th:nth-child(4) {
-        width: 86px;
-        text-align: center;
-    }
-
-    .transactions-table-main td:nth-child(5),
-    .transactions-table-main th:nth-child(5) {
-        width: 54px;
-        text-align: center;
-    }
-
-    .transactions-table-main td:nth-child(6),
-    .transactions-table-main th:nth-child(6) {
-        width: 62px;
-        text-align: center;
-    }
-
-    .transactions-table-main td:nth-child(7),
-    .transactions-table-main th:nth-child(7) {
-        width: 82px;
-        text-align: center;
-    }
-
-    .transactions-table-main td:nth-child(8),
-    .transactions-table-main th:nth-child(8) {
-        width: 92px;
-        text-align: right;
-    }
-
-    .transactions-table-main td:nth-child(9),
-    .transactions-table-main th:nth-child(9) {
-        width: 78px;
-        text-align: center;
-    }
-
-    .transactions-table-main td:nth-child(10),
-    .transactions-table-main th:nth-child(10) {
-        width: 92px;
-        text-align: center;
-    }
-
-    .transactions-table-main td:nth-child(11),
-    .transactions-table-main th:nth-child(11) {
-        width: 120px;
-    }
-
-    .transactions-table-main td:nth-child(12),
-    .transactions-table-main th:nth-child(12) {
-        width: 108px;
-        text-align: left;
-    }
-
-    .transactions-table-main .transaction-summary {
-        min-width: 0;
-        gap: 0.2rem;
-    }
-
-    .transactions-table-main .transaction-name {
-        line-height: 1.25;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
-    .transactions-table-main .transaction-email,
-    .transactions-table-main .transaction-reference {
-        display: block;
-        max-width: 100%;
-        line-height: 1.3;
-        white-space: nowrap;
-        overflow: hidden;
-        text-overflow: ellipsis;
-    }
-
-    .transactions-table-main .transaction-origin {
-        margin-top: 0.1rem;
-    }
-
-    .transactions-table-main .transaction-amount {
-        line-height: 1.35;
-        white-space: nowrap;
-    }
-
-    .transactions-table-main .badge {
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        max-width: 100%;
-        white-space: nowrap;
-        text-align: center;
-        line-height: 1.25;
-        padding: 0.35rem 0.45rem;
-    }
-
-    .transactions-table-main .table-actions {
-        min-width: 0;
-        flex-wrap: nowrap;
-        justify-content: flex-start;
-        gap: 0.3rem;
-    }
-
-    .transactions-table-main .table-actions .btn {
-        min-width: 30px;
-        width: 30px;
-        height: 30px;
-        padding: 0;
-    }
-
-    .transactions-table-main td:nth-child(4),
-    .transactions-table-main td:nth-child(5),
-    .transactions-table-main td:nth-child(6),
-    .transactions-table-main td:nth-child(7),
-    .transactions-table-main td:nth-child(9),
-    .transactions-table-main td:nth-child(10),
-    .transactions-table-main td:nth-child(11) {
-        white-space: nowrap;
+    .table td[data-label="User"] {
+        white-space: normal !important;
+        min-width: 280px !important;
+        max-width: 380px !important;
+        word-break: break-word !important;
     }
 }
 
-@media (max-width: 992px) {
-    .transaction-filter-form .form-control {
-        min-width: 140px;
-    }
-}
-
+/* Mobile responsive layout scaling */
 @media (max-width: 768px) {
     body,
     .dashboard-wrapper,
     .main-content {
-        overflow-x: hidden;
+        overflow-x: hidden !important;
+        width: 100% !important;
+    }
+
+    .dashboard-content {
+        padding: 1rem !important;
+    }
+
+    .table-responsive {
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+        width: 100% !important;
+        overflow-x: hidden !important;
+        border: none !important;
+    }
+
+    .table-responsive table,
+    .table-responsive thead,
+    .table-responsive tbody,
+    .table-responsive th,
+    .table-responsive td,
+    .table-responsive tr {
+        display: block !important;
+        width: 100% !important;
+    }
+
+    .table-responsive thead {
+        display: none !important;
+    }
+
+    .table-responsive tbody tr {
+        margin-bottom: 1.25rem !important;
+        border: 1px solid var(--border-color) !important;
+        border-radius: 8px !important;
+        padding: 0.75rem 1rem !important;
+        background: var(--card-bg) !important;
+        box-shadow: var(--shadow) !important;
+    }
+
+    [data-theme="dark"] .table-responsive tbody tr {
+        background: var(--bg-secondary) !important;
+        border-color: var(--border-color) !important;
+    }
+
+    .table-responsive tbody td {
+        border: none !important;
+        border-bottom: 1px solid rgba(var(--text-primary-rgb), 0.08) !important;
+        padding: 0.6rem 0 !important;
+        display: flex !important;
+        flex-direction: row !important;
+        justify-content: space-between !important;
+        align-items: center !important;
+        text-align: right !important;
+        font-size: 0.9rem !important;
+        word-break: break-word !important;
+        white-space: normal !important;
+        gap: 1rem !important;
+    }
+
+    [data-theme="dark"] .table-responsive tbody td {
+        border-bottom-color: rgba(255, 255, 255, 0.08) !important;
+    }
+
+    .table-responsive tbody td:last-child {
+        border-bottom: none !important;
+    }
+
+    .table-responsive tbody td::before {
+        content: attr(data-label) !important;
+        font-weight: 600 !important;
+        color: var(--text-muted) !important;
+        text-align: left !important;
+        font-size: 0.85rem !important;
+        text-transform: uppercase !important;
+        letter-spacing: 0.5px !important;
+        flex-shrink: 0 !important;
+    }
+
+    .table-responsive tbody td[data-label="Select"] {
+        justify-content: space-between !important;
+    }
+
+    .table-responsive tbody td[data-label="Actions"] {
+        justify-content: space-between !important;
+        flex-wrap: wrap !important;
+        padding-bottom: 0.5rem !important;
+    }
+
+    .table-actions {
+        justify-content: flex-end !important;
+        width: auto !important;
+    }
+
+    .transaction-summary {
+        align-items: flex-end !important;
+        text-align: right !important;
+        width: 100% !important;
+    }
+
+    .transaction-origin {
+        align-self: flex-end !important;
     }
 
     .transaction-filter-form {
@@ -2561,11 +2024,6 @@ $flash = getFlashMessage();
         justify-content: center;
     }
 
-    .bulk-order-time {
-        width: 100%;
-        min-width: 0;
-    }
-
     .bulk-order-actions .form-text {
         width: 100%;
     }
@@ -2573,69 +2031,17 @@ $flash = getFlashMessage();
     .stacked-header .widget-header-main {
         align-items: stretch;
     }
-    
-    .table-responsive table,
-    .table-responsive thead,
-    .table-responsive tbody,
-    .table-responsive th,
-    .table-responsive td,
-    .table-responsive tr {
-        display: block;
-    }
 
-    .table-responsive thead {
-        display: none;
+    .pagination-bar {
+        justify-content: center !important;
+        width: 100% !important;
     }
+}
 
-    .table-responsive tbody tr {
-        margin-bottom: 1rem;
-        border: 1px solid var(--border-color, #e2e8f0);
-        border-radius: 8px;
-        padding: 0.75rem 1rem;
-        background: var(--card-bg, #fff);
-    }
-
-    [data-theme="dark"] .table-responsive tbody tr {
-        background: #1f2937;
-        border-color: #374151;
-    }
-
-    .table-responsive tbody td {
-        border: none;
-        padding: 0.5rem 0;
-        position: relative;
-        display: flex;
-        flex-direction: column;
-        align-items: flex-start;
-        justify-content: flex-start;
-        gap: 1rem;
-        word-break: break-word;
-    }
-
-    .table-responsive tbody td::before {
-        content: attr(data-label);
-        font-weight: 600;
-        color: var(--text-muted, #64748b);
-    }
-
-    .table-responsive tbody td[data-label="Actions"] {
-        flex-wrap: wrap;
-        gap: 0.5rem;
-    }
-
-    .table-responsive {
-        overflow-x: hidden;
-    }
-
-    .transaction-summary,
-    .transaction-reference,
-    .transaction-email {
-        min-width: 0;
-        word-break: break-word;
-    }
-
-    .table-actions {
-        width: 100%;
+@media (max-width: 480px) {
+    .stats-grid {
+        grid-template-columns: 1fr !important;
+        gap: 0.75rem !important;
     }
 }
 </style>
@@ -2681,137 +2087,11 @@ window.ADMIN_REPORT_SETTINGS = {
     }
 
     function toggleOrderSelection(source) {
-        const checkboxes = getOrderCheckboxes();
+        const checkboxes = document.querySelectorAll('.order-select');
         checkboxes.forEach((checkbox) => {
             checkbox.checked = source.checked;
         });
-        syncOrderSelectionState();
     }
-
-    function getOrderCheckboxes() {
-        return Array.from(document.querySelectorAll('.order-select'));
-    }
-
-    function parseTransactionDateTime(value) {
-        if (!value) {
-            return Number.NaN;
-        }
-
-        const normalized = value.includes('T') ? value : value.replace(' ', 'T');
-        return new Date(normalized).getTime();
-    }
-
-    function updateBulkOrderSummary(message = '') {
-        const summary = document.getElementById('bulkOrderSummary');
-        if (!summary) {
-            return;
-        }
-
-        const checkboxes = getOrderCheckboxes();
-        const selectedCount = checkboxes.filter((checkbox) => checkbox.checked).length;
-        const totalCount = checkboxes.length;
-
-        if (totalCount === 0) {
-            summary.textContent = 'No deliverable orders are available on this page.';
-            return;
-        }
-
-        summary.textContent = message || `${selectedCount} of ${totalCount} deliverable orders selected.`;
-    }
-
-    function syncOrderSelectionState(message = '') {
-        const checkboxes = getOrderCheckboxes();
-        const selectAll = document.getElementById('selectAllOrders');
-        const selectedCount = checkboxes.filter((checkbox) => checkbox.checked).length;
-        const totalCount = checkboxes.length;
-
-        if (selectAll) {
-            selectAll.checked = totalCount > 0 && selectedCount === totalCount;
-            selectAll.indeterminate = selectedCount > 0 && selectedCount < totalCount;
-        }
-
-        updateBulkOrderSummary(message);
-    }
-
-    function applyTimeRangeSelection() {
-        const fromInput = document.getElementById('bulkTimeFrom');
-        const toInput = document.getElementById('bulkTimeTo');
-        const fromTime = parseTransactionDateTime(fromInput ? fromInput.value : '');
-        const toTime = parseTransactionDateTime(toInput ? toInput.value : '');
-
-        if (Number.isNaN(fromTime) && Number.isNaN(toTime)) {
-            updateBulkOrderSummary('Choose a start time, end time, or both.');
-            return;
-        }
-
-        if (!Number.isNaN(fromTime) && !Number.isNaN(toTime) && fromTime > toTime) {
-            alert('The start time must be earlier than the end time.');
-            return;
-        }
-
-        const checkboxes = getOrderCheckboxes();
-        let matchedCount = 0;
-
-        checkboxes.forEach((checkbox) => {
-            const checkboxTime = parseTransactionDateTime(checkbox.dataset.createdAt || '');
-            const withinLowerBound = Number.isNaN(fromTime) || (!Number.isNaN(checkboxTime) && checkboxTime >= fromTime);
-            const withinUpperBound = Number.isNaN(toTime) || (!Number.isNaN(checkboxTime) && checkboxTime <= toTime);
-            const shouldSelect = !Number.isNaN(checkboxTime) && withinLowerBound && withinUpperBound;
-
-            checkbox.checked = shouldSelect;
-            if (shouldSelect) {
-                matchedCount += 1;
-            }
-        });
-
-        syncOrderSelectionState(`${matchedCount} order${matchedCount === 1 ? '' : 's'} selected in the chosen time range.`);
-    }
-
-    function validateBulkTimeRangeSubmission() {
-        const fromInput = document.getElementById('bulkTimeFrom');
-        const toInput = document.getElementById('bulkTimeTo');
-        const fromTime = parseTransactionDateTime(fromInput ? fromInput.value : '');
-        const toTime = parseTransactionDateTime(toInput ? toInput.value : '');
-
-        if (Number.isNaN(fromTime) && Number.isNaN(toTime)) {
-            updateBulkOrderSummary('Choose a start time, end time, or both before running the time-range action.');
-            return false;
-        }
-
-        if (!Number.isNaN(fromTime) && !Number.isNaN(toTime) && fromTime > toTime) {
-            alert('The start time must be earlier than the end time.');
-            return false;
-        }
-
-        return true;
-    }
-
-    function confirmBulkOrderSubmit(event) {
-        const submitter = event && event.submitter ? event.submitter : null;
-        const action = submitter ? submitter.value : '';
-
-        if (action === 'bulk_complete_orders_by_time') {
-            return confirm('Mark all filtered orders in this time range as delivered?');
-        }
-
-        return confirm('Mark selected orders as delivered?');
-    }
-
-    function clearOrderSelection() {
-        getOrderCheckboxes().forEach((checkbox) => {
-            checkbox.checked = false;
-        });
-        syncOrderSelectionState('Selection cleared.');
-    }
-
-    function initOrderSelectionControls() {
-        getOrderCheckboxes().forEach((checkbox) => {
-            checkbox.addEventListener('change', () => syncOrderSelectionState());
-        });
-        syncOrderSelectionState();
-    }
-
-    initOrderSelectionControls();
     
     // Theme management - consistent across all pages
     function initTheme() {

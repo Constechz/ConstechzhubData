@@ -11,14 +11,12 @@ $network_name = strtoupper($network);
 // Get actual available packages for the network
 $network_map = ['at' => 'AT', 'mtn' => 'MTN', 'telecel' => 'Telecel'];
 $network_db_name = $network_map[strtolower($network)] ?? 'AT';
-ensureDataPackageStockStatusColumn();
 
 $stmt = $db->prepare("
     SELECT DISTINCT dp.data_size
     FROM data_packages dp
     LEFT JOIN networks n ON dp.network_id = n.id
     WHERE n.name = ? AND dp.status = 'active'
-      AND COALESCE(dp.stock_status, 'in_stock') = 'in_stock'
     ORDER BY CAST(SUBSTRING_INDEX(dp.data_size, 'GB', 1) AS DECIMAL) ASC
 ");
 $stmt->bind_param("s", $network_db_name);

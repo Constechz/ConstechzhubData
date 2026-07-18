@@ -6,7 +6,6 @@ requireLogin();
 header('Content-Type: application/json');
 
 $reference = sanitize($_GET['reference'] ?? '');
-$should_verify_gateway = isset($_GET['verify_gateway']) && (string) $_GET['verify_gateway'] === '1';
 if ($reference === '') {
     http_response_code(400);
     echo json_encode(['status' => 'error', 'message' => 'Missing reference']);
@@ -68,14 +67,6 @@ function moolre_status_is_success($status) {
     return false;
 }
 
-function paystack_status_is_terminal($status) {
-    $status = strtolower(trim((string) $status));
-    if ($status === '') {
-        return false;
-    }
-    return in_array($status, ['success', 'failed', 'abandoned', 'reversed'], true);
-}
-
 // If still pending and Moolre, verify directly for faster redirect
 if ($status !== 'success' && $txn['payment_method'] === 'moolre') {
     $config = getMoolreConfig();
@@ -99,66 +90,20 @@ if ($status !== 'success' && $txn['payment_method'] === 'moolre') {
     }
 }
 
-// Allow an explicit Paystack recheck for pending top-ups without hammering the gateway on every poll.
-if (
-    $status !== 'success'
-    && $should_verify_gateway
-    && $txn['payment_method'] === 'paystack'
-    && $txn['transaction_type'] === 'topup'
-    && preg_match('/^PAY_/i', $reference)
-) {
-    $paystack_secret_key = trim((string) dbh_env('PAYSTACK_SECRET_KEY', PAYSTACK_SECRET_KEY));
-    if ($paystack_secret_key !== '') {
-        $curl = curl_init();
-        curl_setopt_array($curl, [
-            CURLOPT_URL => "https://api.paystack.co/transaction/verify/" . rawurlencode($reference),
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_ENCODING => "",
-            CURLOPT_MAXREDIRS => 10,
-            CURLOPT_TIMEOUT => 30,
-            CURLOPT_CONNECTTIMEOUT => 15,
-            CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
-            CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
-            CURLOPT_CUSTOMREQUEST => "GET",
-            CURLOPT_HTTPHEADER => [
-                "Authorization: Bearer " . $paystack_secret_key,
-                "Cache-Control: no-cache",
-            ],
-        ]);
-
-        $response = curl_exec($curl);
-        $curl_error = curl_error($curl);
-        curl_close($curl);
-
-        if ($curl_error === '') {
-            $paystack_result = json_decode($response, true);
-            if (($paystack_result['status'] ?? false) && !empty($paystack_result['data'])) {
-                $gateway_status = strtolower(trim((string) ($paystack_result['data']['status'] ?? '')));
-                if (paystack_status_is_terminal($gateway_status)) {
-                    $status = $gateway_status === 'success' ? 'success' : 'failed';
-                    $redirect = '/api/paystack_callback.php?reference=' . urlencode($reference);
-                }
-            }
-        }
-    }
-}
-
 if ($status === 'success') {
-    if ($redirect === '') {
-        $metadata_type = $metadata['type'] ?? '';
-        $store_slug = $metadata['store_slug'] ?? '';
-        if ($txn['transaction_type'] === 'topup' && $role === 'agent') {
-            $redirect = '/agent/dashboard.php';
-        } elseif ($txn['transaction_type'] === 'topup' && $metadata_type === 'customer_wallet_topup') {
-            $redirect = '/customer/buy-data.php';
-            if ($store_slug !== '') {
-                $redirect .= '?store=' . urlencode($store_slug);
-            }
-        } elseif ($txn['transaction_type'] === 'purchase') {
-            $redirect = '/customer/order-history.php';
-        } else {
-            $redirect = $role === 'agent' ? '/agent/wallet.php' : '/customer/wallet.php';
+    $metadata_type = $metadata['type'] ?? '';
+    $store_slug = $metadata['store_slug'] ?? '';
+    if ($txn['transaction_type'] === 'topup' && $role === 'agent') {
+        $redirect = '/agent/dashboard.php';
+    } elseif ($txn['transaction_type'] === 'topup' && $metadata_type === 'customer_wallet_topup') {
+        $redirect = '/customer/buy-data.php';
+        if ($store_slug !== '') {
+            $redirect .= '?store=' . urlencode($store_slug);
         }
+    } elseif ($txn['transaction_type'] === 'purchase') {
+        $redirect = $role === 'agent' ? '/agent/histories.php' : '/customer/order-history.php';
+    } else {
+        $redirect = $role === 'agent' ? '/agent/wallet.php' : '/customer/wallet.php';
     }
 }
 

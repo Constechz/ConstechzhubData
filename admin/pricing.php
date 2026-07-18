@@ -6,7 +6,6 @@ requireAnyRole(['admin', 'super_admin']);
 
 ensurePricingProfilesSchema();
 $profile_options = getPricingProfileOptions();
-$pricing_user_types = getPackagePricingUserTypeOptions();
 $active_profile = getActivePricingProfile();
 
 $requested_profile = $_POST['pricing_profile'] ?? ($_POST['profile'] ?? ($_GET['profile'] ?? $active_profile));
@@ -93,7 +92,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $changes++;
                         
                         // Add pricing if provided
-                        if (!empty($newPkg['customer_price']) || !empty($newPkg['vip_price']) || !empty($newPkg['agent_price'])) {
+                        if (!empty($newPkg['customer_price']) || !empty($newPkg['agent_price'])) {
                             if (!empty($newPkg['customer_price'])) {
                                 $customerPrice = floatval($newPkg['customer_price']);
                                 $userType = 'customer';
@@ -102,18 +101,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 }
                                 if ($sync_live_prices && $livePriceStmt) {
                                     $livePriceStmt->bind_param('isd', $newPackageId, $userType, $customerPrice);
-                                    $livePriceStmt->execute();
-                                }
-                            }
-
-                            if (!empty($newPkg['vip_price'])) {
-                                $vipPrice = floatval($newPkg['vip_price']);
-                                $userType = 'vip';
-                                if (upsertPricingProfilePrice($selected_profile, $newPackageId, $userType, $vipPrice)) {
-                                    $changes++;
-                                }
-                                if ($sync_live_prices && $livePriceStmt) {
-                                    $livePriceStmt->bind_param('isd', $newPackageId, $userType, $vipPrice);
                                     $livePriceStmt->execute();
                                 }
                             }
@@ -152,7 +139,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 continue;
             }
             
-            foreach (array_keys($pricing_user_types) as $userType) {
+            foreach (['customer', 'agent'] as $userType) {
                 if (isset($types[$userType]) && $types[$userType] !== '') {
                     $price = floatval($types[$userType]);
                     try {
@@ -236,21 +223,12 @@ if ($page > $total_pages) {
 $offset = ($page - 1) * $per_page;
 
 // Fetch packages for current page (pricing is fetched separately for speed)
-$size_sort_expr = "
-    CASE
-        WHEN LOWER(REPLACE(dp.data_size, ' ', '')) LIKE '%tb%' THEN CAST(dp.data_size AS DECIMAL(10,2)) * 1048576
-        WHEN LOWER(REPLACE(dp.data_size, ' ', '')) LIKE '%gb%' THEN CAST(dp.data_size AS DECIMAL(10,2)) * 1024
-        WHEN LOWER(REPLACE(dp.data_size, ' ', '')) LIKE '%mb%' THEN CAST(dp.data_size AS DECIMAL(10,2))
-        WHEN LOWER(REPLACE(dp.data_size, ' ', '')) LIKE '%kb%' THEN CAST(dp.data_size AS DECIMAL(10,2)) / 1024
-        ELSE CAST(dp.data_size AS DECIMAL(10,2))
-    END
-";
 $query = "
     SELECT dp.id, dp.name, n.name AS network, dp.package_type, dp.data_size, dp.validity_days
     FROM data_packages dp
     JOIN networks n ON n.id = dp.network_id AND n.is_active = 1 AND n.name != 'Vodafone'
     " . ($selected_network !== '' ? " WHERE n.name = ?" : "") . "
-    ORDER BY n.name ASC, dp.package_type ASC, $size_sort_expr ASC, dp.validity_days ASC, dp.id ASC
+    ORDER BY n.name, dp.package_type, dp.data_size
     LIMIT $per_page OFFSET $offset
 ";
 
@@ -267,7 +245,6 @@ $packages = [];
 $package_ids = [];
 while ($row = $packages_rs->fetch_assoc()) {
     $row['customer_price'] = null;
-    $row['vip_price'] = null;
     $row['agent_price'] = null;
     $packages[] = $row;
     $package_ids[] = (int)$row['id'];
@@ -279,7 +256,6 @@ if (!empty($package_ids)) {
     $price_query = "
         SELECT package_id,
                MAX(CASE WHEN user_type = 'customer' THEN price END) AS customer_price,
-               MAX(CASE WHEN user_type = 'vip' THEN price END) AS vip_price,
                MAX(CASE WHEN user_type = 'agent' THEN price END) AS agent_price
         FROM package_pricing_profiles
         WHERE profile_key = ? AND package_id IN ($placeholders)
@@ -300,7 +276,6 @@ if (!empty($package_ids)) {
         $pkg_id = (int)$pkg['id'];
         if (isset($prices_map[$pkg_id])) {
             $pkg['customer_price'] = $prices_map[$pkg_id]['customer_price'];
-            $pkg['vip_price'] = $prices_map[$pkg_id]['vip_price'];
             $pkg['agent_price'] = $prices_map[$pkg_id]['agent_price'];
         }
     }
@@ -326,7 +301,34 @@ $flash = getFlashMessage();
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-                    <?php renderAdminSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Management</div>
+                <div class="nav-item"><a href="packages.php" class="nav-link"><i class="fas fa-box"></i> Data Packages</a></div>
+                <div class="nav-item"><a href="pricing.php" class="nav-link active"><i class="fas fa-tags"></i> Pricing</a></div>
+                <div class="nav-item"><a href="afa-registration.php" class="nav-link"><i class="fas fa-user-check"></i> AFA Registration</a></div>
+                <div class="nav-item"><a href="users.php" class="nav-link"><i class="fas fa-users"></i> Users</a></div>
+                <div class="nav-item"><a href="agents.php" class="nav-link"><i class="fas fa-user-tie"></i> Agents</a></div>
+            
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Analytics</div>
+                <div class="nav-item"><a href="transactions.php" class="nav-link"><i class="fas fa-history"></i> Transactions</a></div>
+                <div class="nav-item"><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></div>
+                <div class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item"><a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> System Settings</a></div>
+                <div class="nav-item"><a href="email-broadcast.php" class="nav-link"><i class="fas fa-paper-plane"></i> Email Broadcasts</a></div>
+                <div class="nav-item"><a href="system-reset.php" class="nav-link"><i class="fas fa-broom"></i> System Reset</a></div>
+            </li>
+        </ul>
                 <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
     </nav>
 
@@ -379,7 +381,7 @@ $flash = getFlashMessage();
             <div class="page-title">
                 <h1>Pricing Management</h1>
                 <p class="page-subtitle">
-                    Manage Customer, VIP, and Agent prices for all packages.
+                    Manage Customer and Agent prices for all packages.
                     Active profile: <strong><?php echo htmlspecialchars($profile_options[$active_profile] ?? ucfirst($active_profile)); ?></strong>
                 </p>
             </div>
@@ -448,14 +450,13 @@ $flash = getFlashMessage();
                                         <th>Size</th>
                                         <th>Validity</th>
                                         <th>Customer Price (<?php echo CURRENCY; ?>)</th>
-                                        <th>VIP Price (<?php echo CURRENCY; ?>)</th>
                                         <th>Agent Price (<?php echo CURRENCY; ?>)</th>
                                         <th>Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                 <?php if (empty($packages)): ?>
-                                    <tr><td colspan="9" class="text-center text-muted">No packages found</td></tr>
+                                    <tr><td colspan="8" class="text-center text-muted">No packages found</td></tr>
                                 <?php else: ?>
                                     <?php foreach ($packages as $pkg): ?>
                                         <tr class="pricing-row" data-package-id="<?php echo $pkg['id']; ?>">
@@ -466,9 +467,6 @@ $flash = getFlashMessage();
                                             <td data-label="Validity"><?php echo intval($pkg['validity_days']); ?> days</td>
                                             <td data-label="Customer Price (<?php echo CURRENCY; ?>)" class="price-cell">
                                                 <input type="number" step="0.01" min="0" name="prices[<?php echo $pkg['id']; ?>][customer]" value="<?php echo $pkg['customer_price'] !== null ? htmlspecialchars($pkg['customer_price']) : ''; ?>" class="form-control" placeholder="e.g. 10.00">
-                                            </td>
-                                            <td data-label="VIP Price (<?php echo CURRENCY; ?>)" class="price-cell">
-                                                <input type="number" step="0.01" min="0" name="prices[<?php echo $pkg['id']; ?>][vip]" value="<?php echo $pkg['vip_price'] !== null ? htmlspecialchars($pkg['vip_price']) : ''; ?>" class="form-control" placeholder="e.g. 9.00">
                                             </td>
                                             <td data-label="Agent Price (<?php echo CURRENCY; ?>)" class="price-cell">
                                                 <input type="number" step="0.01" min="0" name="prices[<?php echo $pkg['id']; ?>][agent]" value="<?php echo $pkg['agent_price'] !== null ? htmlspecialchars($pkg['agent_price']) : ''; ?>" class="form-control" placeholder="e.g. 8.00">
@@ -595,7 +593,6 @@ $flash = getFlashMessage();
             <td data-label="Size"><input type="text" name="new_packages[${newRowId}][size]" class="form-control" placeholder="e.g. 1GB" required></td>
             <td data-label="Validity"><input type="number" name="new_packages[${newRowId}][validity]" class="form-control" placeholder="Days" min="1" required></td>
             <td data-label="Customer Price (<?php echo CURRENCY; ?>)" class="price-cell"><input type="number" step="0.01" min="0" name="new_packages[${newRowId}][customer_price]" class="form-control" placeholder="e.g. 10.00"></td>
-            <td data-label="VIP Price (<?php echo CURRENCY; ?>)" class="price-cell"><input type="number" step="0.01" min="0" name="new_packages[${newRowId}][vip_price]" class="form-control" placeholder="e.g. 9.00"></td>
             <td data-label="Agent Price (<?php echo CURRENCY; ?>)" class="price-cell"><input type="number" step="0.01" min="0" name="new_packages[${newRowId}][agent_price]" class="form-control" placeholder="e.g. 8.00"></td>
             <td data-label="Actions" class="actions-cell">
                 <button type="button" class="btn btn-danger btn-sm" onclick="removeRow(this)" title="Remove Row">

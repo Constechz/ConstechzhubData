@@ -5,27 +5,6 @@ requireLogin();
 
 $current = getCurrentUser();
 $csrf = generateCSRF();
-$store_slug = sanitize($_GET['store'] ?? '');
-$is_vip_portal = defined('VIP_PORTAL') && VIP_PORTAL;
-$portal_role_label = $is_vip_portal ? 'VIP' : 'Customer';
-$profile_redirect = 'profile.php' . ($store_slug ? '?store=' . urlencode($store_slug) : '');
-$agent_store = null;
-
-if ($store_slug !== '') {
-    $stmt = $db->prepare("
-        SELECT ast.store_name, u.full_name AS agent_name
-        FROM agent_stores ast
-        JOIN users u ON ast.agent_id = u.id
-        WHERE ast.store_slug = ? AND ast.is_active = 1 AND u.status = 'active'
-        LIMIT 1
-    ");
-    if ($stmt) {
-        $stmt->bind_param('s', $store_slug);
-        $stmt->execute();
-        $agent_store = $stmt->get_result()->fetch_assoc() ?: null;
-    }
-}
-
 $phone_columns = [];
 if (function_exists('dbh_table_has_column')) {
     if (dbh_table_has_column('users', 'phone')) {
@@ -63,7 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_profile'])) {
                 if ($mobile !== '') {
                     if (!validatePhone($mobile)) {
                         setFlashMessage('error', 'Please enter a valid phone number');
-                        header('Location: ' . $profile_redirect);
+                        header('Location: profile.php');
                         exit;
                     }
                     $phone_value = formatPhone($mobile);
@@ -80,25 +59,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_profile'])) {
                 if (!empty($new_password)) {
                     if (empty($current_password)) {
                         setFlashMessage('error', 'Current password is required to change password');
-                        header('Location: ' . $profile_redirect);
+                        header('Location: profile.php');
                         exit;
                     }
                     
                     if (!password_verify($current_password, $current['password'])) {
                         setFlashMessage('error', 'Current password is incorrect');
-                        header('Location: ' . $profile_redirect);
+                        header('Location: profile.php');
                         exit;
                     }
                     
                     if ($new_password !== $confirm_password) {
                         setFlashMessage('error', 'New passwords do not match');
-                        header('Location: ' . $profile_redirect);
+                        header('Location: profile.php');
                         exit;
                     }
                     
                     if (strlen($new_password) < 6) {
                         setFlashMessage('error', 'Password must be at least 6 characters');
-                        header('Location: ' . $profile_redirect);
+                        header('Location: profile.php');
                         exit;
                     }
                     
@@ -116,7 +95,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_profile'])) {
                 
                 if ($stmt->execute()) {
                     setFlashMessage('success', 'Profile updated successfully');
-                    logActivity($current['id'], 'profile_update', $portal_role_label . ' profile updated');
+                    logActivity($current['id'], 'profile_update', 'Customer profile updated');
                 } else {
                     setFlashMessage('error', 'Failed to update profile');
                 }
@@ -126,7 +105,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_profile'])) {
             }
         }
     }
-    header('Location: ' . $profile_redirect);
+    header('Location: profile.php');
     exit;
 }
 
@@ -138,7 +117,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['request_email_change'
         $result = createEmailChangeRequest((int) $current['id'], $new_email);
         setFlashMessage($result['success'] ? 'success' : 'error', $result['message']);
     }
-    header('Location: ' . $profile_redirect);
+    header('Location: profile.php');
     exit;
 }
 
@@ -178,91 +157,14 @@ if ($user['agent_id']) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Profile - <?php echo htmlspecialchars($portal_role_label); ?> - <?php echo htmlspecialchars(getSiteName()); ?></title>
+    <title>Profile - Customer - <?php echo htmlspecialchars(getSiteName()); ?></title>
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>"">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>"">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>">
 </head>
 <body>
 <div class="dashboard-wrapper">
-    <!-- Sidebar -->
-    <nav class="sidebar">
-        <div class="sidebar-brand">
-            <h3><?php echo $agent_store ? htmlspecialchars($agent_store['store_name']) : htmlspecialchars(getSiteName()); ?></h3>
-            <?php if ($agent_store): ?>
-                <small style="opacity: 0.7; font-size: 0.8rem;">by <?php echo htmlspecialchars($agent_store['agent_name']); ?></small>
-            <?php endif; ?>
-        </div>
-        <ul class="sidebar-nav">
-            <li class="nav-section">
-                <div class="nav-section-title">Dashboard</div>
-                <div class="nav-item">
-                    <a class="nav-link" href="dashboard.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-                        <i class="fas fa-home"></i> Dashboard
-                    </a>
-                </div>
-            </li>
-            <li class="nav-section">
-                <div class="nav-section-title">Services</div>
-                <div class="nav-item">
-                    <a class="nav-link" href="buy-data.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-                        <i class="fas fa-mobile-alt"></i> Buy Data
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a class="nav-link" href="bulk-mtn.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-                        <i class="fas fa-layer-group"></i> Bulk MTN
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a class="nav-link" href="result-checker.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-                        <i class="fas fa-award"></i> Result Checker
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a class="nav-link" href="afa-registration.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-                        <i class="fas fa-id-card"></i> AFA Registration
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a class="nav-link" href="order-history.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-                        <i class="fas fa-history"></i> Order History
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a class="nav-link" href="reference.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-                        <i class="fas fa-search"></i> Reference
-                    </a>
-                </div>
-            </li>
-            <li class="nav-section">
-                <div class="nav-section-title">Account</div>
-                <div class="nav-item">
-                    <a class="nav-link" href="wallet.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-                        <i class="fas fa-wallet"></i> Wallet
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a class="nav-link active" href="profile.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-                        <i class="fas fa-user"></i> Profile
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a class="nav-link" href="support.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>">
-                        <i class="fas fa-life-ring"></i> Support
-                    </a>
-                </div>
-            </li>
-            <li class="nav-section">
-                <div class="nav-section-title">Settings</div>
-                <div class="nav-item">
-                    <a class="nav-link" href="../logout.php">
-                        <i class="fas fa-sign-out-alt"></i> Logout
-                    </a>
-                </div>
-            </li>
-        </ul>
-    </nav>
+    <?php require_once '../includes/customer_sidebar.php'; ?>
 
     <!-- Main Content -->
     <main class="main-content">
@@ -273,7 +175,7 @@ if ($user['agent_id']) {
                     <i class="fas fa-bars"></i>
                 </button>
                 <div class="breadcrumb">
-                    <span><?php echo htmlspecialchars($portal_role_label); ?></span>
+                    <span>Customer</span>
                     <i class="fas fa-chevron-right"></i>
                     <span>Profile</span>
                 </div>
@@ -297,6 +199,9 @@ if ($user['agent_id']) {
                 </div>
             </div>
         </header>
+
+<?php echo renderNotificationSlides('customers'); ?>
+
         
         <!-- Dashboard Content -->
         <div class="dashboard-content">
@@ -446,13 +351,13 @@ if ($user['agent_id']) {
             </div>
             
             <!-- Delete Account Section -->
-            <div class="card" style="margin-top: 2rem; border-color: #dc3545;">
-                <div class="card-header" style="background-color: #f8d7da; border-bottom-color: #dc3545;">
-                    <h5 style="color: #721c24; margin: 0;"><i class="fas fa-exclamation-triangle"></i> Danger Zone</h5>
+            <div class="card" style="margin-top: 2rem; border-color: #D90368;">
+                <div class="card-header" style="background-color: #F1E9DA; border-bottom-color: #D90368;">
+                    <h5 style="color: #2E294E; margin: 0;"><i class="fas fa-exclamation-triangle"></i> Danger Zone</h5>
                 </div>
                 <div class="card-body">
-                    <h6 style="color: #dc3545;">Delete Account</h6>
-                    <p style="color: #6c757d; margin-bottom: 1rem;">Once you delete your account, there is no going back. This will remove all your data and order history.</p>
+                    <h6 style="color: #D90368;">Delete Account</h6>
+                    <p style="color: #541388; margin-bottom: 1rem;">Once you delete your account, there is no going back. This will remove all your data and order history.</p>
                     <button type="button" class="btn btn-danger" onclick="showDeleteAccountModal()">
                         <i class="fas fa-trash"></i> Delete Account
                     </button>
@@ -466,8 +371,8 @@ if ($user['agent_id']) {
 <div class="modal fade" id="deleteAccountModal" tabindex="-1" style="display: none;">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header" style="border-bottom-color: #dc3545;">
-                <h5 class="modal-title" style="color: #dc3545;"><i class="fas fa-exclamation-triangle"></i> Delete Account</h5>
+            <div class="modal-header" style="border-bottom-color: #D90368;">
+                <h5 class="modal-title" style="color: #D90368;"><i class="fas fa-exclamation-triangle"></i> Delete Account</h5>
                 <button type="button" class="btn-close" onclick="hideDeleteAccountModal()"></button>
             </div>
             <div class="modal-body">
@@ -645,9 +550,10 @@ if ($user['agent_id']) {
         }
     }
 </script>
-    <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/phone-paste.js')); ?>"></script>
     <!-- IMMEDIATE Icon Fix for square placeholder issues -->
     <script src="../immediate_icon_fix.js"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
 

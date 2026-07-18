@@ -18,9 +18,6 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 
 // Get POST data
 $input = json_decode(file_get_contents('php://input'), true);
-if (!is_array($input)) {
-    $input = $_POST;
-}
 $amount = floatval($input['amount'] ?? 0);
 $type = sanitize($input['type'] ?? '');
 $store_slug = sanitize($input['store_slug'] ?? '');
@@ -43,34 +40,18 @@ if ($amount > $max_allowed) {
     exit();
 }
 
-if (!in_array($type, ['wallet_topup', 'agent_wallet_topup', 'customer_wallet_topup', 'vip_wallet_topup'])) {
+if (!in_array($type, ['wallet_topup', 'agent_wallet_topup', 'customer_wallet_topup'])) {
     http_response_code(400);
     echo json_encode(['status' => 'error', 'message' => 'Invalid transaction type']);
     exit();
 }
 
-$requested_gateway = normalizePaymentGateway($input['gateway'] ?? '');
-if ($requested_gateway !== '' && $requested_gateway !== 'paystack') {
+$active_gateway = getActivePaymentGateway();
+if ($active_gateway !== 'paystack') {
     http_response_code(400);
-    echo json_encode(['status' => 'error', 'message' => 'Invalid gateway selection for this endpoint.']);
+    echo json_encode(['status' => 'error', 'message' => 'Paystack is not the active gateway.']);
     exit();
 }
-
-if (!isPaymentGatewayEnabled('paystack')) {
-    http_response_code(400);
-    echo json_encode(['status' => 'error', 'message' => 'Paystack is currently disabled by admin settings.']);
-    exit();
-}
-
-// Determine which Paystack keys to use based on transaction type
-$admin_secret_key = dbh_env('PAYSTACK_SECRET_KEY', PAYSTACK_SECRET_KEY);
-$admin_public_key = dbh_env('PAYSTACK_PUBLIC_KEY', PAYSTACK_PUBLIC_KEY);
-$paystack_secret_key = $admin_secret_key;
-$paystack_public_key = $admin_public_key;
-$payment_recipient = 'admin';
-// By default, prefer admin Paystack keys from .env; only use agent keys if explicitly enabled.
-$allow_agent_paystack = strtolower(trim((string) dbh_env('ALLOW_AGENT_PAYSTACK_KEYS', '0')));
-$allow_agent_paystack = in_array($allow_agent_paystack, ['1', 'true', 'yes', 'on'], true);
 
 $isInvalidPaystackKey = function ($key) {
     $key = trim((string) $key);
@@ -82,6 +63,28 @@ $isInvalidPaystackKey = function ($key) {
     }
     return !preg_match('/^sk_(test|live)_/i', $key);
 };
+
+$isInvalidPublicKey = function ($key) {
+    $key = trim((string) $key);
+    return $key === '' || stripos($key, 'your_public_key_here') !== false;
+};
+
+// Use admin Paystack keys from .env, fallback to database constant settings if invalid/placeholder
+$admin_secret_key = dbh_env('PAYSTACK_SECRET_KEY');
+if ($isInvalidPaystackKey($admin_secret_key)) {
+    $admin_secret_key = PAYSTACK_SECRET_KEY;
+}
+$admin_public_key = dbh_env('PAYSTACK_PUBLIC_KEY');
+if ($isInvalidPublicKey($admin_public_key)) {
+    $admin_public_key = PAYSTACK_PUBLIC_KEY;
+}
+
+$paystack_secret_key = $admin_secret_key;
+$paystack_public_key = $admin_public_key;
+$payment_recipient = 'admin';
+// By default, prefer admin Paystack keys from .env; only use agent keys if explicitly enabled.
+$allow_agent_paystack = strtolower(trim((string) dbh_env('ALLOW_AGENT_PAYSTACK_KEYS', '0')));
+$allow_agent_paystack = in_array($allow_agent_paystack, ['1', 'true', 'yes', 'on'], true);
 
 if ($type === 'customer_wallet_topup' && !empty($store_slug) && $allow_agent_paystack) {
     // Customer topping up via agent store - use agent's Paystack
@@ -105,10 +108,17 @@ if ($type === 'customer_wallet_topup' && !empty($store_slug) && $allow_agent_pay
 }
 
 if ($isInvalidPaystackKey($paystack_secret_key)) {
+    $maskKey = function($key) {
+        $key = trim((string)$key);
+        if ($key === '') return '[empty]';
+        if (strlen($key) <= 10) return $key;
+        return substr($key, 0, 5) . '...' . substr($key, -5);
+    };
+    $resolved_source = getenv('PAYSTACK_SECRET_KEY') !== false ? '.env (getenv)' : (isset($_ENV['PAYSTACK_SECRET_KEY']) ? '.env ($_ENV)' : 'database settings/fallback');
     http_response_code(400);
     echo json_encode([
         'status' => 'error',
-        'message' => 'Paystack keys are not configured. Please contact support to enable Paystack top-ups.'
+        'message' => 'Paystack keys are not configured. Resolved secret key: ' . $maskKey($paystack_secret_key) . ' from ' . $resolved_source . '. Please contact support to enable Paystack top-ups.'
     ]);
     exit();
 }
@@ -130,26 +140,21 @@ try {
         INSERT INTO transactions (user_id, transaction_type, amount, status, reference, payment_method, description) 
         VALUES (?, ?, ?, 'pending', ?, 'paystack', ?)
     ");
-    if (!$stmt) {
-        throw new Exception('Database error: ' . ($db->getConnection()->error ?? 'failed to prepare statement'));
-    }
     $stmt->bind_param("isdss", $current_user['id'], $transaction_type, $amount, $reference, $description);
-    if (!$stmt->execute()) {
-        throw new Exception('Database error: ' . ($stmt->error ?? 'failed to execute statement'));
-    }
-    $stmt->close();
+    $stmt->execute();
     
-    // Initialize Paystack transaction using the global helper
-    $checkout = initializePaystackCheckout($paystack_secret_key, [
+    // Initialize Paystack transaction
+    $curl = curl_init();
+    
+    $postfields = json_encode([
         'email' => $current_user['email'],
-        'amount' => (int) round($amount * 100), // Convert to kobo and ensure integer
+        'amount' => $amount * 100, // Convert to kobo
         'currency' => CURRENCY_CODE,
         'reference' => $reference,
         'callback_url' => PAYSTACK_CALLBACK_URL,
         'metadata' => [
             'user_id' => $current_user['id'],
             'type' => $type,
-            'buyer_role' => $current_user['role'] ?? 'customer',
             'store_slug' => $store_slug,
             'payment_recipient' => $payment_recipient,
             'custom_fields' => [
@@ -166,9 +171,37 @@ try {
             ]
         ]
     ]);
-
-    if (empty($checkout['ok'])) {
-        throw new Exception($checkout['message'] ?? 'Failed to initialize Paystack transaction.');
+    
+    curl_setopt_array($curl, array(
+        CURLOPT_URL => "https://api.paystack.co/transaction/initialize",
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_ENCODING => "",
+        CURLOPT_MAXREDIRS => 10,
+        CURLOPT_TIMEOUT => 30,
+        CURLOPT_CONNECTTIMEOUT => 15,
+        CURLOPT_IPRESOLVE => CURL_IPRESOLVE_V4,
+        CURLOPT_HTTP_VERSION => CURL_HTTP_VERSION_1_1,
+        CURLOPT_CUSTOMREQUEST => "POST",
+        CURLOPT_POSTFIELDS => $postfields,
+        CURLOPT_HTTPHEADER => array(
+            "Authorization: Bearer " . $paystack_secret_key,
+            "Content-Type: application/json",
+        ),
+    ));
+    
+    $response = curl_exec($curl);
+    $err = curl_error($curl);
+    curl_close($curl);
+    
+    if ($err) {
+        throw new Exception("cURL Error: " . $err);
+    }
+    
+    $result = json_decode($response, true);
+    
+    if (!$result || !$result['status']) {
+        $message = $result['message'] ?? 'Unknown error';
+        throw new Exception("Failed to initialize Paystack transaction: " . $message);
     }
     
     // Log activity
@@ -177,8 +210,8 @@ try {
     echo json_encode([
         'status' => 'success',
         'data' => [
-            'authorization_url' => $checkout['authorization_url'],
-            'access_code' => $checkout['access_code'] ?? '',
+            'authorization_url' => $result['data']['authorization_url'],
+            'access_code' => $result['data']['access_code'],
             'reference' => $reference
         ]
     ]);

@@ -147,3 +147,7 @@ if (isset($_GET['action'])) {
 // If we get here, redirect to main API access page
 header('Location: api-access.php');
 exit();
+?>
+    <!-- IMMEDIATE Icon Fix for square placeholder issues -->
+    <script src="../immediate_icon_fix.js"></script>
+

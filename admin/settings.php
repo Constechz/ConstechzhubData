@@ -9,7 +9,6 @@ $flash = getFlashMessage();
 // Load current values
 $paystack_public = PAYSTACK_PUBLIC_KEY;
 $paystack_secret = PAYSTACK_SECRET_KEY;
-$paystack_transfer_otp_disabled = function_exists('isPaystackTransferOtpDisabled') && isPaystackTransferOtpDisabled();
 $moolre_api_user = getSetting('moolre_api_user', defined('MOOLRE_API_USER') ? MOOLRE_API_USER : '');
 $moolre_api_key = getSetting('moolre_api_key', defined('MOOLRE_API_KEY') ? MOOLRE_API_KEY : '');
 $moolre_api_pubkey = getSetting('moolre_api_pubkey', defined('MOOLRE_API_PUBKEY') ? MOOLRE_API_PUBKEY : '');
@@ -17,7 +16,7 @@ $moolre_api_vaskey = getSetting('moolre_api_vaskey', defined('MOOLRE_API_VASKEY'
 $moolre_account_number = getSetting('moolre_account_number', defined('MOOLRE_ACCOUNT_NUMBER') ? MOOLRE_ACCOUNT_NUMBER : '');
 $moolre_webhook_secret = getSetting('moolre_webhook_secret', defined('MOOLRE_WEBHOOK_SECRET') ? MOOLRE_WEBHOOK_SECRET : '');
 $active_gateway = getSetting('payment_gateway_active', defined('PAYMENT_GATEWAY_ACTIVE') ? PAYMENT_GATEWAY_ACTIVE : 'paystack');
-$active_gateway = normalizePaymentGateway($active_gateway, true) ?: 'paystack';
+$active_gateway = normalizePaymentGateway($active_gateway) ?: 'paystack';
 $agent_fee = 50.00;
 
 // Load current wallet top-up settings
@@ -27,6 +26,10 @@ $max_topup_global = (float) getSetting('max_topup_global', 1000.00);
 $order_report_delay_minutes = (int) getSetting('order_report_delay_minutes', 20);
 $order_report_whatsapp = getSetting('order_report_whatsapp_number', '0249020304');
 $whatsapp_channel_url = trim((string) getSetting('whatsapp_channel_url', ''));
+$site_whatsapp_number = trim((string) getSetting('site_whatsapp_number', '0249020304'));
+if ($site_whatsapp_number === '') {
+    $site_whatsapp_number = '0249020304';
+}
 $profit_fee_schedule = function_exists('getProfitWithdrawalFeeSchedule') ? getProfitWithdrawalFeeSchedule() : [];
 $profit_fee_schedule_text = function_exists('formatProfitWithdrawalFeeScheduleText')
     ? formatProfitWithdrawalFeeScheduleText($profit_fee_schedule)
@@ -36,8 +39,6 @@ if (!in_array($mtn_order_initial_status, ['pending', 'delivered'], true)) {
     $mtn_order_initial_status = 'delivered';
 }
 $mtn_auto_deliver_minutes = max(0, (int) getSetting('mtn_auto_deliver_minutes', 0));
-$order_delivery_eta_min_minutes = max(1, (int) getSetting('order_delivery_eta_min_minutes', 5));
-$order_delivery_eta_max_minutes = max($order_delivery_eta_min_minutes, (int) getSetting('order_delivery_eta_max_minutes', 60));
 
 $default_maintenance_message = 'Our storefront is undergoing maintenance. Please check back soon.';
 $maintenance_message = trim((string) getSetting('maintenance_message', $default_maintenance_message));
@@ -46,8 +47,6 @@ if ($maintenance_message === '') {
 }
 $maintenance_mode = getSetting('maintenance_mode', '0') === '1';
 $email_verification_enabled = getSetting('email_verification_enabled', '0') === '1';
-$enable_daily_profit_report = getSetting('enable_daily_profit_report', '0') === '1';
-$enable_agent_stores = getSetting('enable_agent_stores', '1') === '1';
 $verification_method = strtolower(trim((string) getSetting('verification_method', 'sms')));
 if (!in_array($verification_method, ['sms', 'email'], true)) {
     $verification_method = 'sms';
@@ -150,7 +149,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             ? parseProfitWithdrawalFeeScheduleText($schedule_input, $parse_error)
             : null;
 
-        if ($schedule === null || $parse_error) {
+        if (!$schedule || $parse_error) {
             setFlashMessage('error', $parse_error ?: 'Invalid fee schedule.');
             header('Location: settings.php');
             exit();
@@ -227,45 +226,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             header('Location: settings.php');
             exit();
         }
-    } elseif ($form_type === 'delivery_eta') {
-        $min_eta_input = isset($_POST['order_delivery_eta_min_minutes']) ? (int) $_POST['order_delivery_eta_min_minutes'] : $order_delivery_eta_min_minutes;
-        $max_eta_input = isset($_POST['order_delivery_eta_max_minutes']) ? (int) $_POST['order_delivery_eta_max_minutes'] : $order_delivery_eta_max_minutes;
-
-        $errors = [];
-        if ($min_eta_input < 1) {
-            $errors[] = 'Minimum delivery time must be at least 1 minute.';
-        }
-        if ($max_eta_input < 1) {
-            $errors[] = 'Maximum delivery time must be at least 1 minute.';
-        }
-        if ($max_eta_input < $min_eta_input) {
-            $errors[] = 'Maximum delivery time must be greater than or equal to minimum delivery time.';
-        }
-
-        if (!empty($errors)) {
-            setFlashMessage('error', implode('\n', $errors));
-            header('Location: settings.php');
-            exit();
-        }
-
-        $conn = $db->getConnection();
-        $conn->begin_transaction();
-
-        try {
-            adminSaveSetting('order_delivery_eta_min_minutes', (string) $min_eta_input, 'Minimum delivery ETA shown after a successful order');
-            adminSaveSetting('order_delivery_eta_max_minutes', (string) $max_eta_input, 'Maximum delivery ETA shown after a successful order');
-
-            $conn->commit();
-            setFlashMessage('success', 'Order delivery message timing saved successfully');
-            header('Location: settings.php');
-            exit();
-        } catch (Exception $e) {
-            $conn->rollback();
-            error_log('Order delivery ETA settings save error: ' . $e->getMessage());
-            setFlashMessage('error', 'Failed to save order delivery timing');
-            header('Location: settings.php');
-            exit();
-        }
     } elseif ($form_type === 'email_verification') {
         $enabled_input = (string) ($_POST['email_verification_enabled'] ?? '0');
         $enabled_input = $enabled_input === '1' ? '1' : '0';
@@ -322,8 +282,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             exit();
         }
     } elseif ($form_type === 'whatsapp_channel') {
+        $site_whatsapp_input = trim($_POST['site_whatsapp_number'] ?? $site_whatsapp_number);
         $channel_input = trim($_POST['whatsapp_channel_url'] ?? $whatsapp_channel_url);
         $errors = [];
+        $site_whatsapp_digits = preg_replace('/\D+/', '', $site_whatsapp_input);
+        if ($site_whatsapp_digits === '' || strlen($site_whatsapp_digits) < 9) {
+            $errors[] = 'Please provide a valid public WhatsApp number.';
+        }
         if ($channel_input !== '' && !filter_var($channel_input, FILTER_VALIDATE_URL)) {
             $errors[] = 'Please provide a valid WhatsApp channel link (including https://).';
         }
@@ -335,14 +300,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         try {
+            adminSaveSetting('site_whatsapp_number', $site_whatsapp_input, 'Primary public WhatsApp contact number shown on website');
             adminSaveSetting('whatsapp_channel_url', $channel_input, 'Public WhatsApp channel invite link shown on homepage');
 
-            setFlashMessage('success', 'WhatsApp channel link updated successfully');
+            setFlashMessage('success', 'WhatsApp settings updated successfully');
             header('Location: settings.php');
             exit();
         } catch (Exception $e) {
             error_log('WhatsApp channel save error: ' . $e->getMessage());
-            setFlashMessage('error', 'Failed to save WhatsApp channel link');
+            setFlashMessage('error', 'Failed to save WhatsApp settings');
             header('Location: settings.php');
             exit();
         }
@@ -411,97 +377,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             header('Location: settings.php');
             exit();
         }
-    } elseif ($form_type === 'profit_report') {
-        $enabled_input = isset($_POST['enable_daily_profit_report']) && $_POST['enable_daily_profit_report'] === '1' ? '1' : '0';
-
-        try {
-            adminSaveSetting('enable_daily_profit_report', $enabled_input, 'Whether to send a daily profit report to admins via email');
-            setFlashMessage('success', 'Daily profit report settings saved successfully');
-            header('Location: settings.php');
-            exit();
-        } catch (Exception $e) {
-            error_log('Daily profit report settings save error: ' . $e->getMessage());
-            setFlashMessage('error', 'Failed to save daily profit report settings');
-            header('Location: settings.php');
-            exit();
-        }
-    } elseif ($form_type === 'agent_store') {
-        $enabled = isset($_POST['enable_agent_stores']) && $_POST['enable_agent_stores'] === '1' ? '1' : '0';
-        try {
-            adminSaveSetting('enable_agent_stores', $enabled, 'Enable agent store feature globally');
-            setFlashMessage('success', 'Agent store settings saved successfully');
-            header('Location: settings.php');
-            exit();
-        } catch (Exception $e) {
-            error_log('Agent store settings save error: ' . $e->getMessage());
-            setFlashMessage('error', 'Failed to save agent store settings');
-            header('Location: settings.php');
-            exit();
-        }
-    } elseif ($form_type === 'paystack_transfer_otp') {
-        $otp_action = strtolower(trim((string) ($_POST['otp_action'] ?? '')));
-
-        if (!function_exists('getPaystackTransferSecretKey') || getPaystackTransferSecretKey() === '') {
-            setFlashMessage('error', 'Paystack secret key must be saved before transfer OTP can be managed.');
-            header('Location: settings.php');
-            exit();
-        }
-
-        if ($otp_action === 'request') {
-            $error = '';
-            $result = function_exists('requestPaystackTransferOtpDisable')
-                ? requestPaystackTransferOtpDisable($error)
-                : null;
-
-            if (!$result) {
-                setFlashMessage('error', $error !== '' ? $error : 'Failed to request Paystack transfer OTP disable.');
-                header('Location: settings.php');
-                exit();
-            }
-
-            $message = trim((string) ($result['message'] ?? ''));
-            $already_disabled = stripos($message, 'already disabled') !== false;
-            adminSaveSetting(
-                'paystack_transfer_otp_disabled',
-                $already_disabled ? '1' : '0',
-                'Whether Paystack transfer OTP has been disabled for automatic payouts'
-            );
-            if ($message === '') {
-                $message = 'Paystack sent a verification OTP to the business phone. Enter it below to complete the disable request.';
-            } elseif ($already_disabled) {
-                $message = 'Paystack reports transfer OTP is already disabled. Automatic payouts are ready to use.';
-            }
-            setFlashMessage('success', $message);
-            header('Location: settings.php');
-            exit();
-        }
-
-        if ($otp_action === 'finalize') {
-            $otp_code = trim((string) ($_POST['paystack_transfer_disable_otp_code'] ?? ''));
-            $error = '';
-            $result = function_exists('finalizePaystackTransferOtpDisable')
-                ? finalizePaystackTransferOtpDisable($otp_code, $error)
-                : null;
-
-            if (!$result) {
-                setFlashMessage('error', $error !== '' ? $error : 'Failed to finalize Paystack transfer OTP disable.');
-                header('Location: settings.php');
-                exit();
-            }
-
-            adminSaveSetting('paystack_transfer_otp_disabled', '1', 'Whether Paystack transfer OTP has been disabled for automatic payouts');
-            $message = trim((string) ($result['message'] ?? ''));
-            if ($message === '') {
-                $message = 'Paystack transfer OTP has been disabled. Automatic payouts can now run without OTP.';
-            }
-            setFlashMessage('success', $message);
-            header('Location: settings.php');
-            exit();
-        }
-
-        setFlashMessage('error', 'Invalid Paystack transfer OTP action.');
-        header('Location: settings.php');
-        exit();
     } else {
         // Handle payment gateway and registration fee settings (default form)
         $paystack_public_in = trim($_POST['paystack_public_key'] ?? '');
@@ -512,7 +387,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $moolre_api_vaskey_in = trim($_POST['moolre_api_vaskey'] ?? '');
         $moolre_account_number_in = trim($_POST['moolre_account_number'] ?? '');
         $moolre_webhook_secret_in = trim($_POST['moolre_webhook_secret'] ?? '');
-        $active_gateway_in = normalizePaymentGateway($_POST['payment_gateway_active'] ?? $active_gateway, true);
+        $active_gateway_in = normalizePaymentGateway($_POST['payment_gateway_active'] ?? $active_gateway);
         $agent_fee_in = (float)($_POST['agent_registration_fee'] ?? $agent_fee);
         
         // Basic validation
@@ -546,9 +421,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
             if ($paystack_secret_in !== '') {
                 adminSaveSetting('paystack_secret_key', $paystack_secret_in, 'Paystack secret key');
-                if ($paystack_secret_in !== trim((string) $paystack_secret)) {
-                    adminSaveSetting('paystack_transfer_otp_disabled', '0', 'Whether Paystack transfer OTP has been disabled for automatic payouts');
-                }
             }
             if ($moolre_api_user_in !== '') {
                 adminSaveSetting('moolre_api_user', $moolre_api_user_in, 'Moolre API user');
@@ -617,7 +489,41 @@ $csrf_token = generateCSRF();
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-                    <?php renderAdminSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Management</div>
+                <div class="nav-item"><a href="packages.php" class="nav-link"><i class="fas fa-box"></i> Data Packages</a></div>
+                <div class="nav-item"><a href="pricing.php" class="nav-link"><i class="fas fa-tags"></i> Pricing</a></div>
+                <div class="nav-item"><a href="afa-registration.php" class="nav-link"><i class="fas fa-user-check"></i> AFA Registration</a></div>
+                <div class="nav-item"><a href="users.php" class="nav-link"><i class="fas fa-users"></i> Users</a></div>
+                <div class="nav-item"><a href="agents.php" class="nav-link"><i class="fas fa-user-tie"></i> Agents</a></div>
+            
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Analytics</div>
+                <div class="nav-item"><a href="transactions.php" class="nav-link"><i class="fas fa-history"></i> Transactions</a></div>
+                <div class="nav-item"><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></div>
+                <div class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item"><a href="notifications.php" class="nav-link"><i class="fas fa-bell"></i> Notification Settings</a></div>
+                <div class="nav-item"><a href="settings.php" class="nav-link active"><i class="fas fa-cog"></i> System Settings</a></div>
+                <div class="nav-item"><a href="system-reset.php" class="nav-link"><i class="fas fa-broom"></i> System Reset</a></div>
+                <div class="nav-item"><a href="topup-settings.php" class="nav-link"><i class="fas fa-university"></i> Topup Settings</a></div>
+                <div class="nav-item"><a href="topup-requests.php" class="nav-link"><i class="fas fa-file-invoice"></i> Topup Requests</a></div>
+                <div class="nav-item"><a href="sms-settings.php" class="nav-link"><i class="fas fa-sms"></i> SMS Settings</a></div>
+                <div class="nav-item"><a href="seo-settings.php" class="nav-link"><i class="fas fa-globe"></i> SEO Settings</a></div>
+                <div class="nav-item"><a href="smtp-settings.php" class="nav-link"><i class="fas fa-envelope"></i> SMTP Email Settings</a></div>
+                <div class="nav-item"><a href="email-broadcast.php" class="nav-link"><i class="fas fa-paper-plane"></i> Email Broadcasts</a></div>
+                <div class="nav-item"><a href="api-providers.php" class="nav-link"><i class="fas fa-plug"></i> API Providers</a></div>
+            </li>
+        </ul>
                 <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
     </nav>
 
@@ -665,20 +571,6 @@ $csrf_token = generateCSRF();
             </div>
             <?php endif; ?>
 
-            <div class="widget">
-                <div class="widget-header">
-                    <h3 class="widget-title">System Reset Access</h3>
-                </div>
-                <div class="widget-body">
-                    <p class="form-text text-muted" style="margin-bottom: 0.75rem;">
-                        Use this only for full maintenance resets. This action can remove key operational data and should be performed by authorized admins only.
-                    </p>
-                    <a href="system-reset.php" class="btn btn-danger">
-                        <i class="fas fa-broom"></i> Open System Reset
-                    </a>
-                </div>
-            </div>
-
             <div class="dashboard-grid">
                 <!-- Payment Gateway -->
                 <div class="widget">
@@ -691,9 +583,8 @@ $csrf_token = generateCSRF();
                                 <select id="payment_gateway_active" name="payment_gateway_active" class="form-control">
                                     <option value="paystack" <?php echo $active_gateway === 'paystack' ? 'selected' : ''; ?>>Paystack</option>
                                     <option value="moolre" <?php echo $active_gateway === 'moolre' ? 'selected' : ''; ?>>Moolre</option>
-                                    <option value="both" <?php echo $active_gateway === 'both' ? 'selected' : ''; ?>>Both (User Chooses)</option>
                                 </select>
-                                <small class="form-text text-muted">Choose one gateway, or select both so users can choose at checkout.</small>
+                                <small class="form-text text-muted">Only one online gateway is active at a time.</small>
                             </div>
                             <div class="form-group">
                                 <label for="paystack_public_key">Public Key</label>
@@ -761,41 +652,6 @@ $csrf_token = generateCSRF();
                     </div>
                 </div>
 
-                <div class="widget">
-                    <div class="widget-header"><h3 class="widget-title">Paystack Transfer OTP</h3></div>
-                    <div class="widget-body">
-                        <p class="form-text text-muted" style="margin-bottom: 0.75rem;">
-                            Automatic Paystack payouts only work after transfer OTP has been disabled on the Paystack business account.
-                        </p>
-                        <div class="alert alert-<?php echo $paystack_transfer_otp_disabled ? 'success' : 'warning'; ?>" style="margin-bottom: 1rem;">
-                            <?php echo $paystack_transfer_otp_disabled
-                                ? 'Transfer OTP is marked as disabled. Profit withdrawals can be submitted automatically through Paystack.'
-                                : 'Transfer OTP is still enabled or not yet confirmed. The app will not treat Paystack payouts as automatic until you complete the disable flow below.'; ?>
-                        </div>
-                        <form method="post" style="margin-bottom: 1rem;">
-                            <input type="hidden" name="csrf_token" value="<?php echo $csrf_token; ?>" />
-                            <input type="hidden" name="form_type" value="paystack_transfer_otp" />
-                            <input type="hidden" name="otp_action" value="request" />
-                            <button type="submit" class="btn btn-secondary" <?php echo trim((string) $paystack_secret) === '' ? 'disabled' : ''; ?>>
-                                <i class="fas fa-paper-plane"></i> Send Disable OTP Code
-                            </button>
-                        </form>
-                        <form method="post">
-                            <input type="hidden" name="csrf_token" value="<?php echo $csrf_token; ?>" />
-                            <input type="hidden" name="form_type" value="paystack_transfer_otp" />
-                            <input type="hidden" name="otp_action" value="finalize" />
-                            <div class="form-group">
-                                <label for="paystack_transfer_disable_otp_code">Disable OTP Code</label>
-                                <input type="text" id="paystack_transfer_disable_otp_code" name="paystack_transfer_disable_otp_code" class="form-control" inputmode="numeric" pattern="[0-9]{4,8}" placeholder="Enter the OTP sent to the Paystack business phone">
-                                <small class="form-text text-muted">This is a one-time Paystack control step. After it succeeds, future payout approvals run without OTP.</small>
-                            </div>
-                            <button type="submit" class="btn btn-primary" <?php echo trim((string) $paystack_secret) === '' ? 'disabled' : ''; ?>>
-                                <i class="fas fa-check-circle"></i> Confirm Disable OTP
-                            </button>
-                        </form>
-                    </div>
-                </div>
-
                 <!-- Wallet Top-up Settings -->
                 <div class="widget">
                     <div class="widget-header"><h3 class="widget-title">Wallet Top-up Settings</h3></div>
@@ -818,18 +674,6 @@ $csrf_token = generateCSRF();
                             </div>
                             <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Settings</button>
                         </form>
-                    </div>
-                </div>
-
-                <div class="widget">
-                    <div class="widget-header"><h3 class="widget-title">Paystack Fee Config</h3></div>
-                    <div class="widget-body">
-                        <p class="form-text text-muted" style="margin-bottom: 0.9rem;">
-                            Manage the fee assumptions, tolerance window, and preview totals used for Paystack payment matching.
-                        </p>
-                        <a href="paystack-fee-config.php" class="btn btn-secondary">
-                            <i class="fas fa-money-check-alt"></i> Open Paystack Fee Config
-                        </a>
                     </div>
                 </div>
 
@@ -882,27 +726,6 @@ $csrf_token = generateCSRF();
                     </div>
                 </div>
 
-                <!-- Order Delivery Message Timing -->
-                <div class="widget">
-                    <div class="widget-header"><h3 class="widget-title">Order Delivery Message Timing</h3></div>
-                    <div class="widget-body">
-                        <form method="post">
-                            <input type="hidden" name="csrf_token" value="<?php echo $csrf_token; ?>" />
-                            <input type="hidden" name="form_type" value="delivery_eta" />
-                            <div class="form-group">
-                                <label for="order_delivery_eta_min_minutes">Minimum Delivery Time (minutes)</label>
-                                <input type="number" min="1" step="1" id="order_delivery_eta_min_minutes" name="order_delivery_eta_min_minutes" class="form-control" value="<?php echo htmlspecialchars((int) $order_delivery_eta_min_minutes); ?>">
-                            </div>
-                            <div class="form-group">
-                                <label for="order_delivery_eta_max_minutes">Maximum Delivery Time (minutes)</label>
-                                <input type="number" min="1" step="1" id="order_delivery_eta_max_minutes" name="order_delivery_eta_max_minutes" class="form-control" value="<?php echo htmlspecialchars((int) $order_delivery_eta_max_minutes); ?>">
-                                <small class="form-text text-muted">This range is shown in order success messages (example: "It will take 5 to 60 minutes or less to be received.").</small>
-                            </div>
-                            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Delivery Timing</button>
-                        </form>
-                    </div>
-                </div>
-
                 <!-- Account Verification Settings -->
                 <div class="widget">
                     <div class="widget-header"><h3 class="widget-title">Account Verification</h3></div>
@@ -933,17 +756,22 @@ $csrf_token = generateCSRF();
 
                 <!-- WhatsApp Channel Link -->
                 <div class="widget">
-                    <div class="widget-header"><h3 class="widget-title">WhatsApp Channel</h3></div>
+                    <div class="widget-header"><h3 class="widget-title">WhatsApp Contact & Channel</h3></div>
                     <div class="widget-body">
                         <form method="post">
                             <input type="hidden" name="csrf_token" value="<?php echo $csrf_token; ?>" />
                             <input type="hidden" name="form_type" value="whatsapp_channel" />
                             <div class="form-group">
+                                <label for="site_whatsapp_number">Public WhatsApp Number</label>
+                                <input type="text" id="site_whatsapp_number" name="site_whatsapp_number" class="form-control" value="<?php echo htmlspecialchars($site_whatsapp_number); ?>" placeholder="e.g. 0249020304">
+                                <small class="form-text text-muted">This number appears on the public website WhatsApp buttons and contact callouts.</small>
+                            </div>
+                            <div class="form-group">
                                 <label for="whatsapp_channel_url">Channel Invitation Link</label>
                                 <input type="url" id="whatsapp_channel_url" name="whatsapp_channel_url" class="form-control" value="<?php echo htmlspecialchars($whatsapp_channel_url); ?>" placeholder="https://whatsapp.com/channel/XXXXXX">
                                 <small class="form-text text-muted">Paste the full WhatsApp channel link you want highlighted on the homepage. Leave blank to hide the channel button.</small>
                             </div>
-                            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Channel Link</button>
+                            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save WhatsApp Settings</button>
                         </form>
                     </div>
                 </div>
@@ -1000,49 +828,6 @@ $csrf_token = generateCSRF();
                             <p class="form-text text-muted" style="margin-top: 0.75rem;">
                                 <a href="<?php echo htmlspecialchars(SITE_URL . '/maintenance.php'); ?>" target="_blank" rel="noopener">Preview maintenance page</a>
                             </p>
-                        </form>
-                    </div>
-                </div>
-
-                <!-- Daily Profit Report Settings -->
-                <div class="widget">
-                    <div class="widget-header"><h3 class="widget-title">Daily Profit Report</h3></div>
-                    <div class="widget-body">
-                        <form method="post">
-                            <input type="hidden" name="csrf_token" value="<?php echo $csrf_token; ?>" />
-                            <input type="hidden" name="form_type" value="profit_report" />
-                            <div class="form-group">
-                                <label for="enable_daily_profit_report">Daily Profit Email</label>
-                                <select id="enable_daily_profit_report" name="enable_daily_profit_report" class="form-control">
-                                    <option value="0" <?php echo $enable_daily_profit_report ? '' : 'selected'; ?>>Disabled</option>
-                                    <option value="1" <?php echo $enable_daily_profit_report ? 'selected' : ''; ?>>Enabled</option>
-                                </select>
-                                <small class="form-text text-muted">When enabled, an automated summary of today's profit will be sent to all active admins via email.</small>
-                            </div>
-                            <div class="alert alert-info" style="font-size: 0.85rem; padding: 0.75rem;">
-                                <i class="fas fa-info-circle"></i> <strong>Note:</strong> Ensure you have a cron job set to run <code>cron/daily_profit_report.php</code> daily at 23:55.
-                            </div>
-                            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Report Settings</button>
-                        </form>
-                    </div>
-                </div>
-
-                <!-- Agent Store Settings -->
-                <div class="widget">
-                    <div class="widget-header"><h3 class="widget-title">Agent Store Settings</h3></div>
-                    <div class="widget-body">
-                        <form method="post">
-                            <input type="hidden" name="csrf_token" value="<?php echo $csrf_token; ?>" />
-                            <input type="hidden" name="form_type" value="agent_store" />
-                            <div class="form-group">
-                                <label for="enable_agent_stores">Global Agent Store Feature</label>
-                                <select id="enable_agent_stores" name="enable_agent_stores" class="form-control">
-                                    <option value="1" <?php echo $enable_agent_stores ? 'selected' : ''; ?>>Enabled</option>
-                                    <option value="0" <?php echo $enable_agent_stores ? '' : 'selected'; ?>>Disabled</option>
-                                </select>
-                                <small class="form-text text-muted">When disabled, all agent storefront links and directories are turned off system-wide.</small>
-                            </div>
-                            <button type="submit" class="btn btn-primary"><i class="fas fa-save"></i> Save Store Settings</button>
                         </form>
                     </div>
                 </div>

@@ -139,7 +139,7 @@ $html .= '
 .detail-section {
     margin-bottom: 1.5rem;
     padding-bottom: 1rem;
-    border-bottom: 1px solid #e9ecef;
+    border-bottom: 1px solid #F1E9DA;
 }
 
 .detail-section:last-child {
@@ -147,7 +147,7 @@ $html .= '
 }
 
 .detail-section h4 {
-    color: #495057;
+    color: #2E294E;
     margin-bottom: 0.75rem;
     font-size: 1.1rem;
 }
@@ -164,12 +164,12 @@ $html .= '
 
 .detail-table td:first-child {
     width: 30%;
-    color: #6c757d;
+    color: #541388;
 }
 
 .description-box {
-    background: #f8f9fa;
-    border: 1px solid #e9ecef;
+    background: #F1E9DA;
+    border: 1px solid #F1E9DA;
     border-radius: 4px;
     padding: 1rem;
     line-height: 1.6;
@@ -184,9 +184,9 @@ $html .= '
     text-transform: uppercase;
 }
 
-.badge-low { background: #d4edda; color: #155724; }
-.badge-medium { background: #fff3cd; color: #856404; }
-.badge-high { background: #f8d7da; color: #721c24; }
+.badge-low { background: #F1E9DA; color: #2E294E; }
+.badge-medium { background: #F1E9DA; color: #2E294E; }
+.badge-high { background: #F1E9DA; color: #2E294E; }
 
 .status-badge {
     display: inline-block;
@@ -196,10 +196,10 @@ $html .= '
     font-weight: 500;
 }
 
-.status-pending { background: #fff3cd; color: #856404; }
-.status-approved { background: #d4edda; color: #155724; }
-.status-rejected { background: #f8d7da; color: #721c24; }
-.status-suspended { background: #f8f9fa; color: #6c757d; }
+.status-pending { background: #F1E9DA; color: #2E294E; }
+.status-approved { background: #F1E9DA; color: #2E294E; }
+.status-rejected { background: #F1E9DA; color: #2E294E; }
+.status-suspended { background: #F1E9DA; color: #541388; }
 </style>';
 
 echo json_encode(['success' => true, 'html' => $html]);

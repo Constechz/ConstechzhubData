@@ -99,7 +99,150 @@ $stats = $db->query($stats_query)->fetch_assoc();
                 <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
             </div>
             
-                        <?php renderAdminSidebar(); ?>
+            <ul class="sidebar-nav">
+                <li class="nav-section">
+                    <div class="nav-section-title">Dashboard</div>
+                    <div class="nav-item">
+                        <a href="dashboard.php" class="nav-link">
+                            <i class="fas fa-home"></i>
+                            Dashboard
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Management</div>
+                    <div class="nav-item">
+                        <a href="packages.php" class="nav-link">
+                            <i class="fas fa-box"></i>
+                            Data Packages
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="pricing.php" class="nav-link">
+                            <i class="fas fa-tags"></i>
+                            Pricing
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="afa-registration.php" class="nav-link">
+                            <i class="fas fa-user-check"></i>
+                            AFA Registration
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="users.php" class="nav-link">
+                            <i class="fas fa-users"></i>
+                            Users
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="agents.php" class="nav-link">
+                            <i class="fas fa-user-tie"></i>
+                            Agents
+                        </a>
+                    </div>
+                
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Operations</div>
+                    <div class="nav-item">
+                        <a href="manual_topup.php" class="nav-link">
+                            <i class="fas fa-plus-circle"></i>
+                            Manual Top-up
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="support.php" class="nav-link">
+                            <i class="fas fa-life-ring"></i>
+                            Support
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Analytics</div>
+                    <div class="nav-item">
+                        <a href="transactions.php" class="nav-link">
+                            <i class="fas fa-history"></i>
+                            Transactions
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="reports.php" class="nav-link">
+                            <i class="fas fa-chart-bar"></i>
+                            Reports
+                        </a>
+                    </div>
+                    <div class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Settings</div>
+                    <div class="nav-item">
+                        <a href="settings.php" class="nav-link">
+                            <i class="fas fa-cog"></i>
+                            System Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="commission-settings.php" class="nav-link">
+                            <i class="fas fa-percentage"></i>
+                            Commission Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="pwa-settings.php" class="nav-link">
+                            <i class="fas fa-mobile-alt"></i>
+                            PWA Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="sms-settings.php" class="nav-link">
+                            <i class="fas fa-sms"></i>
+                            SMS Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="seo-settings.php" class="nav-link">
+                            <i class="fas fa-globe"></i>
+                            SEO Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="smtp-settings.php" class="nav-link">
+                            <i class="fas fa-envelope"></i>
+                            SMTP Email Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="email-broadcast.php" class="nav-link">
+                            <i class="fas fa-paper-plane"></i>
+                            Email Broadcasts
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="api-providers.php" class="nav-link">
+                            <i class="fas fa-plug"></i>
+                            API Providers
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="system-reset.php" class="nav-link">
+                            <i class="fas fa-broom"></i>
+                            System Reset
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="api-applications.php" class="nav-link active">
+                            <i class="fas fa-key"></i>
+                            API Applications
+                        </a>
+                    </div>
+                </li>
+            </ul>
                 <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
         </nav>
         
@@ -486,7 +629,7 @@ $stats = $db->query($stats_query)->fetch_assoc();
                         modal.style.left = '0';
                         modal.style.width = '100%';
                         modal.style.height = '100%';
-                        modal.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+                        modal.style.backgroundColor = 'rgba(46, 41, 78, 0.5)';
                         modal.style.zIndex = '9999';
                         document.body.style.overflow = 'hidden';
                     } else {
@@ -520,7 +663,7 @@ $stats = $db->query($stats_query)->fetch_assoc();
             modal.style.left = '0';
             modal.style.width = '100%';
             modal.style.height = '100%';
-            modal.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+            modal.style.backgroundColor = 'rgba(46, 41, 78, 0.5)';
             modal.style.zIndex = '9999';
             document.body.style.overflow = 'hidden';
         }

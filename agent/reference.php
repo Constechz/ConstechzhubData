@@ -100,7 +100,7 @@ function dbh_agent_reference_phone_display($phone) {
             border-radius: 999px;
             font-size: 0.75rem;
             font-weight: 600;
-            color: #0f172a;
+            color: #2E294E;
             display: inline-flex;
             align-items: center;
             gap: 0.35rem;
@@ -115,7 +115,147 @@ function dbh_agent_reference_phone_display($phone) {
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
         
-        <?php renderAgentSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item">
+                    <a href="dashboard.php" class="nav-link">
+                        <i class="fas fa-home"></i>
+                        Dashboard
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Services</div>
+                <div class="nav-item">
+                    <a href="at-business.php" class="nav-link">
+                        <i class="fas fa-mobile-alt"></i>
+                        AT Business
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="mtn-business.php" class="nav-link">
+                        <i class="fas fa-mobile-alt"></i>
+                        MTN Business
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="bulk-mtn.php" class="nav-link">
+                        <i class="fas fa-layer-group"></i>
+                        Bulk MTN
+                    </a>
+                </div>
+                    <div class="nav-item">
+                        <a href="result-checker.php" class="nav-link">
+                            <i class="fas fa-award"></i>
+                            Result Checker
+                        </a>
+                    </div>
+                <div class="nav-item">
+                    <a href="telecel-business.php" class="nav-link">
+                        <i class="fas fa-signal"></i>
+                        Telecel Business
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Transaction</div>
+                <div class="nav-item">
+                    <a href="transactions.php" class="nav-link">
+                        <i class="fas fa-money-bill-wave"></i>
+                        Transactions
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="histories.php" class="nav-link">
+                        <i class="fas fa-history"></i>
+                        Data Histories
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="reference.php" class="nav-link active">
+                        <i class="fas fa-search"></i>
+                        Reference
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Operations</div>
+                <div class="nav-item">
+                    <a href="customer_topup.php" class="nav-link">
+                        <i class="fas fa-user-plus"></i>
+                        Customer Top-up
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="wallet.php" class="nav-link">
+                        <i class="fas fa-wallet"></i>
+                        Wallet
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="support.php" class="nav-link">
+                        <i class="fas fa-life-ring"></i>
+                        Support
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Business</div>
+                <div class="nav-item">
+                    <a href="pricing.php" class="nav-link">
+                        <i class="fas fa-tags"></i>
+                        Custom Pricing
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Users</div>
+                <div class="nav-item">
+                    <a href="customers.php" class="nav-link">
+                        <i class="fas fa-user-friends"></i>
+                        Customers
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Commission</div>
+                <div class="nav-item">
+                    <a href="commission.php" class="nav-link">
+                        <i class="fas fa-percentage"></i>
+                        Commission
+                    </a>
+                </div>
+                    <div class="nav-item">
+                        <a href="withdraw-profit.php" class="nav-link">
+                            <i class="fas fa-wallet"></i>
+                            Withdraw Profit
+                        </a>
+                    </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item">
+                    <a href="settings.php" class="nav-link">
+                        <i class="fas fa-cog"></i>
+                        Settings
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="api-access.php" class="nav-link">
+                        <i class="fas fa-key"></i>
+                        API Access
+                    </a>
+                </div>
+            </li>
+        </ul>
     </nav>
 
     <!-- Main Content -->
@@ -166,6 +306,9 @@ function dbh_agent_reference_phone_display($phone) {
             </div>
         </header>
 
+<?php echo renderNotificationSlides('agents'); ?>
+
+
         <div class="dashboard-content">
             <div class="page-title">
                 <h1>Reference Lookup</h1>
@@ -209,7 +352,7 @@ function dbh_agent_reference_phone_display($phone) {
                                             <div>
                                                 <strong><?php echo htmlspecialchars($order['package_name']); ?></strong>
                                                 <div style="color: var(--text-muted); font-size: 0.85rem;">
-                                                    <?php echo htmlspecialchars($order['network_name']); ?> &bull; <?php echo htmlspecialchars($order['data_size']); ?>
+                                                    <?php echo htmlspecialchars($order['network_name']); ?> â€¢ <?php echo htmlspecialchars($order['data_size']); ?>
                                                 </div>
                                             </div>
                                             <span class="status-pill" style="background: <?php echo htmlspecialchars($status['color']); ?>;">
@@ -275,7 +418,8 @@ function dbh_agent_reference_phone_display($phone) {
     });
 </script>
 <script src="../immediate_icon_fix.js"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
-
 

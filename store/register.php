@@ -4,11 +4,6 @@ require_once __DIR__ . '/../includes/mnotify_sms.php';
 require_once __DIR__ . '/../includes/email.php';
 
 // Get store slug
-if (getSetting('enable_agent_stores', '1') === '0') {
-    require_once __DIR__ . '/store-offline.php';
-    exit();
-}
-
 $store_slug = $_GET['store'] ?? '';
 if (empty($store_slug)) {
     header('HTTP/1.0 404 Not Found');
@@ -21,7 +16,7 @@ $stmt = $db->prepare("
     SELECT ast.*, u.full_name AS agent_name, u.email AS agent_email
     FROM agent_stores ast
     JOIN users u ON ast.agent_id = u.id
-    WHERE ast.store_slug = ? AND ast.is_active = TRUE AND COALESCE(ast.admin_active, 1) = 1 AND u.account_activation_status = 'active'
+    WHERE ast.store_slug = ? AND ast.is_active = TRUE AND u.account_activation_status = 'active'
 ");
 $stmt->bind_param("s", $store_slug);
 $stmt->execute();
@@ -201,36 +196,11 @@ if ($_POST) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <script>
-        (function () {
-            try {
-                var savedTheme = localStorage.getItem('theme');
-                var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
-                document.documentElement.setAttribute('data-theme', savedTheme || (prefersDark ? 'dark' : 'light'));
-            } catch (e) {
-                document.documentElement.setAttribute('data-theme', 'light');
-            }
-        })();
-    </script>
     <title><?php echo htmlspecialchars($store['store_name']); ?> - Register</title>
-    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>"">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>">
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/store-custom.css')); ?>">
-    <?php if (!empty($store['primary_color'])): ?>
-        <style>
-            :root {
-                --store-accent: <?php echo htmlspecialchars($store['primary_color']); ?> !important;
-                --store-accent-strong: <?php echo htmlspecialchars($store['primary_color']); ?> !important;
-                --brand-primary: <?php echo htmlspecialchars($store['primary_color']); ?> !important;
-                --primary-color: <?php echo htmlspecialchars($store['primary_color']); ?> !important;
-            }
-        </style>
-    <?php endif; ?>
 </head>
-<body class="store-page">
+<body>
     <div class="login-container">
         <!-- Store Header Card -->
         <div class="store-header-card">
@@ -264,20 +234,20 @@ if ($_POST) {
                 <form method="POST" action="">
                     <div class="form-group">
                         <label for="full_name" class="form-label">Full Name *</label>
-                        <input type="text" class="form-control" id="full_name" name="full_name" required placeholder="Enter your full name">
+                        <input type="text" class="form-control" id="full_name" name="full_name" required>
                     </div>
                     <div class="form-group">
                         <label for="email" class="form-label">Email Address *</label>
-                        <input type="email" class="form-control" id="email" name="email" required placeholder="Enter your email">
+                        <input type="email" class="form-control" id="email" name="email" required>
                     </div>
                     <div class="form-group">
                         <label for="phone" class="form-label">Phone Number *</label>
-                        <input type="tel" class="form-control" id="phone" name="phone" required placeholder="Enter Ghana phone number">
+                        <input type="tel" class="form-control" id="phone" name="phone" required>
                     </div>
                     <div class="form-group">
                         <label for="password" class="form-label">Password *</label>
                         <div class="password-input-wrapper">
-                            <input type="password" class="form-control" id="password" name="password" required placeholder="Create a strong password">
+                            <input type="password" class="form-control" id="password" name="password" required>
                             <button type="button" class="password-toggle" data-target="password" aria-label="Show password">
                                 <i class="fas fa-eye"></i>
                             </button>
@@ -286,7 +256,7 @@ if ($_POST) {
                     <div class="form-group">
                         <label for="confirm_password" class="form-label">Confirm Password *</label>
                         <div class="password-input-wrapper">
-                            <input type="password" class="form-control" id="confirm_password" name="confirm_password" required placeholder="Confirm your password">
+                            <input type="password" class="form-control" id="confirm_password" name="confirm_password" required>
                             <button type="button" class="password-toggle" data-target="confirm_password" aria-label="Show password">
                                 <i class="fas fa-eye"></i>
                             </button>
@@ -296,13 +266,24 @@ if ($_POST) {
                 </form>
 
                 <div class="text-center mt-4">
-                    <p class="text-muted" style="color: var(--store-muted) !important;">Already have an account? <a href="login.php?store=<?php echo urlencode($store_slug); ?>&redirect=<?php echo urlencode('/customer/dashboard.php?store=' . $store_slug); ?>" class="text-primary" style="color: var(--store-accent) !important; font-weight: 600;">Log in</a></p>
+                    <p class="text-muted">Already have an account? <a href="login.php?store=<?php echo urlencode($store_slug); ?>&redirect=<?php echo urlencode('/customer/dashboard.php?store=' . $store_slug); ?>" class="text-primary">Log in</a></p>
                 </div>
             </div>
         </div>
     </div>
 
     <style>
+        /* Store-specific register page styles */
+        .store-header-card {
+            background: rgba(241, 233, 218, 0.95);
+            border-radius: var(--radius-lg);
+            padding: var(--spacing-lg);
+            margin-bottom: var(--spacing-lg);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(241, 233, 218, 0.2);
+        }
+        
         .store-brand {
             display: flex;
             align-items: center;
@@ -321,11 +302,12 @@ if ($_POST) {
         .store-logo-placeholder {
             width: 60px;
             height: 60px;
+            background: var(--brand-primary);
             border-radius: 50%;
             display: flex;
             align-items: center;
             justify-content: center;
-            color: white;
+            color: #F1E9DA;
             font-size: 1.5rem;
             flex-shrink: 0;
         }
@@ -333,17 +315,38 @@ if ($_POST) {
         .store-info h1 {
             margin: 0;
             font-size: 1.5rem;
-            line-height: 1.2;
+            color: var(--text-primary);
+            font-weight: 600;
         }
         
         .store-info p {
             margin: 0.25rem 0 0 0;
+            color: var(--text-secondary);
             font-size: 0.875rem;
             line-height: 1.4;
         }
         
-        /* Mobile responsiveness layout help */
+        /* Dark theme support for store register */
+        [data-theme="dark"] .store-header-card {
+            background: rgba(46, 41, 78, 0.95);
+            border-color: rgba(241, 233, 218, 0.1);
+        }
+        
+        [data-theme="dark"] .store-info h1 {
+            color: var(--text-primary);
+        }
+        
+        [data-theme="dark"] .store-info p {
+            color: var(--text-secondary);
+        }
+        
+        /* Mobile responsiveness for store register */
         @media (max-width: 768px) {
+            .store-header-card {
+                padding: var(--spacing-md);
+                margin: var(--spacing-md) var(--spacing-md) var(--spacing-lg) var(--spacing-md);
+            }
+            
             .store-brand {
                 gap: var(--spacing-sm);
             }
@@ -364,10 +367,10 @@ if ($_POST) {
             }
         }
     </style>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/public-polish.css')); ?>">
     
     <!-- Theme Support -->
-    <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/phone-paste.js')); ?>"></script>
-    <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/password-toggle.js')); ?>"></script>
-    <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/theme.js')); ?>"></script>
+    <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/password-toggle.js')); ?>""></script>
+    <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/theme.js')); ?>""></script>
 </body>
 </html>

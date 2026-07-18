@@ -5,56 +5,8 @@ require_once '../includes/commission.php';
 // Require admin role
 requireRole('admin');
 
-if (function_exists('ensureAgentCommissionTables')) {
-    ensureAgentCommissionTables();
-}
-if (function_exists('ensureCommissionPayoutTables')) {
-    ensureCommissionPayoutTables();
-}
-
 $error = '';
 $success = '';
-$current_user = getCurrentUser();
-$current_minimum_payout = (float) getCommissionPayoutSetting('global_minimum_payout', '0');
-$current_auto_payout_enabled = getCommissionPayoutSetting('auto_payout_enabled', 'false') === 'true';
-$paystack_payout_auto = function_exists('isPaystackTransferAutomationAvailable') && isPaystackTransferAutomationAvailable();
-$moolre_payout_url = trim((string) dbh_env('MOOLRE_PAYOUT_URL', defined('MOOLRE_PAYOUT_URL') ? MOOLRE_PAYOUT_URL : ''));
-$moolre_config = function_exists('getMoolreConfig') ? getMoolreConfig() : [];
-$moolre_payout_auto = $moolre_payout_url !== '' && function_exists('isMoolreConfigured') && isMoolreConfigured($moolre_config);
-$available_auto_payout_routes = [];
-if ($paystack_payout_auto) {
-    $available_auto_payout_routes['paystack_auto'] = 'Automatic Paystack';
-}
-if ($moolre_payout_auto) {
-    $available_auto_payout_routes['moolre_auto'] = 'Automatic Moolre';
-}
-$default_auto_payout_route = $paystack_payout_auto ? 'paystack_auto' : ($moolre_payout_auto ? 'moolre_auto' : '');
-
-$loadAgentsWithCommission = static function () use ($db) {
-    $stmt = $db->query("
-        SELECT u.id, u.full_name, u.email,
-               GREATEST(
-                   0,
-                   COALESCE(SUM(CASE WHEN ac.status = 'earned' THEN ac.amount ELSE 0 END), 0)
-                   - COALESCE(cl.reserved_commission, 0)
-               ) as pending_commission,
-               COUNT(CASE WHEN ac.status = 'earned' THEN 1 END) as pending_transactions
-        FROM users u
-        LEFT JOIN agent_commissions ac ON u.id = ac.agent_id AND ac.amount > 0
-        LEFT JOIN (
-            SELECT agent_id, COALESCE(SUM(liquidated_amount), 0) AS reserved_commission
-            FROM commission_liquidations
-            WHERE status IN ('pending', 'processing')
-            GROUP BY agent_id
-        ) cl ON cl.agent_id = u.id
-        WHERE u.role = 'agent'
-        GROUP BY u.id, u.full_name, u.email
-        HAVING pending_commission > 0
-        ORDER BY pending_commission DESC
-    ");
-
-    return $stmt ? $stmt->fetch_all(MYSQLI_ASSOC) : [];
-};
 
 // Handle manual payout processing
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -77,7 +29,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pending_commission = getAgentPendingCommission($agent_id);
                 
                 if ($payout_amount > $pending_commission) {
-                    $error = 'Payout amount cannot exceed pending commission of ' . CURRENCY . number_format($pending_commission, 2);
+                    $error = 'Payout amount cannot exceed pending commission of ???' . number_format($pending_commission, 2);
                 } else {
                     $db->getConnection()->begin_transaction();
                     
@@ -97,32 +49,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         require_once '../includes/functions.php';
                         updateWalletBalance($agent_id, $payout_amount, 'credit', $reference, 'Commission payout: ' . $notes);
                         
-                        if (function_exists('liquidateAgentCommissionRows') && function_exists('dbh_table_exists') && dbh_table_exists('agent_commissions')) {
-                            liquidateAgentCommissionRows($agent_id, $payout_amount);
-                        } else {
-                            // Legacy commission rows stored on transactions.
-                            $remaining_amount = $payout_amount;
-                            $stmt = $db->prepare("
-                                SELECT id, commission_earned
-                                FROM transactions
-                                WHERE user_id = ? AND commission_status = 'pending' AND commission_earned > 0
-                                ORDER BY created_at ASC
-                            ");
-                            $stmt->bind_param("i", $agent_id);
+                        // Update commission status to liquidated
+                        $stmt = $db->prepare("
+                            UPDATE transactions 
+                            SET commission_status = 'liquidated' 
+                            WHERE user_id = ? AND commission_status = 'pending' 
+                            ORDER BY created_at ASC 
+                            LIMIT ?
+                        ");
+                        
+                        // Calculate how many transactions to mark as liquidated
+                        $remaining_amount = $payout_amount;
+                        $stmt = $db->prepare("
+                            SELECT id, commission_earned 
+                            FROM transactions 
+                            WHERE user_id = ? AND commission_status = 'pending' AND commission_earned > 0
+                            ORDER BY created_at ASC
+                        ");
+                        $stmt->bind_param("i", $agent_id);
+                        $stmt->execute();
+                        $transactions = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+                        
+                        foreach ($transactions as $transaction) {
+                            if ($remaining_amount <= 0) break;
+                            
+                            $commission_to_liquidate = min($remaining_amount, $transaction['commission_earned']);
+                            
+                            $stmt = $db->prepare("UPDATE transactions SET commission_status = 'liquidated' WHERE id = ?");
+                            $stmt->bind_param("i", $transaction['id']);
                             $stmt->execute();
-                            $transactions = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-
-                            foreach ($transactions as $transaction) {
-                                if ($remaining_amount <= 0) break;
-
-                                $commission_to_liquidate = min($remaining_amount, $transaction['commission_earned']);
-
-                                $stmt = $db->prepare("UPDATE transactions SET commission_status = 'liquidated' WHERE id = ?");
-                                $stmt->bind_param("i", $transaction['id']);
-                                $stmt->execute();
-
-                                $remaining_amount -= $commission_to_liquidate;
-                            }
+                            
+                            $remaining_amount -= $commission_to_liquidate;
                         }
                         
                         $db->getConnection()->commit();
@@ -133,7 +90,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $stmt->execute();
                         $agent_name = $stmt->get_result()->fetch_assoc()['full_name'];
                         
-                        $success = "Successfully paid out " . CURRENCY . number_format($payout_amount, 2) . " to " . htmlspecialchars($agent_name);
+                        $success = "Successfully paid out ???" . number_format($payout_amount, 2) . " to " . htmlspecialchars($agent_name);
                         
                     } catch (Exception $e) {
                         $db->getConnection()->rollback();
@@ -141,111 +98,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
                 }
             }
-        } elseif ($action === 'process_bulk_auto_payout') {
-            $payout_route = trim((string) ($_POST['payout_route'] ?? $default_auto_payout_route));
-            $notes = sanitize($_POST['notes'] ?? '');
-
-            if ($payout_route === '' || !array_key_exists($payout_route, $available_auto_payout_routes)) {
-                $error = 'Select a valid automatic payout route.';
-            } else {
-                $bulkAgents = $loadAgentsWithCommission();
-                $completedCount = 0;
-                $processingCount = 0;
-                $failedCount = 0;
-                $skippedCount = 0;
-                $completedAmount = 0.0;
-                $processingAmount = 0.0;
-                $issues = [];
-
-                foreach ($bulkAgents as $agent) {
-                    $amount = round((float) ($agent['pending_commission'] ?? 0), 2);
-                    if ($amount <= 0) {
-                        continue;
-                    }
-
-                    if ($current_minimum_payout > 0 && $amount < $current_minimum_payout) {
-                        $skippedCount++;
-                        $issues[] = $agent['full_name'] . ' skipped: below minimum auto payout of ' . CURRENCY . number_format($current_minimum_payout, 2) . '.';
-                        continue;
-                    }
-
-                    $profile = getAgentCommissionPayoutProfile((int) $agent['id']);
-                    if (empty($profile['ready'])) {
-                        $skippedCount++;
-                        $issues[] = $agent['full_name'] . ' skipped: ' . implode(', ', (array) ($profile['issues'] ?? [])) . '.';
-                        continue;
-                    }
-
-                    $result = submitCommissionAutomaticPayout((int) $agent['id'], $amount, $payout_route, (int) ($current_user['id'] ?? 0), $notes);
-                    $status = strtolower(trim((string) ($result['status'] ?? 'failed')));
-
-                    if ($status === 'completed') {
-                        $completedCount++;
-                        $completedAmount += $amount;
-                    } elseif ($status === 'processing') {
-                        $processingCount++;
-                        $processingAmount += $amount;
-                    } else {
-                        $failedCount++;
-                        $issues[] = $agent['full_name'] . ': ' . (string) ($result['message'] ?? 'Automatic payout failed.');
-                    }
-                }
-
-                if ($completedCount === 0 && $processingCount === 0 && $skippedCount === 0 && $failedCount === 0) {
-                    $error = 'No agents are currently eligible for automatic payout.';
-                } else {
-                    $summary = [];
-                    if ($completedCount > 0) {
-                        $summary[] = $completedCount . ' completed (' . CURRENCY . number_format($completedAmount, 2) . ')';
-                    }
-                    if ($processingCount > 0) {
-                        $summary[] = $processingCount . ' processing (' . CURRENCY . number_format($processingAmount, 2) . ')';
-                    }
-                    if ($skippedCount > 0) {
-                        $summary[] = $skippedCount . ' skipped';
-                    }
-                    if ($failedCount > 0) {
-                        $summary[] = $failedCount . ' failed';
-                    }
-
-                    $success = 'Bulk automatic payout run finished via ' . $available_auto_payout_routes[$payout_route] . ': ' . implode(', ', $summary) . '.';
-                    if (!empty($issues)) {
-                        $error = implode(' ', array_slice($issues, 0, 6));
-                    }
-                }
-            }
         }
     }
 }
 
-$agents_with_commission = $loadAgentsWithCommission();
-
-$total_pending_commission = 0.0;
-$total_pending_transactions = 0;
-$auto_ready_agents = 0;
-$auto_ready_amount = 0.0;
-$missing_payout_agents = 0;
-
-foreach ($agents_with_commission as &$agent) {
-    $agent['pending_commission'] = round((float) ($agent['pending_commission'] ?? 0), 2);
-    $agent['pending_transactions'] = (int) ($agent['pending_transactions'] ?? 0);
-    $agent['payout_profile'] = getAgentCommissionPayoutProfile((int) $agent['id']);
-    $agent['meets_minimum'] = $current_minimum_payout <= 0 || $agent['pending_commission'] >= $current_minimum_payout;
-    $agent['auto_payout_ready'] = !empty($agent['payout_profile']['ready']) && $agent['meets_minimum'];
-
-    $total_pending_commission += $agent['pending_commission'];
-    $total_pending_transactions += $agent['pending_transactions'];
-
-    if ($agent['auto_payout_ready']) {
-        $auto_ready_agents++;
-        $auto_ready_amount += $agent['pending_commission'];
-    } elseif (empty($agent['payout_profile']['ready'])) {
-        $missing_payout_agents++;
-    }
-}
-unset($agent);
-
-$agents_awaiting_payout = count($agents_with_commission);
+// Get agents with pending commission
+$stmt = $db->query("
+    SELECT u.id, u.full_name, u.email,
+           SUM(CASE WHEN t.commission_status = 'pending' THEN t.commission_earned ELSE 0 END) as pending_commission,
+           COUNT(CASE WHEN t.commission_status = 'pending' THEN 1 END) as pending_transactions
+    FROM users u
+    LEFT JOIN transactions t ON u.id = t.user_id AND t.commission_earned > 0
+    WHERE u.role = 'agent'
+    GROUP BY u.id, u.full_name, u.email
+    HAVING pending_commission > 0
+    ORDER BY pending_commission DESC
+");
+$agents_with_commission = $stmt->fetch_all(MYSQLI_ASSOC);
 
 // Get recent payouts
 $stmt = $db->query("
@@ -268,177 +137,55 @@ if (!isset($_SESSION['csrf_token'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Commission Payouts - <?php echo SITE_NAME; ?></title>
+    <title>Manual Commission Payouts - <?php echo SITE_NAME; ?></title>
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>"">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>"">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>">
-    <style>
-        .commission-payouts-page .widget-content {
-            padding: var(--spacing-lg);
-        }
-
-        .commission-payouts-page .widget-header {
-            align-items: flex-start;
-            gap: var(--spacing-sm);
-            flex-wrap: wrap;
-        }
-
-        .commission-payouts-page .widget-subtitle {
-            margin: 0;
-            color: var(--text-secondary);
-            max-width: 60ch;
-        }
-
-        .commission-payouts-page .alert {
-            overflow-wrap: anywhere;
-        }
-
-        .commission-payouts-page .table td,
-        .commission-payouts-page .table th {
-            vertical-align: top;
-        }
-
-        .commission-payouts-page .table code {
-            white-space: normal;
-            overflow-wrap: anywhere;
-        }
-
-        .commission-payouts-page .table .btn {
-            width: 100%;
-        }
-
-        .commission-payouts-page .payout-chip {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.35rem;
-            padding: 0.3rem 0.6rem;
-            border-radius: 999px;
-            font-size: 0.78rem;
-            font-weight: 600;
-            line-height: 1;
-            white-space: nowrap;
-        }
-
-        .commission-payouts-page .payout-chip.ready {
-            background: rgba(34, 197, 94, 0.12);
-            color: #15803d;
-        }
-
-        .commission-payouts-page .payout-chip.missing {
-            background: rgba(239, 68, 68, 0.12);
-            color: #b91c1c;
-        }
-
-        .commission-payouts-page .payout-chip.waiting {
-            background: rgba(245, 158, 11, 0.14);
-            color: #b45309;
-        }
-
-        .commission-payouts-page .payout-meta {
-            display: grid;
-            gap: 0.25rem;
-        }
-
-        .commission-payouts-page .inline-list {
-            margin: 0;
-            color: var(--text-muted);
-            font-size: 0.875rem;
-        }
-
-        .commission-payouts-page .inline-list strong {
-            color: var(--text-primary);
-        }
-
-        .commission-payouts-page .widget-header-actions {
-            display: flex;
-            align-items: center;
-            gap: var(--spacing-sm);
-            flex-wrap: wrap;
-        }
-
-        @media (min-width: 769px) {
-            .commission-payouts-page .table-responsive {
-                overflow-x: visible;
-            }
-
-            .commission-payouts-page .table {
-                min-width: 0;
-                table-layout: fixed;
-            }
-
-            .commission-payouts-page .table td,
-            .commission-payouts-page .table th {
-                white-space: normal;
-                overflow-wrap: anywhere;
-            }
-
-            .commission-payouts-page .table .btn {
-                width: auto;
-                max-width: 100%;
-                white-space: normal;
-            }
-        }
-
-        @media (max-width: 768px) {
-            .commission-payouts-page .widget-content {
-                padding: var(--spacing-md);
-            }
-
-            .commission-payouts-page .page-title {
-                margin-bottom: var(--spacing-lg);
-            }
-
-            .commission-payouts-page .page-subtitle,
-            .commission-payouts-page .form-text,
-            .commission-payouts-page .widget-subtitle {
-                overflow-wrap: anywhere;
-            }
-
-            .commission-payouts-page .table-responsive {
-                margin-left: 0;
-                margin-right: 0;
-                border-left: 1px solid var(--border-color);
-                border-right: 1px solid var(--border-color);
-            }
-
-            .commission-payouts-page .responsive-table-stack tr {
-                padding: var(--spacing-md);
-            }
-
-            .commission-payouts-page .responsive-table-stack td[data-label="Actions"] {
-                padding-top: var(--spacing-sm);
-            }
-
-            .commission-payouts-page .widget-header-actions,
-            .commission-payouts-page .widget-header-actions .payout-chip {
-                width: 100%;
-            }
-        }
-
-        @media (max-width: 480px) {
-            .commission-payouts-page .widget-content {
-                padding: var(--spacing-sm);
-            }
-
-            .commission-payouts-page .responsive-table-stack tr {
-                padding: var(--spacing-sm);
-            }
-
-            .commission-payouts-page .form-actions .btn,
-            .commission-payouts-page .table .btn {
-                min-height: 44px;
-            }
-        }
-    </style>
 </head>
-<body class="commission-payouts-page">
+<body>
 <div class="dashboard-wrapper">
     <!-- Sidebar -->
     <nav class="sidebar">
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-                    <?php renderAdminSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Management</div>
+                <div class="nav-item"><a href="packages.php" class="nav-link"><i class="fas fa-box"></i> Data Packages</a></div>
+                <div class="nav-item"><a href="afa-registration.php" class="nav-link"><i class="fas fa-user-check"></i> AFA Registration</a></div>
+                <div class="nav-item"><a href="users.php" class="nav-link"><i class="fas fa-users"></i> Users</a></div>
+                <div class="nav-item"><a href="agents.php" class="nav-link"><i class="fas fa-user-tie"></i> Agents</a></div>
+            
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Commission</div>
+                <div class="nav-item"><a href="commission-settings.php" class="nav-link"><i class="fas fa-percentage"></i> Commission Settings</a></div>
+                <div class="nav-item"><a href="commission-payout-settings.php" class="nav-link"><i class="fas fa-calendar-alt"></i> Payout Settings</a></div>
+                <div class="nav-item"><a href="commission-liquidations.php" class="nav-link"><i class="fas fa-money-check-alt"></i> Liquidations</a></div>
+                <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
+                <div class="nav-item"><a href="commission-payouts.php" class="nav-link active"><i class="fas fa-wallet"></i> Manual Payouts</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Analytics</div>
+                <div class="nav-item"><a href="transactions.php" class="nav-link"><i class="fas fa-history"></i> Transactions</a></div>
+                <div class="nav-item"><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></div>
+                <div class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item"><a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> System Settings</a></div>
+                <div class="nav-item"><a href="email-broadcast.php" class="nav-link"><i class="fas fa-paper-plane"></i> Email Broadcasts</a></div>
+                <div class="nav-item"><a href="system-reset.php" class="nav-link"><i class="fas fa-broom"></i> System Reset</a></div>
+                <div class="nav-item"><a href="pwa-settings.php" class="nav-link"><i class="fas fa-mobile-alt"></i> PWA Settings</a></div>
+                <div class="nav-item"><a href="sms-settings.php" class="nav-link"><i class="fas fa-sms"></i> SMS Settings</a></div>
+            </li>
+        </ul>
     </nav>
 
     <!-- Main Content -->
@@ -449,7 +196,7 @@ if (!isset($_SESSION['csrf_token'])) {
                 <nav class="breadcrumb">
                     <div class="breadcrumb-item"><i class="fas fa-wallet"></i></div>
                     <div class="breadcrumb-item">Commission</div>
-                    <div class="breadcrumb-item active">Payouts</div>
+                    <div class="breadcrumb-item active">Manual Payouts</div>
                 </nav>
             </div>
             <div class="header-actions">
@@ -462,11 +209,11 @@ if (!isset($_SESSION['csrf_token'])) {
                         <div class="user-avatar">
                             <?php echo strtoupper(substr($_SESSION['username'], 0, 1)); ?>
                         </div>
-                        <div class="user-info">
-                            <div class="user-name"><?php echo htmlspecialchars($_SESSION['username']); ?></div>
-                            <div class="user-role">Administrator</div>
+                        <div>
+                            <div style="font-weight: 500;"><?php echo htmlspecialchars($_SESSION['username']); ?></div>
+                            <div style="font-size: 0.75rem; color: var(--text-muted);">Administrator</div>
                         </div>
-                        <i class="fas fa-chevron-down dropdown-arrow" style="margin-left: 0.5rem;"></i>
+                        <i class="fas fa-chevron-down" style="margin-left: 0.5rem;"></i>
                     </button>
                     
                     <div class="user-dropdown-menu" id="userDropdown">
@@ -487,56 +234,8 @@ if (!isset($_SESSION['csrf_token'])) {
 
         <div class="dashboard-content">
             <div class="page-title">
-                <h1>Commission Payouts</h1>
-                <p class="page-subtitle">Run wallet payouts manually or send eligible agent commissions to mobile money in bulk.</p>
-            </div>
-
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-icon primary">
-                        <i class="fas fa-coins"></i>
-                    </div>
-                    <div class="stat-content">
-                        <h3><?php echo CURRENCY . number_format($total_pending_commission, 2); ?></h3>
-                        <p>Total commission currently pending payout</p>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon warning">
-                        <i class="fas fa-users"></i>
-                    </div>
-                    <div class="stat-content">
-                        <h3><?php echo number_format($agents_awaiting_payout); ?></h3>
-                        <p>Agents awaiting payout</p>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon success">
-                        <i class="fas fa-receipt"></i>
-                    </div>
-                    <div class="stat-content">
-                        <h3><?php echo number_format($total_pending_transactions); ?></h3>
-                        <p>Commission entries waiting to be paid</p>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon success">
-                        <i class="fas fa-mobile-alt"></i>
-                    </div>
-                    <div class="stat-content">
-                        <h3><?php echo number_format($auto_ready_agents); ?></h3>
-                        <p>Agents ready for automatic MoMo payout</p>
-                    </div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-icon danger">
-                        <i class="fas fa-triangle-exclamation"></i>
-                    </div>
-                    <div class="stat-content">
-                        <h3><?php echo number_format($missing_payout_agents); ?></h3>
-                        <p>Agents missing payout details</p>
-                    </div>
-                </div>
+                <h1>Manual Commission Payouts</h1>
+                <p class="page-subtitle">Manually credit agent commissions to their wallets.</p>
             </div>
 
             <?php if ($error): ?>
@@ -551,86 +250,11 @@ if (!isset($_SESSION['csrf_token'])) {
                 </div>
             <?php endif; ?>
 
-            <!-- Bulk Automatic Payout -->
-            <div class="widget">
-                <div class="widget-header">
-                    <div>
-                        <h3 class="widget-title">Bulk Automatic MoMo Payout</h3>
-                        <p class="widget-subtitle">Uses each agent's saved payment settings and pays the full pending commission for agents who are ready.</p>
-                    </div>
-                    <div class="widget-header-actions">
-                        <?php if ($current_auto_payout_enabled): ?>
-                            <span class="payout-chip ready"><i class="fas fa-bolt"></i> Auto payout enabled</span>
-                        <?php else: ?>
-                            <span class="payout-chip waiting"><i class="fas fa-sliders-h"></i> Auto payout setting is off</span>
-                        <?php endif; ?>
-                        <span class="payout-chip <?php echo !empty($available_auto_payout_routes) ? 'ready' : 'missing'; ?>">
-                            <i class="fas fa-route"></i>
-                            <?php echo !empty($available_auto_payout_routes) ? count($available_auto_payout_routes) . ' route(s) available' : 'No automatic route configured'; ?>
-                        </span>
-                    </div>
-                </div>
-                <div class="widget-content">
-                    <p class="inline-list">
-                        <strong>Eligible now:</strong> <?php echo number_format($auto_ready_agents); ?> agents,
-                        <?php echo CURRENCY . number_format($auto_ready_amount, 2); ?> total
-                        <?php if ($current_minimum_payout > 0): ?>
-                            , minimum auto payout <?php echo CURRENCY . number_format($current_minimum_payout, 2); ?>
-                        <?php endif; ?>
-                    </p>
-                    <p class="inline-list">
-                        Agents should save their MoMo network, account name, and number in <a href="../agent/payment-settings.php">Payment Settings</a>.
-                    </p>
-
-                    <form method="post" class="form" style="margin-top: 1rem;">
-                        <input type="hidden" name="csrf_token" value="<?php echo $_SESSION['csrf_token']; ?>">
-                        <input type="hidden" name="action" value="process_bulk_auto_payout">
-
-                        <div class="form-grid">
-                            <div class="form-group">
-                                <label for="payout_route" class="form-label">Automatic Payout Route</label>
-                                <select id="payout_route" name="payout_route" class="form-control" <?php echo empty($available_auto_payout_routes) ? 'disabled' : ''; ?> required>
-                                    <?php if (empty($available_auto_payout_routes)): ?>
-                                        <option value="">No route configured</option>
-                                    <?php else: ?>
-                                        <?php foreach ($available_auto_payout_routes as $routeKey => $routeLabel): ?>
-                                            <option value="<?php echo htmlspecialchars($routeKey); ?>" <?php echo $routeKey === $default_auto_payout_route ? 'selected' : ''; ?>>
-                                                <?php echo htmlspecialchars($routeLabel); ?>
-                                            </option>
-                                        <?php endforeach; ?>
-                                    <?php endif; ?>
-                                </select>
-                                <small class="form-text">Paystack stays in processing until its transfer webhook confirms the final result.</small>
-                            </div>
-
-                            <div class="form-group">
-                                <label class="form-label">Bulk Eligibility</label>
-                                <div class="form-control" style="display:flex; align-items:center;">
-                                    <?php echo number_format($auto_ready_agents); ?> agents / <?php echo CURRENCY . number_format($auto_ready_amount, 2); ?>
-                                </div>
-                                <small class="form-text">Only agents with payout details and commissions above the minimum threshold are included.</small>
-                            </div>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="bulk_notes" class="form-label">Notes</label>
-                            <textarea id="bulk_notes" name="notes" class="form-control" rows="3" placeholder="Optional note to attach to each automatic payout record"></textarea>
-                        </div>
-
-                        <div class="form-actions">
-                            <button type="submit" class="btn btn-primary" <?php echo empty($available_auto_payout_routes) || $auto_ready_agents === 0 ? 'disabled' : ''; ?>>
-                                <i class="fas fa-paper-plane"></i> Run Bulk Automatic Payout
-                            </button>
-                        </div>
-                    </form>
-                </div>
-            </div>
-
             <!-- Manual Payout Form -->
             <div class="widget">
                 <div class="widget-header">
                     <h3 class="widget-title">Process Manual Payout</h3>
-                    <p class="widget-subtitle">Credit commission earnings directly to an agent's wallet when you do not want to use automatic MoMo payout.</p>
+                    <p class="widget-subtitle">Credit commission earnings directly to an agent's wallet.</p>
                 </div>
                 <div class="widget-content">
                     <form method="post" class="form">
@@ -647,16 +271,15 @@ if (!isset($_SESSION['csrf_token'])) {
                                                 data-commission="<?php echo $agent['pending_commission']; ?>"
                                                 data-transactions="<?php echo $agent['pending_transactions']; ?>">
                                             <?php echo htmlspecialchars($agent['full_name']); ?> - 
-                                            <?php echo CURRENCY . number_format($agent['pending_commission'], 2); ?> pending
-                                            <?php if (!empty($agent['auto_payout_ready'])): ?> - auto ready<?php endif; ?>
+                                            ???<?php echo number_format($agent['pending_commission'], 2); ?> pending
                                         </option>
                                     <?php endforeach; ?>
                                 </select>
-                                <small class="form-text">Only agents with pending commission are shown. "Auto ready" means saved MoMo details are available too.</small>
+                                <small class="form-text">Only agents with pending commission are shown.</small>
                             </div>
                             
                             <div class="form-group">
-                                <label for="payout_amount" class="form-label">Payout Amount (<?php echo CURRENCY; ?>)</label>
+                                <label for="payout_amount" class="form-label">Payout Amount (???)</label>
                                 <input type="number" id="payout_amount" name="payout_amount" class="form-control" 
                                        min="0.01" max="10000" step="0.01" required>
                                 <small class="form-text" id="commission-info">Select an agent to see available commission.</small>
@@ -687,64 +310,31 @@ if (!isset($_SESSION['csrf_token'])) {
                 <div class="widget-content">
                     <?php if (!empty($agents_with_commission)): ?>
                         <div class="table-responsive">
-                            <table class="table responsive-table-stack">
+                            <table class="table">
                                 <thead>
                                     <tr>
                                         <th>Agent</th>
                                         <th>Pending Commission</th>
                                         <th>Transactions</th>
-                                        <th>Payout Details</th>
-                                        <th>Auto Status</th>
                                         <th>Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <?php foreach ($agents_with_commission as $agent): ?>
                                     <tr>
-                                        <td data-label="Agent">
+                                        <td>
                                             <div>
                                                 <div style="font-weight: 500;"><?php echo htmlspecialchars($agent['full_name']); ?></div>
                                                 <div style="font-size: 0.875rem; color: var(--text-muted);"><?php echo htmlspecialchars($agent['email']); ?></div>
                                             </div>
                                         </td>
-                                        <td data-label="Pending Commission">
+                                        <td>
                                             <span style="font-weight: 500; color: var(--brand-primary);">
-                                                <?php echo CURRENCY . number_format($agent['pending_commission'], 2); ?>
+                                                ???<?php echo number_format($agent['pending_commission'], 2); ?>
                                             </span>
                                         </td>
-                                        <td data-label="Transactions"><?php echo number_format($agent['pending_transactions']); ?> transactions</td>
-                                        <td data-label="Payout Details">
-                                            <div class="payout-meta">
-                                                <div><?php echo htmlspecialchars($agent['payout_profile']['name'] ?: 'No account name'); ?></div>
-                                                <div style="font-size: 0.875rem; color: var(--text-muted);">
-                                                    <?php
-                                                    $details = [];
-                                                    if (!empty($agent['payout_profile']['network']) && strtoupper($agent['payout_profile']['network']) !== 'N/A') {
-                                                        $details[] = $agent['payout_profile']['network'];
-                                                    }
-                                                    if (!empty($agent['payout_profile']['number'])) {
-                                                        $details[] = $agent['payout_profile']['number'];
-                                                    }
-                                                    echo htmlspecialchars(!empty($details) ? implode(' | ', $details) : 'No payout details saved');
-                                                    ?>
-                                                </div>
-                                            </div>
-                                        </td>
-                                        <td data-label="Auto Status">
-                                            <?php if (!empty($agent['auto_payout_ready'])): ?>
-                                                <span class="payout-chip ready"><i class="fas fa-check-circle"></i> Ready</span>
-                                            <?php elseif (empty($agent['meets_minimum'])): ?>
-                                                <span class="payout-chip waiting"><i class="fas fa-hourglass-half"></i> Below minimum</span>
-                                            <?php else: ?>
-                                                <span class="payout-chip missing"><i class="fas fa-triangle-exclamation"></i> Missing details</span>
-                                                <?php if (!empty($agent['payout_profile']['issues'])): ?>
-                                                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 0.35rem;">
-                                                        <?php echo htmlspecialchars(implode(', ', $agent['payout_profile']['issues'])); ?>
-                                                    </div>
-                                                <?php endif; ?>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td data-label="Actions">
+                                        <td><?php echo number_format($agent['pending_transactions']); ?> transactions</td>
+                                        <td>
                                             <button class="btn btn-sm btn-primary" onclick="selectAgent(<?php echo $agent['id']; ?>)">
                                                 <i class="fas fa-credit-card"></i> Pay Out
                                             </button>
@@ -773,14 +363,12 @@ if (!isset($_SESSION['csrf_token'])) {
                 <div class="widget-content">
                     <?php if (!empty($recent_payouts)): ?>
                         <div class="table-responsive">
-                            <table class="table responsive-table-stack">
+                            <table class="table">
                                 <thead>
                                     <tr>
                                         <th>Reference</th>
                                         <th>Agent</th>
                                         <th>Amount</th>
-                                        <th>Method</th>
-                                        <th>Provider</th>
                                         <th>Processed By</th>
                                         <th>Date</th>
                                         <th>Status</th>
@@ -789,28 +377,15 @@ if (!isset($_SESSION['csrf_token'])) {
                                 <tbody>
                                     <?php foreach ($recent_payouts as $payout): ?>
                                     <tr>
-                                        <td data-label="Reference"><code><?php echo htmlspecialchars($payout['reference_number']); ?></code></td>
-                                        <td data-label="Agent"><?php echo htmlspecialchars($payout['agent_name']); ?></td>
-                                        <td data-label="Amount"><?php echo CURRENCY . number_format($payout['commission_amount'], 2); ?></td>
-                                        <td data-label="Method"><?php echo htmlspecialchars((string) ($payout['payout_method'] ?? 'wallet_credit')); ?></td>
-                                        <td data-label="Provider">
-                                            <?php
-                                            $providerBits = [];
-                                            if (!empty($payout['payout_provider'])) {
-                                                $providerBits[] = ucfirst((string) $payout['payout_provider']);
-                                            }
-                                            if (!empty($payout['provider_status'])) {
-                                                $providerBits[] = strtolower((string) $payout['provider_status']);
-                                            }
-                                            echo htmlspecialchars(!empty($providerBits) ? implode(' | ', $providerBits) : 'Manual');
-                                            ?>
-                                        </td>
-                                        <td data-label="Processed By"><?php echo htmlspecialchars($payout['processed_by_name'] ?? 'System'); ?></td>
-                                        <td data-label="Date"><?php echo date('M j, Y H:i', strtotime($payout['created_at'])); ?></td>
-                                        <td data-label="Status">
+                                        <td><code><?php echo htmlspecialchars($payout['reference_number']); ?></code></td>
+                                        <td><?php echo htmlspecialchars($payout['agent_name']); ?></td>
+                                        <td>???<?php echo number_format($payout['commission_amount'], 2); ?></td>
+                                        <td><?php echo htmlspecialchars($payout['processed_by_name'] ?? 'System'); ?></td>
+                                        <td><?php echo date('M j, Y H:i', strtotime($payout['created_at'])); ?></td>
+                                        <td>
                                             <span class="badge badge-<?php 
-                                                echo $payout['status'] === 'completed' ? 'success' :
-                                                    (($payout['status'] === 'failed' || $payout['status'] === 'reversed') ? 'danger' : 'warning');
+                                                echo $payout['status'] === 'completed' ? 'success' : 
+                                                    ($payout['status'] === 'failed' ? 'danger' : 'warning'); 
                                             ?>">
                                                 <?php echo ucfirst($payout['status']); ?>
                                             </span>
@@ -872,7 +447,7 @@ function updateCommissionInfo() {
         
         amountInput.max = commission;
         amountInput.value = commission;
-        infoText.textContent = `Available: <?php echo CURRENCY; ?>${commission.toFixed(2)} from ${transactions} transactions`;
+        infoText.textContent = `Available: ???${commission.toFixed(2)} from ${transactions} transactions`;
         infoText.style.color = 'var(--brand-primary)';
     } else {
         amountInput.max = 10000;

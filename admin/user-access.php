@@ -209,7 +209,7 @@ $query_base = [
         .table-wrap table { width: 100%; min-width: 980px; }
         .table-wrap.small table { min-width: 430px; }
         .table-wrap.logs table { min-width: 980px; }
-        .table-wrap thead th { position: sticky; top: 0; z-index: 2; background: var(--bg-primary, #fff); }
+        .table-wrap thead th { position: sticky; top: 0; z-index: 2; background: var(--bg-primary, #F1E9DA); }
         .table-wrap th,
         .table-wrap td {
             white-space: nowrap;
@@ -262,7 +262,18 @@ $query_base = [
     <div class="sidebar-overlay" id="sidebarOverlay"></div>
     <nav class="sidebar">
         <div class="sidebar-brand"><h3><?php echo htmlspecialchars(getSiteName()); ?></h3></div>
-                    <?php renderAdminSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section"><div class="nav-section-title">Dashboard</div><div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div></li>
+            <li class="nav-section">
+                <div class="nav-section-title">Analytics</div>
+                <div class="nav-item"><a href="transactions.php" class="nav-link"><i class="fas fa-history"></i> Transactions</a></div>
+                <div class="nav-item"><a href="data-histories.php" class="nav-link"><i class="fas fa-database"></i> Data Histories</a></div>
+                <div class="nav-item"><a href="user-access.php" class="nav-link active"><i class="fas fa-user-shield"></i> User Access</a></div>
+                <div class="nav-item"><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></div>
+            </li>
+            <li class="nav-section"><div class="nav-section-title">Management</div><div class="nav-item"><a href="afa-registration.php" class="nav-link"><i class="fas fa-user-check"></i> AFA Registration</a></div></li>
+            <li class="nav-section"><div class="nav-section-title">Quick Links</div><div class="nav-item"><a href="users.php" class="nav-link"><i class="fas fa-users"></i> Users</a></div><div class="nav-item"><a href="support.php" class="nav-link"><i class="fas fa-life-ring"></i> Support</a></div></li>
+        </ul>
     </nav>
 
     <main class="main-content">

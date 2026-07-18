@@ -9,10 +9,6 @@ requireRole('customer');
 
 $current_user = getCurrentUser();
 $wallet_balance = getWalletBalance($current_user['id']);
-ensureDataPackageStockStatusColumn();
-$customer_pricing_type = getCustomerPricingUserType($current_user);
-$is_vip_portal = defined('VIP_PORTAL') && VIP_PORTAL;
-$portal_role_label = $is_vip_portal ? 'VIP' : 'Customer';
 
 $store_slug = $_GET['store'] ?? null;
 $agent_store = null;
@@ -50,28 +46,22 @@ if ($store_slug) {
 $packages_query = "
     SELECT dp.id, dp.name, 
            COALESCE(n.name, 'Unknown') AS network_name, 
-           COALESCE(n.color, '#007bff') as network_color, 
+           COALESCE(n.color, '#541388') as network_color, 
            dp.package_type, dp.data_size, dp.validity_days,
-           COALESCE(dp.stock_status, 'in_stock') AS stock_status,
-           COALESCE(pp.price, pp_customer_fallback.price, dp.price, 0) as customer_price
+           COALESCE(pp.price, dp.price, 0) as customer_price
     FROM data_packages dp
     LEFT JOIN networks n ON n.id = dp.network_id AND n.is_active = 1
-    LEFT JOIN package_pricing pp ON pp.package_id = dp.id AND pp.user_type = ?
-    LEFT JOIN package_pricing pp_customer_fallback ON pp_customer_fallback.package_id = dp.id AND pp_customer_fallback.user_type = 'customer'
-    WHERE n.name = 'MTN' AND (pp.price IS NOT NULL OR pp_customer_fallback.price IS NOT NULL OR dp.price > 0) AND dp.status = 'active'
-      AND COALESCE(dp.stock_status, 'in_stock') = 'in_stock'
-    GROUP BY dp.id, dp.name, COALESCE(n.name, 'Unknown'), COALESCE(n.color, '#007bff'),
-             dp.package_type, dp.data_size, dp.validity_days, COALESCE(dp.stock_status, 'in_stock'), COALESCE(pp.price, pp_customer_fallback.price, dp.price, 0)
-    ORDER BY COALESCE(pp.price, pp_customer_fallback.price, dp.price, 0) ASC
+    LEFT JOIN package_pricing pp ON pp.package_id = dp.id AND pp.user_type = 'customer'
+    WHERE n.name = 'MTN' AND (pp.price IS NOT NULL OR dp.price > 0) AND dp.status = 'active'
+    GROUP BY dp.id, dp.name, COALESCE(n.name, 'Unknown'), COALESCE(n.color, '#541388'),
+             dp.package_type, dp.data_size, dp.validity_days, COALESCE(pp.price, dp.price, 0)
+    ORDER BY COALESCE(pp.price, dp.price, 0) ASC
 ";
 
-$packages_stmt = $db->prepare($packages_query);
-$packages_stmt->bind_param('s', $customer_pricing_type);
-$packages_stmt->execute();
-$packages_rs = $packages_stmt->get_result();
+$packages_rs = $db->query($packages_query);
 $mtn_packages = [];
 while ($row = $packages_rs->fetch_assoc()) {
-    if ($customer_pricing_type !== 'vip' && $agent_store && isset($agent_pricing[$row['id']])) {
+    if ($agent_store && isset($agent_pricing[$row['id']])) {
         $row['display_price'] = $agent_pricing[$row['id']];
         $row['is_agent_price'] = true;
     } else {
@@ -89,100 +79,13 @@ $flash = getFlashMessage();
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bulk MTN Orders - <?php echo SITE_NAME; ?></title>
-    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>"">
-    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>"">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>">
 </head>
 <body>
 <div class="dashboard-wrapper">
-    <!-- Sidebar -->
-    <nav class="sidebar">
-        <div class="sidebar-brand">
-            <h3><?php echo $agent_store ? htmlspecialchars($agent_store['store_name']) : htmlspecialchars(getSiteName()); ?></h3>
-            <?php if ($agent_store): ?>
-                <small style="opacity: 0.7; font-size: 0.8rem;">by <?php echo htmlspecialchars($agent_store['agent_name']); ?></small>
-            <?php endif; ?>
-        </div>
-        
-        <ul class="sidebar-nav">
-            <li class="nav-section">
-                <div class="nav-section-title">Dashboard</div>
-                <div class="nav-item">
-                    <a href="dashboard.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-home"></i>
-                        Dashboard
-                    </a>
-                </div>
-            </li>
-            
-            <li class="nav-section">
-                <div class="nav-section-title">Services</div>
-                <div class="nav-item">
-                    <a href="buy-data.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-mobile-alt"></i>
-                        Buy Data
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="bulk-mtn.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link active">
-                        <i class="fas fa-layer-group"></i>
-                        Bulk MTN
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="result-checker.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-award"></i>
-                        Result Checker
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="order-history.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-history"></i>
-                        Order History
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="reference.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-search"></i>
-                        Reference
-                    </a>
-                </div>
-            </li>
-            
-            <li class="nav-section">
-                <div class="nav-section-title">Account</div>
-                <div class="nav-item">
-                    <a href="wallet.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-wallet"></i>
-                        Wallet
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="profile.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-user"></i>
-                        Profile
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="support.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-life-ring"></i>
-                        Support
-                    </a>
-                </div>
-            </li>
-            
-            <li class="nav-section">
-                <div class="nav-section-title">Settings</div>
-                <div class="nav-item">
-                    <a href="../logout.php" class="nav-link">
-                        <i class="fas fa-sign-out-alt"></i>
-                        Logout
-                    </a>
-                </div>
-            </li>
-        </ul>
-    </nav>
-    
+    <?php require_once '../includes/customer_sidebar.php'; ?>
     <!-- Main Content -->
     <main class="main-content">
         <header class="dashboard-header">
@@ -208,13 +111,13 @@ $flash = getFlashMessage();
                 <div class="user-dropdown">
                     <button class="user-dropdown-toggle" onclick="toggleUserDropdown()">
                         <div class="user-avatar">
-                            <i class="fas fa-user"></i>
+                            <?php echo strtoupper(substr($current_user['full_name'] ?? $_SESSION['username'], 0, 1)); ?>
                         </div>
-                        <div class="user-info">
-                            <div class="user-name"><?php echo htmlspecialchars($current_user['full_name'] ?? $_SESSION['username']); ?></div>
-                            <div class="user-role"><?php echo htmlspecialchars($portal_role_label); ?></div>
+                        <div>
+                            <div style="font-weight: 500;"><?php echo htmlspecialchars($current_user['full_name'] ?? $_SESSION['username']); ?></div>
+                            <div style="font-size: 0.75rem; color: var(--text-muted);">Customer</div>
                         </div>
-                        <i class="fas fa-chevron-down dropdown-arrow"></i>
+                        <i class="fas fa-chevron-down" style="margin-left: 0.5rem;"></i>
                     </button>
                     
                     <div class="user-dropdown-menu" id="userDropdown">
@@ -638,7 +541,7 @@ $flash = getFlashMessage();
         gap: 0.5rem;
         padding: 0.5rem 1rem;
         background: var(--success-color);
-        color: white;
+        color: #F1E9DA;
         border-radius: var(--border-radius);
         font-weight: 600;
         margin-right: 1rem;
@@ -647,20 +550,6 @@ $flash = getFlashMessage();
     @media (max-width: 992px) {
         .dashboard-grid {
             grid-template-columns: 1fr !important;
-        }
-    }
-
-    @media (max-width: 768px) {
-        .wallet-balance {
-            display: none;
-        }
-
-        .user-dropdown-toggle {
-            min-width: 44px;
-        }
-
-        .user-avatar {
-            flex-shrink: 0;
         }
     }
 </style>

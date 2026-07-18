@@ -13,9 +13,6 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
 }
 
 $input = json_decode(file_get_contents('php://input'), true);
-if (!is_array($input)) {
-    $input = $_POST;
-}
 $amount = floatval($input['amount'] ?? 0);
 $type = sanitize($input['type'] ?? '');
 $store_slug = sanitize($input['store_slug'] ?? '');
@@ -44,22 +41,16 @@ if ($amount > $max_allowed) {
     exit();
 }
 
-if (!in_array($type, ['wallet_topup', 'agent_wallet_topup', 'customer_wallet_topup', 'vip_wallet_topup'], true)) {
+if (!in_array($type, ['wallet_topup', 'agent_wallet_topup', 'customer_wallet_topup'], true)) {
     http_response_code(400);
     echo json_encode(['status' => 'error', 'message' => 'Invalid transaction type']);
     exit();
 }
 
-$requested_gateway = normalizePaymentGateway($input['gateway'] ?? '');
-if ($requested_gateway !== '' && $requested_gateway !== 'moolre') {
+$active_gateway = getActivePaymentGateway();
+if ($active_gateway !== 'moolre') {
     http_response_code(400);
-    echo json_encode(['status' => 'error', 'message' => 'Invalid gateway selection for this endpoint.']);
-    exit();
-}
-
-if (!isPaymentGatewayEnabled('moolre')) {
-    http_response_code(400);
-    echo json_encode(['status' => 'error', 'message' => 'Moolre is currently disabled by admin settings.']);
+    echo json_encode(['status' => 'error', 'message' => 'Moolre is not the active gateway.']);
     exit();
 }
 
@@ -85,7 +76,6 @@ try {
 
     $metadata = [
         'type' => $type,
-        'buyer_role' => $current_user['role'] ?? 'customer',
         'store_slug' => $store_slug,
         'user_id' => $current_user['id'],
         'payment_gateway' => 'moolre'

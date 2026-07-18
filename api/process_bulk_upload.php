@@ -7,7 +7,6 @@ requireRole('agent');
 
 $current_user = getCurrentUser();
 $agent_id = $current_user['id'];
-ensureDataPackageStockStatusColumn();
 
 header('Content-Type: application/json');
 
@@ -56,8 +55,7 @@ try {
     
     // Get available packages for the network
     $stmt = $db->prepare("
-        SELECT dp.id, dp.data_size, dp.price,
-               COALESCE(dp.stock_status, 'in_stock') AS stock_status,
+        SELECT dp.id, dp.data_size, dp.price, 
                COALESCE(pp.price, dp.price) as effective_price,
                acp.custom_price
         FROM data_packages dp
@@ -65,7 +63,6 @@ try {
         LEFT JOIN package_pricing pp ON pp.package_id = dp.id AND pp.user_type = 'agent'
         LEFT JOIN agent_custom_pricing acp ON acp.package_id = dp.id AND acp.agent_id = ? AND acp.is_active = 1
         WHERE n.name = ? AND dp.status = 'active'
-          AND COALESCE(dp.stock_status, 'in_stock') = 'in_stock'
         ORDER BY dp.data_size
     ");
     $stmt->bind_param('is', $agent_id, $network);
@@ -74,7 +71,7 @@ try {
     
     $packages = [];
     while ($pkg = $packages_result->fetch_assoc()) {
-        $final_price = $pkg['effective_price'];
+        $final_price = $pkg['custom_price'] ?? $pkg['effective_price'];
         $packages[strtolower($pkg['data_size'])] = [
             'id' => $pkg['id'],
             'price' => $final_price,
@@ -191,11 +188,7 @@ try {
         }
         
         // Deduct total from wallet
-        $deduction_ref = 'BULK_' . time() . '_' . rand(1000, 9999);
-        $wallet_updated = updateWalletBalance($agent_id, $total_cost, 'debit', $deduction_ref, 'Bulk upload: ' . $success_count . ' orders');
-        if (!$wallet_updated) {
-            throw new Exception('Failed to deduct bulk order cost from agent wallet.');
-        }
+        updateWalletBalance($agent_id, -$total_cost, 'Bulk upload: ' . $success_count . ' orders');
         
         $db->getConnection()->commit();
         

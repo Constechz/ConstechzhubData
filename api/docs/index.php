@@ -17,8 +17,8 @@ require_once '../../config/config.php';
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             line-height: 1.6;
-            color: #333;
-            background: #f8f9fa;
+            color: #2E294E;
+            background: #F1E9DA;
         }
         
         .container {
@@ -28,18 +28,18 @@ require_once '../../config/config.php';
         }
         
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
+            background: linear-gradient(135deg, #541388 0%, #2E294E 100%);
+            color: #F1E9DA;
             padding: 3rem 0;
             margin: -2rem -2rem 2rem -2rem;
             text-align: center;
         }
         
         .nav {
-            background: white;
+            background: #F1E9DA;
             padding: 1rem;
             border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 10px rgba(46, 41, 78, 0.1);
             margin-bottom: 2rem;
             position: sticky;
             top: 2rem;
@@ -54,7 +54,7 @@ require_once '../../config/config.php';
         }
         
         .nav a {
-            color: #667eea;
+            color: #541388;
             text-decoration: none;
             padding: 0.5rem 1rem;
             border-radius: 4px;
@@ -62,27 +62,27 @@ require_once '../../config/config.php';
         }
         
         .nav a:hover {
-            background: #f0f2ff;
+            background: #F1E9DA;
         }
         
         .section {
-            background: white;
+            background: #F1E9DA;
             padding: 2rem;
             border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 10px rgba(46, 41, 78, 0.1);
             margin-bottom: 2rem;
         }
         
         .section h2 {
-            color: #667eea;
+            color: #541388;
             margin-bottom: 1rem;
             padding-bottom: 0.5rem;
-            border-bottom: 2px solid #f0f2ff;
+            border-bottom: 2px solid #F1E9DA;
         }
         
         .endpoint {
-            background: #f8f9fa;
-            border: 1px solid #e9ecef;
+            background: #F1E9DA;
+            border: 1px solid #F1E9DA;
             border-radius: 6px;
             padding: 1.5rem;
             margin: 1rem 0;
@@ -97,14 +97,14 @@ require_once '../../config/config.php';
             margin-right: 1rem;
         }
         
-        .method.get { background: #d4edda; color: #155724; }
-        .method.post { background: #d1ecf1; color: #0c5460; }
-        .method.put { background: #fff3cd; color: #856404; }
-        .method.delete { background: #f8d7da; color: #721c24; }
+        .method.get { background: #F1E9DA; color: #2E294E; }
+        .method.post { background: #F1E9DA; color: #2E294E; }
+        .method.put { background: #F1E9DA; color: #2E294E; }
+        .method.delete { background: #F1E9DA; color: #2E294E; }
         
         .code-block {
-            background: #2d3748;
-            color: #e2e8f0;
+            background: #2E294E;
+            color: #F1E9DA;
             padding: 1rem;
             border-radius: 6px;
             overflow-x: auto;
@@ -123,33 +123,33 @@ require_once '../../config/config.php';
         .params-table td {
             padding: 0.75rem;
             text-align: left;
-            border-bottom: 1px solid #e9ecef;
+            border-bottom: 1px solid #F1E9DA;
         }
         
         .params-table th {
-            background: #f8f9fa;
+            background: #F1E9DA;
             font-weight: 600;
         }
         
         .required {
-            color: #dc3545;
+            color: #D90368;
             font-weight: bold;
         }
         
         .optional {
-            color: #6c757d;
+            color: #541388;
         }
         
         .response-example {
-            background: #f8f9fa;
-            border-left: 4px solid #28a745;
+            background: #F1E9DA;
+            border-left: 4px solid #2E294E;
             padding: 1rem;
             margin: 1rem 0;
         }
         
         .error-example {
-            background: #f8f9fa;
-            border-left: 4px solid #dc3545;
+            background: #F1E9DA;
+            border-left: 4px solid #D90368;
             padding: 1rem;
             margin: 1rem 0;
         }
@@ -272,13 +272,13 @@ require_once '../../config/config.php';
       "id": 1,
       "name": "MTN",
       "code": "MTN",
-      "color": "#ffcc00"
+      "color": "#FFD400"
     },
     {
       "id": 2,
       "name": "AT",
       "code": "AT",
-      "color": "#ff6600"
+      "color": "#FFD400"
     }
   ]
 }</div>
@@ -612,3 +612,4 @@ else:
     </div>
 </body>
 </html>
+

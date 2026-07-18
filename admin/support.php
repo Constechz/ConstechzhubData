@@ -20,7 +20,15 @@ $csrf = generateCSRF();
   <div class="dashboard-wrapper">
     <nav class="sidebar">
       <div class="sidebar-brand"><h3>Admin</h3></div>
-                  <?php renderAdminSidebar(); ?>
+      <ul class="sidebar-nav">
+        <li class="nav-item"><a class="nav-link" href="dashboard.php"><i class="fas fa-home"></i> Dashboard</a></li>
+        <li class="nav-item"><a class="nav-link" href="manual_topup.php"><i class="fas fa-plus-circle"></i> Manual Top-up</a></li>
+        <li class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></li>
+        <li class="nav-item"><a class="nav-link" href="result-checker.php"><i class="fas fa-award"></i> Result Checker</a></li>
+        <li class="nav-item"><a href="afa-registration.php" class="nav-link"><i class="fas fa-user-check"></i> AFA Registration</a></li>
+        <li class="nav-item"><a class="nav-link active" href="support.php"><i class="fas fa-life-ring"></i> Support</a></li>
+        <li class="nav-item"><a class="nav-link" href="system-reset.php"><i class="fas fa-broom"></i> System Reset</a></li>
+      </ul>
         <li class="nav-item"><a class="nav-link" href="profit-withdrawals.php"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></li>
     </nav>
     <main class="main-content">
@@ -73,7 +81,12 @@ $csrf = generateCSRF();
       </header>
       <div class="dashboard-content">
         <div class="widget">
-          <div class="widget-header"><h3 class="widget-title">Tickets</h3></div>
+          <div class="widget-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+            <h3 class="widget-title">Tickets</h3>
+            <button class="btn btn-outline" onclick="deleteAllTickets()" style="border-color:#dc3545;color:#dc3545;">
+              <i class="fas fa-trash"></i> Delete All
+            </button>
+          </div>
           <div class="widget-body">
             <div id="tickets"></div>
           </div>
@@ -117,20 +130,20 @@ $csrf = generateCSRF();
       top: 0;
       width: 100%;
       height: 100%;
-      background-color: rgba(0, 0, 0, 0.5);
+      background-color: rgba(46, 41, 78, 0.5);
       backdrop-filter: blur(4px);
     }
 
     .modal-content {
-      background-color: var(--bg-color, #ffffff);
+      background-color: var(--bg-color, #F1E9DA);
       margin: 5% auto;
-      border: 1px solid var(--border-color, #ddd);
+      border: 1px solid var(--border-color, #F1E9DA);
       border-radius: 12px;
       width: 90%;
       max-width: 700px;
       max-height: 80vh;
       overflow: hidden;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+      box-shadow: 0 10px 30px rgba(46, 41, 78, 0.3);
       animation: modalSlideIn 0.3s ease-out;
     }
 
@@ -147,12 +160,12 @@ $csrf = generateCSRF();
 
     .modal-header {
       padding: 20px 24px 16px;
-      border-bottom: 1px solid var(--border-color, #eee);
+      border-bottom: 1px solid var(--border-color, #F1E9DA);
       display: flex;
       justify-content: space-between;
       align-items: center;
-      background: linear-gradient(135deg, var(--primary-color, #007bff), var(--primary-dark, #0056b3));
-      color: white;
+      background: linear-gradient(135deg, var(--primary-color, #541388), var(--primary-dark, #541388));
+      color: #F1E9DA;
     }
 
     .modal-header h3 {
@@ -162,7 +175,7 @@ $csrf = generateCSRF();
     }
 
     .modal-close {
-      color: rgba(255, 255, 255, 0.8);
+      color: rgba(241, 233, 218, 0.8);
       font-size: 28px;
       font-weight: bold;
       cursor: pointer;
@@ -171,14 +184,14 @@ $csrf = generateCSRF();
     }
 
     .modal-close:hover {
-      color: white;
+      color: #F1E9DA;
     }
 
     .modal-body {
       padding: 24px;
       max-height: 60vh;
       overflow-y: auto;
-      color: var(--text-color, #333);
+      color: var(--text-color, #2E294E);
     }
 
     .ticket-messages {
@@ -189,14 +202,14 @@ $csrf = generateCSRF();
       padding: 16px;
       margin-bottom: 12px;
       border-radius: 8px;
-      border-left: 4px solid var(--primary-color, #007bff);
-      background-color: var(--widget-bg, #f8f9fa);
-      border: 1px solid var(--border-color, #e9ecef);
+      border-left: 4px solid var(--primary-color, #541388);
+      background-color: var(--widget-bg, #F1E9DA);
+      border: 1px solid var(--border-color, #F1E9DA);
     }
 
     .message-sender {
       font-weight: 600;
-      color: var(--primary-color, #007bff);
+      color: var(--primary-color, #541388);
       margin-bottom: 4px;
       display: flex;
       justify-content: space-between;
@@ -205,7 +218,7 @@ $csrf = generateCSRF();
 
     .message-time {
       font-size: 0.875rem;
-      color: var(--text-muted, #6c757d);
+      color: var(--text-muted, #541388);
       font-weight: normal;
     }
 
@@ -216,7 +229,7 @@ $csrf = generateCSRF();
     }
 
     .reply-section {
-      border-top: 1px solid var(--border-color, #eee);
+      border-top: 1px solid var(--border-color, #F1E9DA);
       padding-top: 20px;
     }
 
@@ -236,27 +249,27 @@ $csrf = generateCSRF();
 
     .modal-actions .btn:hover {
       transform: translateY(-1px);
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+      box-shadow: 0 4px 12px rgba(46, 41, 78, 0.15);
     }
 
     /* Dark Mode Styles */
     [data-theme="dark"] .modal-content {
-      background-color: var(--bg-dark, #2d3748);
-      border-color: var(--border-dark, #4a5568);
-      color: var(--text-dark, #e2e8f0);
+      background-color: var(--bg-dark, #2E294E);
+      border-color: var(--border-dark, #2E294E);
+      color: var(--text-dark, #F1E9DA);
     }
 
     [data-theme="dark"] .modal-header {
-      border-bottom-color: var(--border-dark, #4a5568);
+      border-bottom-color: var(--border-dark, #2E294E);
     }
 
     [data-theme="dark"] .message-item {
-      background-color: var(--widget-bg-dark, #4a5568);
-      border-color: var(--border-dark, #718096);
+      background-color: var(--widget-bg-dark, #2E294E);
+      border-color: var(--border-dark, #541388);
     }
 
     [data-theme="dark"] .reply-section {
-      border-top-color: var(--border-dark, #4a5568);
+      border-top-color: var(--border-dark, #2E294E);
     }
 
     /* Responsive Design */
@@ -284,71 +297,111 @@ $csrf = generateCSRF();
 
 <script>
 let currentTicketId = null;
-async function loadTickets(){
+const ticketStatusOptions = [
+  { value: 'open', label: 'Open' },
+  { value: 'in_progress', label: 'In Progress' },
+  { value: 'resolved', label: 'Resolved' },
+  { value: 'closed', label: 'Closed' }
+];
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}
+
+function toTitleCase(value) {
+  return String(value ?? '')
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase());
+}
+
+async function loadTickets() {
   const res = await fetch('../api/support.php?action=list_tickets');
   const data = await res.json();
   const el = document.getElementById('tickets');
-  if (data.status !== 'success'){ el.innerHTML = '<div class="alert alert-danger">Failed to load</div>'; return; }
-  if (!data.tickets.length){ el.innerHTML = '<div class="text-muted">No tickets</div>'; return; }
+
+  if (data.status !== 'success') {
+    el.innerHTML = '<div class="alert alert-danger">Failed to load tickets</div>';
+    return;
+  }
+
+  if (!data.tickets.length) {
+    el.innerHTML = '<div class="text-muted">No tickets</div>';
+    return;
+  }
+
   el.innerHTML = data.tickets.map(t => `
-  <div class=card style="margin-bottom:.75rem;">
-    <div class=card-body>
-      <div style="display:flex;justify-content:space-between;align-items:center;">
+  <div class="card" style="margin-bottom:.75rem;">
+    <div class="card-body">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:.75rem;flex-wrap:wrap;">
         <div>
-          <strong>#${t.id}</strong> - ${t.subject}
-          <div class=text-muted style="font-size:.85rem;">${t.category} &bull; ${t.status} &bull; ${t.priority} &bull; User#${t.user_id}</div>
+          <strong>#${t.id}</strong> - ${escapeHtml(t.subject)}
+          <div class="text-muted" style="font-size:.85rem;">
+            ${toTitleCase(t.category)} | ${toTitleCase(t.status)} | ${toTitleCase(t.priority)} | User #${t.user_id}
+          </div>
         </div>
-        <div>
+        <div style="display:flex;gap:.5rem;align-items:center;flex-wrap:wrap;">
           <select onchange="updateStatus(${t.id}, this.value)" class="form-control" style="display:inline-block;width:auto;">
-            ${['open','in_progress','resolved','closed'].map(s => `<option value="${s}" ${s===t.status?'selected':''}>${s}</option>`).join('')}
+            ${ticketStatusOptions.map(s => `<option value="${s.value}" ${s.value === t.status ? 'selected' : ''}>${s.label}</option>`).join('')}
           </select>
           <button class="btn btn-outline" onclick="openThread(${t.id})">Open</button>
+          <button class="btn btn-outline" onclick="deleteTicket(${t.id})" style="border-color:#dc3545;color:#dc3545;">Delete</button>
         </div>
       </div>
     </div>
   </div>`).join('');
 }
 
-async function updateStatus(id, status){
-  const res = await fetch('../api/support.php', { method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':'<?php echo htmlspecialchars($csrf); ?>'}, body: JSON.stringify({ action:'update_status', ticket_id:id, status }) });
+async function updateStatus(id, status) {
+  const res = await fetch('../api/support.php', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRF-Token': '<?php echo htmlspecialchars($csrf); ?>'
+    },
+    body: JSON.stringify({ action: 'update_status', ticket_id: id, status })
+  });
   const data = await res.json();
-  if (data.status !== 'success') showNotification(data.message||'Failed to update status', 'error');
-  else showNotification('Status updated successfully', 'success');
+  if (data.status !== 'success') {
+    showNotification(data.message || 'Failed to update status', 'error');
+  } else {
+    showNotification('Status updated successfully', 'success');
+    loadTickets();
+  }
 }
 
-async function openThread(id){
+async function openThread(id) {
   currentTicketId = id;
-  const res = await fetch('../api/support.php?action=list_messages&ticket_id='+id);
+  const res = await fetch(`../api/support.php?action=list_messages&ticket_id=${id}`);
   const data = await res.json();
-  
-  if (data.status !== 'success'){
+
+  if (data.status !== 'success') {
     showNotification('Failed to load messages', 'error');
     return;
   }
-  
-  // Update modal title
+
   document.getElementById('modalTitle').textContent = `Ticket #${id} - Admin View`;
-  
-  // Display messages
+
   const messagesContainer = document.getElementById('ticketMessages');
   if (data.messages.length === 0) {
-    messagesContainer.innerHTML = '<div class="text-muted" style="text-align: center; padding: 20px;">No messages yet</div>';
+    messagesContainer.innerHTML = '<div class="text-muted" style="text-align:center;padding:20px;">No messages yet</div>';
   } else {
     messagesContainer.innerHTML = data.messages.map(m => `
       <div class="message-item">
         <div class="message-sender">
-          <span>${m.sender_name}</span>
+          <span>${escapeHtml(m.sender_name)}</span>
           <span class="message-time">${new Date(m.created_at).toLocaleString()}</span>
         </div>
-        <div class="message-content">${m.message.replace(/\n/g, '<br>')}</div>
+        <div class="message-content">${escapeHtml(m.message).replace(/\n/g, '<br>')}</div>
       </div>
     `).join('');
   }
-  
-  // Clear reply field
+
   document.getElementById('replyMessage').value = '';
-  
-  // Show modal
   document.getElementById('ticketModal').style.display = 'block';
   document.body.style.overflow = 'hidden';
 }
@@ -359,19 +412,73 @@ function closeTicketModal() {
   currentTicketId = null;
 }
 
+async function deleteTicket(id) {
+  if (!confirm(`Delete ticket #${id}? This action cannot be undone.`)) return;
+
+  try {
+    const res = await fetch('../api/support.php', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': '<?php echo htmlspecialchars($csrf); ?>'
+      },
+      body: JSON.stringify({ action: 'delete_ticket', ticket_id: id })
+    });
+
+    const data = await res.json();
+    if (data.status !== 'success') {
+      showNotification(data.message || 'Failed to delete ticket', 'error');
+      return;
+    }
+
+    if (currentTicketId === id) closeTicketModal();
+    showNotification('Ticket deleted successfully', 'success');
+    loadTickets();
+  } catch (err) {
+    showNotification('Network error occurred', 'error');
+  }
+}
+
+async function deleteAllTickets() {
+  if (!confirm('Delete all visible support tickets? This action cannot be undone.')) return;
+
+  try {
+    const res = await fetch('../api/support.php', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-CSRF-Token': '<?php echo htmlspecialchars($csrf); ?>'
+      },
+      body: JSON.stringify({ action: 'delete_all_tickets' })
+    });
+
+    const data = await res.json();
+    if (data.status !== 'success') {
+      showNotification(data.message || 'Failed to delete tickets', 'error');
+      return;
+    }
+
+    closeTicketModal();
+    showNotification(data.message || 'All tickets deleted successfully', 'success');
+    loadTickets();
+  } catch (err) {
+    showNotification('Network error occurred', 'error');
+  }
+}
+
 async function sendReply() {
   if (!currentTicketId) return;
-  
+
   const replyText = document.getElementById('replyMessage').value.trim();
   if (!replyText) {
     showNotification('Please enter a reply message', 'warning');
     return;
   }
-  
+
   const btn = document.getElementById('sendReplyBtn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Sending...';
-  
+
   try {
     const r = await fetch('../api/support.php', {
       method: 'POST',
@@ -385,27 +492,25 @@ async function sendReply() {
         message: replyText
       })
     });
-    
+
     const out = await r.json();
-    
+
     if (out.status === 'success') {
       showNotification('Reply sent successfully', 'success');
-      // Refresh the messages
       openThread(currentTicketId);
-      loadTickets(); // Refresh ticket list
+      loadTickets();
     } else {
       showNotification(out.message || 'Failed to send reply', 'error');
     }
   } catch (err) {
     showNotification('Network error occurred', 'error');
   }
-  
+
   btn.disabled = false;
   btn.innerHTML = '<i class="fas fa-paper-plane"></i> Send Reply';
 }
 
 function showNotification(message, type = 'info') {
-  // Create notification element
   const notification = document.createElement('div');
   notification.className = `alert alert-${type}`;
   notification.style.cssText = `
@@ -415,13 +520,12 @@ function showNotification(message, type = 'info') {
     z-index: 1100;
     max-width: 300px;
     animation: slideInRight 0.3s ease-out;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    box-shadow: 0 4px 12px rgba(46, 41, 78, 0.15);
   `;
   notification.textContent = message;
-  
+
   document.body.appendChild(notification);
-  
-  // Remove after 3 seconds
+
   setTimeout(() => {
     notification.style.animation = 'slideOutRight 0.3s ease-in';
     setTimeout(() => {
@@ -432,15 +536,13 @@ function showNotification(message, type = 'info') {
   }, 3000);
 }
 
-// Close modal when clicking outside
 window.onclick = function(event) {
   const modal = document.getElementById('ticketModal');
   if (event.target === modal) {
     closeTicketModal();
   }
-}
+};
 
-// Add CSS for notifications
 const notificationStyles = document.createElement('style');
 notificationStyles.textContent = `
   @keyframes slideInRight {
@@ -454,7 +556,6 @@ notificationStyles.textContent = `
 `;
 document.head.appendChild(notificationStyles);
 
-// Theme management
 function initTheme() {
   const savedTheme = localStorage.getItem('theme');
   const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
@@ -473,32 +574,26 @@ function toggleTheme() {
 
 function updateThemeIcon(theme) {
   const icon = document.getElementById('theme-icon');
-  // Show OPPOSITE icon: moon for light theme (to switch TO dark), sun for dark theme (to switch TO light)
   if (icon) icon.className = theme === 'light' ? 'fas fa-moon' : 'fas fa-sun';
 }
 
-// User dropdown
 function toggleUserDropdown() {
   const dropdown = document.getElementById('userDropdown');
   dropdown.classList.toggle('show');
 }
 
-// Close dropdown when clicking outside
 document.addEventListener('click', function(event) {
   const dropdown = document.getElementById('userDropdown');
   const toggle = document.querySelector('.user-dropdown-toggle');
-  
   if (dropdown && toggle && !toggle.contains(event.target)) {
     dropdown.classList.remove('show');
   }
 });
 
-// Mobile menu toggle
 document.querySelector('.mobile-menu-toggle')?.addEventListener('click', function() {
   document.querySelector('.sidebar')?.classList.toggle('show');
 });
 
-// Initialize theme on page load
 document.addEventListener('DOMContentLoaded', function() {
   initTheme();
 });

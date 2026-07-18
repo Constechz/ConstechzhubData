@@ -18,8 +18,8 @@ if (!$pwa) {
         'app_name' => 'Constechzhub',
         'app_short_name' => 'CTZH',
         'app_description' => 'Affordable data bundles for all networks',
-        'theme_color' => '#6366f1',
-        'background_color' => '#ffffff',
+        'theme_color' => '#541388',
+        'background_color' => '#F1E9DA',
         'start_url' => '/',
         'display_mode' => 'standalone',
         'orientation' => 'portrait'
@@ -172,3 +172,4 @@ header('Expires: 0');
 // Ensure clean output
 echo json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
 ?>
+

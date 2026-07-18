@@ -11,8 +11,9 @@ span[class*="fa-"] {
 
 /* Sidebar spacing consistency */
 .nav-link i[class*="fa-"] {
-    width: 1rem;
-    height: 1rem;
+    width: 1.25rem;
+    height: 1.25rem;
+    margin-right: var(--spacing-md, 0.75rem);
     font-size: 1rem;
 }
 
@@ -47,8 +48,8 @@ body.fa-loading::after {
     right: 1rem;
     width: 0.75rem;
     height: 0.75rem;
-    border: 2px solid rgba(0,0,0,0.1);
-    border-top-color: var(--brand-primary, #6b46ff);
+    border: 2px solid rgba(var(--text-primary-rgb, 46, 41, 78), 0.25);
+    border-top-color: var(--brand-primary, #541388);
     border-radius: 50%;
     animation: icon-spin 1s linear infinite;
     pointer-events: none;

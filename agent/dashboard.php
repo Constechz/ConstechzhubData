@@ -10,340 +10,23 @@ preventBrowserCaching();
 requireRole('agent');
 
 $current_user = getCurrentUser();
-$agent_id = isset($current_user['id']) ? (int) $current_user['id'] : 0;
-if ($agent_id <= 0) {
-    error_log('Agent dashboard accessed without a valid authenticated user record.');
-    header('Location: ../login.php?session=invalid');
-    exit();
-}
-
-$agent_full_name = trim((string) ($current_user['full_name'] ?? ''));
-$agent_username = trim((string) ($current_user['username'] ?? ''));
-$agent_display_name = $agent_full_name !== '' ? $agent_full_name : ($agent_username !== '' ? $agent_username : 'Agent');
-$agent_initial = strtoupper(substr($agent_display_name, 0, 1));
-$dashboard_wallet_balance = round((float) getWalletBalance($agent_id), 2);
-
-if (!function_exists('agentDashboardSafeCall')) {
-    function agentDashboardSafeCall($callback, $defaultValue, $contextLabel) {
-        try {
-            $value = $callback();
-            return $value === null ? $defaultValue : $value;
-        } catch (Throwable $e) {
-            error_log('Agent dashboard ' . $contextLabel . ' failed: ' . $e->getMessage());
-            return $defaultValue;
-        }
-    }
-}
-
-$stats = agentDashboardSafeCall(
-    function () use ($agent_id) {
-        return getDashboardStats($agent_id, 'agent');
-    },
-    [
-        'total_orders' => 0,
-        'total_customers' => 0,
-        'total_sales' => 0,
-    ],
-    'stats'
-);
-
-$stats['total_orders'] = agentDashboardSafeCall(
-    function () use ($db, $agent_id) {
-        $stmt = $db->prepare("
-            SELECT COUNT(*) AS total
-            FROM bundle_orders
-            WHERE agent_id = ? OR user_id = ?
-        ");
-        if (!$stmt) {
-            return 0;
-        }
-        $stmt->bind_param('ii', $agent_id, $agent_id);
-        $stmt->execute();
-        $row = $stmt->get_result()->fetch_assoc();
-        $stmt->close();
-        return (int) ($row['total'] ?? 0);
-    },
-    (int) ($stats['total_orders'] ?? 0),
-    'total order count'
-);
+$agent_id = $current_user['id'];
+$stats = getDashboardStats($agent_id, 'agent');
 
 // Get dynamic analytics data for agent
-$weekly_sales = agentDashboardSafeCall(
-    function () use ($agent_id) {
-        return getWeeklySalesData($agent_id, 'agent');
-    },
-    [],
-    'weekly sales'
-);
-$previous_weekly_sales = agentDashboardSafeCall(
-    function () use ($agent_id) {
-        return getWeeklySalesData($agent_id, 'agent', 1);
-    },
-    [],
-    'previous weekly sales'
-);
-$recent_transactions = agentDashboardSafeCall(
-    function () use ($agent_id) {
-        return getRecentTransactions($agent_id, 'agent', 10);
-    },
-    [],
-    'recent transactions'
-);
-$dashboard_products = agentDashboardSafeCall(
-    function () {
-        return getDashboardProducts(true, 8);
-    },
-    [],
-    'dashboard products'
-);
-$daily_summary = agentDashboardSafeCall(
-    function () use ($agent_id) {
-        return getSalesOrdersSummary($agent_id, 'agent', 1);
-    },
-    ['total_sales' => 0],
-    'daily summary'
-);
-$weekly_summary = agentDashboardSafeCall(
-    function () use ($agent_id) {
-        return getSalesOrdersSummary($agent_id, 'agent', 7);
-    },
-    ['total_sales' => 0],
-    'weekly summary'
-);
-$monthly_summary = agentDashboardSafeCall(
-    function () use ($agent_id) {
-        return getSalesOrdersSummary($agent_id, 'agent', 30);
-    },
-    ['total_sales' => 0],
-    'monthly summary'
-);
-
-if (function_exists('ensureResultCheckerTables')) {
-    ensureResultCheckerTables();
-}
-if (function_exists('ensureProfitWithdrawalTables')) {
-    ensureProfitWithdrawalTables();
-}
-
-$recovered_profit_rows = agentDashboardSafeCall(
-    function () use ($db, $agent_id) {
-        if (!function_exists('recordOrderProfit')
-            || !function_exists('dbh_table_exists')
-            || !dbh_table_exists('agent_profits')
-            || !dbh_table_exists('bundle_orders')) {
-            return 0;
-        }
-
-        $stmt = $db->prepare("
-            SELECT
-                bo.id,
-                bo.user_id,
-                bo.package_id,
-                bo.amount,
-                bo.agent_cost,
-                bo.order_reference,
-                bo.status
-            FROM bundle_orders bo
-            LEFT JOIN agent_profits ap ON ap.order_id = bo.id
-            WHERE bo.agent_id = ?
-              AND ap.id IS NULL
-              AND (bo.user_id IS NULL OR bo.user_id <> ?)
-              AND LOWER(bo.status) IN ('pending', 'processing', 'success', 'delivered', 'completed')
-              AND COALESCE(bo.agent_cost, 0) > 0
-              AND bo.amount > COALESCE(bo.agent_cost, 0)
-            ORDER BY bo.created_at DESC
-            LIMIT 100
-        ");
-        if (!$stmt) {
-            return 0;
-        }
-
-        $stmt->bind_param('ii', $agent_id, $agent_id);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        $recovered = 0;
-        while ($row = $result->fetch_assoc()) {
-            $recorded = recordOrderProfit([
-                'agent_id' => $agent_id,
-                'order_id' => (int) $row['id'],
-                'customer_id' => !empty($row['user_id']) ? (int) $row['user_id'] : null,
-                'package_id' => (int) $row['package_id'],
-                'customer_paid' => (float) $row['amount'],
-                'agent_cost' => (float) $row['agent_cost'],
-                'profit_amount' => (float) $row['amount'] - (float) $row['agent_cost'],
-                'reference' => (string) $row['order_reference'],
-                'status' => 'earned',
-            ]);
-            if ($recorded) {
-                $recovered++;
-            }
-        }
-        $stmt->close();
-
-        return $recovered;
-    },
-    0,
-    'profit ledger recovery'
-);
-
-$dashboard_store_profit = 0.0;
-$data_profit = 0.0;
-$pending_withdrawals = 0.0;
-$paid_out_withdrawals = 0.0;
-$data_profit = agentDashboardSafeCall(
-    function () use ($db, $agent_id) {
-        if (!function_exists('dbh_table_exists') || !dbh_table_exists('agent_profits')) {
-            return 0.0;
-        }
-        $profitStmt = $db->prepare("
-            SELECT COALESCE(SUM(profit_amount), 0) AS total
-            FROM agent_profits ap
-            LEFT JOIN bundle_orders bo ON bo.id = ap.order_id
-            WHERE ap.agent_id = ?
-              AND ap.status = 'earned'
-              AND (bo.id IS NULL OR bo.user_id IS NULL OR bo.user_id <> ?)
-        ");
-        if (!$profitStmt) {
-            return 0.0;
-        }
-        $profitStmt->bind_param('ii', $agent_id, $agent_id);
-        $profitStmt->execute();
-        $profitRow = $profitStmt->get_result()->fetch_assoc();
-        $profitStmt->close();
-        return (float) ($profitRow['total'] ?? 0);
-    },
-    0.0,
-    'data profit'
-);
-
-$profitWithdrawalTotals = agentDashboardSafeCall(
-    function () use ($db, $agent_id) {
-        if (!function_exists('dbh_table_exists') || !dbh_table_exists('profit_withdrawals')) {
-            return ['pending' => 0.0, 'paid' => 0.0];
-        }
-        $withdrawalSumColumn = 'amount';
-        if (function_exists('dbh_table_has_column') && dbh_table_has_column('profit_withdrawals', 'total_debit')) {
-            $withdrawalSumColumn = 'CASE WHEN total_debit IS NULL OR total_debit <= 0 THEN amount WHEN total_debit > amount THEN amount ELSE total_debit END';
-        }
-        $withdrawalStmt = $db->prepare("
-            SELECT
-                COALESCE(SUM(CASE WHEN status IN ('pending','approved','processing') THEN {$withdrawalSumColumn} ELSE 0 END), 0) AS pending_total,
-                COALESCE(SUM(CASE WHEN status = 'paid' THEN {$withdrawalSumColumn} ELSE 0 END), 0) AS paid_total
-            FROM profit_withdrawals
-            WHERE agent_id = ?
-        ");
-        if (!$withdrawalStmt) {
-            return ['pending' => 0.0, 'paid' => 0.0];
-        }
-        $withdrawalStmt->bind_param('i', $agent_id);
-        $withdrawalStmt->execute();
-        $withdrawalRow = $withdrawalStmt->get_result()->fetch_assoc();
-        $withdrawalStmt->close();
-        return [
-            'pending' => (float) ($withdrawalRow['pending_total'] ?? 0),
-            'paid' => (float) ($withdrawalRow['paid_total'] ?? 0),
-        ];
-    },
-    ['pending' => 0.0, 'paid' => 0.0],
-    'profit withdrawals'
-);
-$pending_withdrawals = (float) ($profitWithdrawalTotals['pending'] ?? 0);
-$paid_out_withdrawals = (float) ($profitWithdrawalTotals['paid'] ?? 0);
-
-$dashboard_total_profit = round($data_profit, 2);
-$dashboard_store_profit = round(max(0, $dashboard_total_profit - $pending_withdrawals - $paid_out_withdrawals), 2);
-$dashboard_wallet_float = $dashboard_wallet_balance;
+$weekly_sales = getWeeklySalesData($agent_id, 'agent');
+$recent_transactions = getRecentTransactions($agent_id, 'agent', 10);
+$sales_by_network = getSalesByNetworkData($agent_id, 'agent', 30);
+$top_customers_weekly = getTopCustomersForAgent($agent_id, 7, 5);
+$top_customers_monthly = getTopCustomersForAgent($agent_id, 30, 5);
+$daily_summary = getSalesOrdersSummary($agent_id, 'agent', 1);
+$weekly_summary = getSalesOrdersSummary($agent_id, 'agent', 7);
+$monthly_summary = getSalesOrdersSummary($agent_id, 'agent', 30);
 
 // Get commission data
-$dashboard_total_commission = 0.0;
-$pending_commission = agentDashboardSafeCall(
-    function () use ($agent_id) {
-        return function_exists('getAgentPendingCommission') ? (float) getAgentPendingCommission($agent_id) : 0.0;
-    },
-    0.0,
-    'pending commission'
-);
-$liquidated_commission = agentDashboardSafeCall(
-    function () use ($agent_id) {
-        return function_exists('getAgentLiquidatedCommission') ? (float) getAgentLiquidatedCommission($agent_id) : 0.0;
-    },
-    0.0,
-    'liquidated commission'
-);
-$commission_by_network = agentDashboardSafeCall(
-    function () use ($agent_id) {
-        return function_exists('getAgentCommissionByNetwork') ? (array) getAgentCommissionByNetwork($agent_id, 'pending') : [];
-    },
-    [],
-    'commission by network'
-);
-
-$dashboard_total_commission = agentDashboardSafeCall(
-    function () use ($db, $agent_id) {
-        if (!function_exists('dbh_table_exists') || !dbh_table_exists('agent_commissions')) {
-            return 0.0;
-        }
-        $commissionStmt = $db->prepare("
-            SELECT COALESCE(SUM(amount), 0) AS total
-            FROM agent_commissions
-            WHERE agent_id = ? AND status <> 'cancelled'
-        ");
-        if (!$commissionStmt) {
-            return 0.0;
-        }
-        $commissionStmt->bind_param('i', $agent_id);
-        $commissionStmt->execute();
-        $commissionRow = $commissionStmt->get_result()->fetch_assoc();
-        $commissionStmt->close();
-        return (float) ($commissionRow['total'] ?? 0);
-    },
-    0.0,
-    'total commission'
-);
-
-if ($dashboard_total_commission <= 0) {
-    $dashboard_total_commission = round($pending_commission + $liquidated_commission, 2);
-}
-
-$commissionLiquidationTotals = agentDashboardSafeCall(
-    function () use ($db, $agent_id) {
-        if (!function_exists('dbh_table_exists') || !dbh_table_exists('commission_liquidations')) {
-            return ['pending' => 0.0, 'completed' => 0.0];
-        }
-        $liquidationSummaryStmt = $db->prepare("
-            SELECT
-                COALESCE(SUM(CASE WHEN status IN ('pending', 'processing') THEN liquidated_amount ELSE 0 END), 0) AS pending_total,
-                COALESCE(SUM(CASE WHEN status = 'completed' THEN liquidated_amount ELSE 0 END), 0) AS completed_total
-            FROM commission_liquidations
-            WHERE agent_id = ?
-        ");
-        if (!$liquidationSummaryStmt) {
-            return ['pending' => 0.0, 'completed' => 0.0];
-        }
-        $liquidationSummaryStmt->bind_param('i', $agent_id);
-        $liquidationSummaryStmt->execute();
-        $liquidationSummary = $liquidationSummaryStmt->get_result()->fetch_assoc();
-        $liquidationSummaryStmt->close();
-        return [
-            'pending' => (float) ($liquidationSummary['pending_total'] ?? 0),
-            'completed' => (float) ($liquidationSummary['completed_total'] ?? 0),
-        ];
-    },
-    ['pending' => 0.0, 'completed' => 0.0],
-    'commission liquidations'
-);
-$pending_commission = agentDashboardSafeCall(
-    function () use ($agent_id) {
-        return function_exists('getAgentPendingCommission') ? (float) getAgentPendingCommission($agent_id) : 0.0;
-    },
-    $pending_commission,
-    'available commission'
-);
-$liquidated_commission = max(
-    $liquidated_commission,
-    (float) ($commissionLiquidationTotals['completed'] ?? 0)
-);
-$dashboard_current_commission = $pending_commission;
+$pending_commission = getAgentPendingCommission($agent_id);
+$liquidated_commission = getAgentLiquidatedCommission($agent_id);
+$commission_by_network = getAgentCommissionByNetwork($agent_id, 'pending');
 
 // Local helper to generate URL-friendly slugs
 if (!function_exists('generateStoreSlug')) {
@@ -363,85 +46,72 @@ $table_exists = false;
 // Check if agent_stores table exists
 try {
     $check_table = $db->query("SHOW TABLES LIKE 'agent_stores'");
-    $table_exists = $check_table && $check_table->num_rows > 0;
-} catch (Throwable $e) {
+    $table_exists = $check_table->num_rows > 0;
+} catch (Exception $e) {
     $table_exists = false;
 }
 
 if ($table_exists) {
     // Table exists, proceed with store logic
     $stmt = $db->prepare("SELECT id, store_name, store_slug FROM agent_stores WHERE agent_id = ? AND is_active = TRUE LIMIT 1");
-    if ($stmt) {
-        $stmt->bind_param("i", $agent_id);
-        $stmt->execute();
-        $res = $stmt->get_result();
-        if ($row = $res->fetch_assoc()) {
-            $store = $row;
-        } else {
-            // Auto-generate default store details
-            $default_name = $agent_full_name !== '' ? $agent_full_name . " Store" : ($agent_username !== '' ? $agent_username . " Store" : "Agent Store");
-            $base_slug = generateStoreSlug($default_name);
-            $slug = $base_slug !== '' ? $base_slug : ('agent-' . $agent_id);
-            $suffix = 1;
-            // Ensure unique slug across all stores
-            $check = $db->prepare("SELECT id FROM agent_stores WHERE store_slug = ? LIMIT 1");
-            if ($check) {
-                do {
-                    $check->bind_param('s', $slug);
-                    $check->execute();
-                    $exists = $check->get_result()->num_rows > 0;
-                    if ($exists) { $slug = $base_slug . '-' . $suffix++; }
-                } while ($exists);
-                $check->close();
-            }
+    $stmt->bind_param("i", $current_user['id']);
+    $stmt->execute();
+    $res = $stmt->get_result();
+    if ($row = $res->fetch_assoc()) {
+        $store = $row;
+    } else {
+        // Auto-generate default store details
+        $default_name = trim($current_user['full_name']) !== '' ? $current_user['full_name'] . " Store" : (trim($current_user['username']) !== '' ? $current_user['username'] . " Store" : "Agent Store");
+        $base_slug = generateStoreSlug($default_name);
+        $slug = $base_slug !== '' ? $base_slug : ('agent-' . $current_user['id']);
+        $suffix = 1;
+        // Ensure unique slug across all stores
+        $check = $db->prepare("SELECT id FROM agent_stores WHERE store_slug = ? LIMIT 1");
+        do {
+            $check->bind_param('s', $slug);
+            $check->execute();
+            $exists = $check->get_result()->num_rows > 0;
+            if ($exists) { $slug = $base_slug . '-' . $suffix++; }
+        } while ($exists);
 
-            // Create the store with error handling
-            try {
-                $ins = $db->prepare("INSERT INTO agent_stores (agent_id, store_name, store_slug, is_active) VALUES (?, ?, ?, TRUE)");
-                if ($ins) {
-                    $ins->bind_param('iss', $agent_id, $default_name, $slug);
-                    if ($ins->execute()) {
-                        $store = [
-                            'id' => method_exists($db, 'lastInsertId') ? $db->lastInsertId() : 0,
-                            'store_name' => $default_name,
-                            'store_slug' => $slug
-                        ];
-                    }
-                    $ins->close();
-                }
-            } catch (Throwable $e) {
-                // Handle foreign key constraint error
-                if (strpos($e->getMessage(), 'foreign key constraint fails') !== false) {
-                    // Refresh user data to check if user still exists
-                    $fresh_user = getCurrentUser();
-                    if (!$fresh_user) {
-                        // User no longer exists, redirect to login
-                        header('Location: ../logout.php?error=invalid_user');
+        // Create the store with error handling
+        try {
+            $ins = $db->prepare("INSERT INTO agent_stores (agent_id, store_name, store_slug, is_active) VALUES (?, ?, ?, TRUE)");
+            $ins->bind_param('iss', $current_user['id'], $default_name, $slug);
+            if ($ins->execute()) {
+                $store = [ 'id' => $db->lastInsertId(), 'store_name' => $default_name, 'store_slug' => $slug ];
+            }
+        } catch (mysqli_sql_exception $e) {
+            // Handle foreign key constraint error
+            if (strpos($e->getMessage(), 'foreign key constraint fails') !== false) {
+                // Refresh user data to check if user still exists
+                $fresh_user = getCurrentUser();
+                if (!$fresh_user) {
+                    // User no longer exists, redirect to login
+                    header('Location: ../logout.php?error=invalid_user');
+                    exit();
+                } else {
+                    // User exists but may not be an agent, check role
+                    if ($fresh_user['role'] !== 'agent') {
+                        header('Location: ../unauthorized.php');
                         exit();
                     } else {
-                        // User exists but may not be an agent, check role
-                        if (($fresh_user['role'] ?? '') !== 'agent') {
-                            header('Location: ../unauthorized.php');
-                            exit();
-                        } else {
-                            // User is agent but FK constraint still fails, log error
-                            error_log("Agent store creation FK error for valid agent ID {$agent_id}: " . $e->getMessage());
-                            $store = null;
-                        }
+                        // User is agent but FK constraint still fails, log error
+                        error_log("Agent store creation FK error for valid agent ID {$current_user['id']}: " . $e->getMessage());
+                        $store = null;
                     }
-                } else {
-                    // Other database error, log and show generic error
-                    error_log("Agent store creation error: " . $e->getMessage());
-                    $store = null;
                 }
+            } else {
+                // Other database error, log and show generic error
+                error_log("Agent store creation error: " . $e->getMessage());
+                $store = null;
             }
         }
-        $stmt->close();
     }
 
     if ($store) {
         $base = rtrim(SITE_URL, '/');
-        $store_url = $base . '/s/' . rawurlencode($store['store_slug']);
+        $store_url = $base . '/store/index.php?store=' . urlencode($store['store_slug']);
     }
 }
 
@@ -449,56 +119,42 @@ if ($table_exists) {
 $flash = getFlashMessage();
 
 // Get recent transactions for this agent
-$recent_transactions = agentDashboardSafeCall(
-    function () use ($db, $agent_id) {
-        $rows = [];
-        $stmt = $db->prepare("
-            SELECT
-                bo.*,
-                bo.order_reference AS reference_display,
-                bo.status AS status_display,
-                'purchase' AS transaction_type_display,
-                CASE
-                    WHEN bo.user_id IS NULL OR bo.user_id = 0 THEN 'Guest User'
-                    ELSE COALESCE(NULLIF(cu.full_name, ''), NULLIF(cu.username, ''), 'Customer')
-                END AS buyer_display,
-                CASE
-                    WHEN bo.user_id IS NULL OR bo.user_id = 0 THEN 'guest'
-                    ELSE 'customer'
-                END AS buyer_type,
-                CASE
-                    WHEN bo.agent_id = ? THEN COALESCE(NULLIF(acp.custom_price, 0), pp_customer.price, NULLIF(bo.amount, 0), dp.price, 0)
-                    ELSE COALESCE(NULLIF(pp_agent.price, 0), NULLIF(bo.amount, 0), dp.price, 0)
-                END AS display_amount,
-                dp.name as package_name,
-                n.name as network,
-                n.name as network_name
-            FROM bundle_orders bo
-            JOIN data_packages dp ON bo.package_id = dp.id
-            JOIN networks n ON n.id = dp.network_id
-            LEFT JOIN users cu ON cu.id = bo.user_id
-            LEFT JOIN agent_custom_pricing acp ON acp.package_id = dp.id AND acp.agent_id = ? AND acp.is_active = 1
-            LEFT JOIN package_pricing pp_agent ON pp_agent.package_id = dp.id AND pp_agent.user_type = 'agent'
-            LEFT JOIN package_pricing pp_customer ON pp_customer.package_id = dp.id AND pp_customer.user_type = 'customer'
-            WHERE bo.agent_id = ? OR bo.user_id = ?
-            ORDER BY bo.created_at DESC
-            LIMIT 10
-        ");
-        if (!$stmt) {
-            return $rows;
-        }
-        $stmt->bind_param("iiii", $agent_id, $agent_id, $agent_id, $agent_id);
-        $stmt->execute();
-        $result = $stmt->get_result();
-        while ($row = $result->fetch_assoc()) {
-            $rows[] = $row;
-        }
-        $stmt->close();
-        return $rows;
-    },
-    $recent_transactions,
-    'recent transaction fallback query'
-);
+$recent_transactions = [];
+$stmt = $db->prepare("
+    SELECT bo.*, dp.name as package_name, n.name as network 
+    FROM bundle_orders bo 
+    JOIN data_packages dp ON bo.package_id = dp.id 
+    JOIN networks n ON n.id = dp.network_id 
+    WHERE bo.user_id = ?
+    ORDER BY bo.created_at DESC 
+    LIMIT 10
+");
+$stmt->bind_param("i", $current_user['id']);
+$stmt->execute();
+$result = $stmt->get_result();
+while ($row = $result->fetch_assoc()) {
+    $recent_transactions[] = $row;
+}
+
+// Get weekly sales data for this agent
+$weekly_sales = [];
+for ($i = 6; $i >= 0; $i--) {
+    $date = date('Y-m-d', strtotime("-$i days"));
+    $stmt = $db->prepare("
+        SELECT COALESCE(SUM(amount), 0) as daily_sales 
+        FROM transactions 
+        WHERE user_id = ? AND DATE(created_at) = ? AND status = 'success' AND transaction_type = 'purchase'
+    ");
+    $stmt->bind_param("is", $current_user['id'], $date);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $daily_data = $result->fetch_assoc();
+    
+    $weekly_sales[] = [
+        'day' => date('l', strtotime($date)),
+        'sales' => floatval($daily_data['daily_sales'])
+    ];
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -509,31 +165,30 @@ $recent_transactions = agentDashboardSafeCall(
     
     <!-- PWA Meta Tags -->
     <link rel="manifest" href="../manifest.php">
-    <link rel="icon" type="image/png" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-192.png')); ?>">
-    <meta name="theme-color" content="#6366f1">
+    <meta name="theme-color" content="#541388">
     
     <!-- iOS PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="<?php echo SITE_NAME; ?>">
-    <link rel="apple-touch-icon" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-192.png')); ?>">
-    <link rel="apple-touch-icon" sizes="152x152" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-152.png')); ?>">
-    <link rel="apple-touch-icon" sizes="180x180" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-192.png')); ?>">
-    <link rel="apple-touch-icon" sizes="167x167" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-192.png')); ?>">
+    <link rel="apple-touch-icon" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-192.png')); ?>"">
+    <link rel="apple-touch-icon" sizes="152x152" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-152.png')); ?>"">
+    <link rel="apple-touch-icon" sizes="180x180" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-192.png')); ?>"">
+    <link rel="apple-touch-icon" sizes="167x167" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-192.png')); ?>"">
     
     <!-- Android PWA Support -->
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="application-name" content="<?php echo SITE_NAME; ?>">
     
     <!-- Microsoft PWA Support -->
-    <meta name="msapplication-TileColor" content="#6366f1">
+    <meta name="msapplication-TileColor" content="#541388">
     <meta name="msapplication-TileImage" content="../assets/images/icon-192.png">
     <meta name="msapplication-config" content="none">
     
     <!-- Stylesheets -->
-    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>">
-    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>">
-    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/icon-fixes.css')); ?>">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>"">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>"">
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/icon-fixes.css')); ?>"">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>">
     
     <!-- Emergency Icon Fix for square placeholder issues -->
@@ -564,7 +219,159 @@ $recent_transactions = agentDashboardSafeCall(
                 <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
             </div>
             
-            <?php renderAgentSidebar(); ?>
+            <ul class="sidebar-nav">
+                <li class="nav-section">
+                    <div class="nav-section-title">Dashboard</div>
+                    <div class="nav-item">
+                        <a href="dashboard.php" class="nav-link active">
+                            <i class="fas fa-home"></i>
+                            Dashboard
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Services</div>
+                    <div class="nav-item">
+                        <a href="at-business.php" class="nav-link">
+                            <i class="fas fa-mobile-alt"></i>
+                            AT Business
+                        </a>
+                    </div>
+                <div class="nav-item">
+                    <a href="mtn-business.php" class="nav-link">
+                        <i class="fas fa-mobile-alt"></i>
+                        MTN Business
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="afa-registration.php" class="nav-link">
+                        <i class="fas fa-user-check"></i>
+                        AFA Registration
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="bulk-mtn.php" class="nav-link">
+                        <i class="fas fa-layer-group"></i>
+                        Bulk MTN
+                    </a>
+                </div>
+                    <div class="nav-item">
+                        <a href="result-checker.php" class="nav-link">
+                            <i class="fas fa-award"></i>
+                            Result Checker
+                        </a>
+                    </div>
+                <div class="nav-item">
+                    <a href="telecel-business.php" class="nav-link">
+                        <i class="fas fa-signal"></i>
+                        Telecel Business
+                    </a>
+                </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Transaction</div>
+                    <div class="nav-item">
+                        <a href="transactions.php" class="nav-link">
+                            <i class="fas fa-money-bill-wave"></i>
+                            Transactions
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="histories.php" class="nav-link">
+                            <i class="fas fa-history"></i>
+                            Data Histories
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="reference.php" class="nav-link">
+                            <i class="fas fa-search"></i>
+                            Reference
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Operations</div>
+                    <div class="nav-item">
+                        <a href="customer_topup.php" class="nav-link">
+                            <i class="fas fa-user-plus"></i>
+                            Customer Top-up
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="topup-requests.php" class="nav-link">
+                            <i class="fas fa-hand-holding-usd"></i>
+                            Topup Requests
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="support.php" class="nav-link">
+                            <i class="fas fa-life-ring"></i>
+                            Support
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Business</div>
+                    <div class="nav-item">
+                        <a href="pricing.php" class="nav-link">
+                            <i class="fas fa-tags"></i>
+                            Custom Pricing
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Users</div>
+                    <div class="nav-item">
+                        <a href="customers.php" class="nav-link">
+                            <i class="fas fa-user-friends"></i>
+                            Customers
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Commission</div>
+                    <div class="nav-item">
+                        <a href="commission.php" class="nav-link">
+                            <i class="fas fa-percentage"></i>
+                            Commission
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="withdraw-profit.php" class="nav-link">
+                            <i class="fas fa-wallet"></i>
+                            Withdraw Profit
+                        </a>
+                    </div>
+                </li>
+                
+                <li class="nav-section">
+                    <div class="nav-section-title">Settings</div>
+                    <div class="nav-item">
+                        <a href="settings.php" class="nav-link">
+                            <i class="fas fa-cog"></i>
+                            Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="payment-settings.php" class="nav-link">
+                            <i class="fas fa-university"></i>
+                            Payment Settings
+                        </a>
+                    </div>
+                    <div class="nav-item">
+                        <a href="api-access.php" class="nav-link">
+                            <i class="fas fa-key"></i>
+                            API Access
+                        </a>
+                    </div>
+                </li>
+            </ul>
         </nav>
         
         <!-- Main Content -->
@@ -592,10 +399,10 @@ $recent_transactions = agentDashboardSafeCall(
                     <div class="user-dropdown">
                         <button class="user-dropdown-toggle" onclick="toggleUserDropdown()">
                             <div class="user-avatar">
-                                <?php echo htmlspecialchars($agent_initial); ?>
+                                <?php echo strtoupper(substr($current_user['full_name'], 0, 1)); ?>
                             </div>
                             <div>
-                                <div style="font-weight: 500;"><?php echo htmlspecialchars($agent_display_name); ?></div>
+                                <div style="font-weight: 500;"><?php echo htmlspecialchars($current_user['full_name']); ?></div>
                                 <div style="font-size: 0.75rem; color: var(--text-muted);">Agent</div>
                             </div>
                             <i class="fas fa-chevron-down" style="margin-left: 0.5rem;"></i>
@@ -629,19 +436,9 @@ $recent_transactions = agentDashboardSafeCall(
                 <!-- Notifications Slider -->
                 <?php echo renderNotificationSlides('agents'); ?>
                 
-                <?php
-                $hour = (int)date('H');
-                if ($hour >= 5 && $hour < 12) {
-                    $greeting = "Good Morning";
-                } elseif ($hour >= 12 && $hour < 17) {
-                    $greeting = "Good Afternoon";
-                } else {
-                    $greeting = "Good Evening";
-                }
-                ?>
                 <div class="page-title">
-                    <h1><?php echo date('l'); ?></h1>
-                    <p class="page-subtitle"><?php echo $greeting; ?>, <?php echo htmlspecialchars($agent_display_name); ?>!</p>
+                    <h1>Today</h1>
+                    <p class="page-subtitle">Welcome back, <?php echo htmlspecialchars($current_user['full_name']); ?>!</p>
                 </div>
 
                 <?php if (!empty($store_url)): ?>
@@ -670,9 +467,8 @@ $recent_transactions = agentDashboardSafeCall(
                             <i class="fas fa-dollar-sign"></i>
                         </div>
                         <div class="stat-content">
-                            <h3><?php echo formatCurrency($dashboard_wallet_float); ?></h3>
+                            <h3><?php echo formatCurrency(getWalletBalance($current_user['id'])); ?></h3>
                             <p>Current Balance</p>
-                            <div style="margin-top: 0.35rem; font-size: 0.75rem; color: var(--text-muted);">Excludes store profit</div>
                         </div>
                     </div>
                     
@@ -683,6 +479,16 @@ $recent_transactions = agentDashboardSafeCall(
                         <div class="stat-content">
                             <h3><?php echo number_format($stats['total_orders'] ?? 0); ?></h3>
                             <p>Total Orders</p>
+                        </div>
+                    </div>
+                    
+                    <div class="stat-card">
+                        <div class="stat-icon success">
+                            <i class="fas fa-users"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3><?php echo number_format($stats['total_customers'] ?? 0); ?></h3>
+                            <p>Our Clients</p>
                         </div>
                     </div>
                     
@@ -707,87 +513,55 @@ $recent_transactions = agentDashboardSafeCall(
                     </div>
 
                     <div class="stat-card">
-                        <div class="stat-icon danger">
-                            <i class="fas fa-wallet"></i>
+                        <div class="stat-icon success">
+                            <i class="fas fa-calendar-alt"></i>
                         </div>
                         <div class="stat-content">
-                            <h3><?php echo formatCurrency($dashboard_store_profit); ?></h3>
-                            <p>Store Profit</p>
+                            <h3><?php echo formatCurrency($weekly_summary['total_sales'] ?? 0); ?></h3>
+                            <p>Weekly Sales</p>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon danger">
+                            <i class="fas fa-calendar"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3><?php echo formatCurrency($monthly_summary['total_sales'] ?? 0); ?></h3>
+                            <p>Monthly Sales</p>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon warning">
+                            <i class="fas fa-shopping-cart"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3><?php echo number_format($daily_summary['total_orders'] ?? 0); ?></h3>
+                            <p>Daily Orders</p>
+                        </div>
+                    </div>
+
+                    <div class="stat-card">
+                        <div class="stat-icon primary">
+                            <i class="fas fa-shopping-cart"></i>
+                        </div>
+                        <div class="stat-content">
+                            <h3><?php echo number_format($weekly_summary['total_orders'] ?? 0); ?></h3>
+                            <p>Weekly Orders</p>
                         </div>
                     </div>
 
                     <div class="stat-card">
                         <div class="stat-icon success">
-                            <i class="fas fa-percentage"></i>
+                            <i class="fas fa-shopping-cart"></i>
                         </div>
                         <div class="stat-content">
-                            <h3><?php echo formatCurrency($dashboard_current_commission); ?></h3>
-                            <p>Current Commission</p>
-                            <div style="margin-top: 0.35rem; font-size: 0.75rem; color: var(--text-muted);">Available to request</div>
-                        </div>
-                    </div>
-
-                </div>
-
-                <?php if (!empty($dashboard_products)): ?>
-                <div class="widget" style="margin-bottom: 1.5rem;">
-                    <div class="widget-header">
-                        <h3 class="widget-title">Products</h3>
-                    </div>
-                    <div class="widget-body">
-                        <div class="product-catalog-grid">
-                            <?php foreach ($dashboard_products as $product): ?>
-                                <?php
-                                $productName = trim((string) ($product['name'] ?? 'Product'));
-                                $sizeLabel = trim((string) ($product['size_label'] ?? ''));
-                                $currentPrice = (float) ($product['current_price'] ?? 0);
-                                $oldPrice = isset($product['old_price']) && $product['old_price'] !== null ? (float) $product['old_price'] : null;
-                                $rating = max(0, min(5, (int) ($product['rating'] ?? 5)));
-                                $savings = ($oldPrice !== null && $oldPrice > $currentPrice) ? ($oldPrice - $currentPrice) : null;
-                                $imagePath = trim((string) ($product['image_path'] ?? ''));
-                                $imageUrl = $imagePath !== '' ? dbh_asset($imagePath) : '';
-                                $productCheckoutUrl = (!empty($store['store_slug']) && !empty($product['id']))
-                                    ? rtrim((string) SITE_URL, '/') . '/store/product-checkout.php?store=' . urlencode((string) $store['store_slug']) . '&product_id=' . (int) $product['id']
-                                    : '';
-                                ?>
-                                <article class="product-card">
-                                    <div class="product-card-media">
-                                        <?php if ($imageUrl !== ''): ?>
-                                            <img class="product-card-image" src="<?php echo htmlspecialchars($imageUrl); ?>" alt="<?php echo htmlspecialchars($productName); ?>">
-                                        <?php else: ?>
-                                            <div class="product-card-placeholder">
-                                                <i class="fas fa-box-open"></i>
-                                            </div>
-                                        <?php endif; ?>
-                                    </div>
-                                    <div class="product-card-body">
-                                        <h4 class="product-card-title"><?php echo htmlspecialchars($productName); ?></h4>
-                                        <?php if ($sizeLabel !== ''): ?>
-                                            <div class="product-card-size">Size: <?php echo htmlspecialchars($sizeLabel); ?></div>
-                                        <?php endif; ?>
-                                        <div class="product-card-rating" aria-label="<?php echo $rating; ?> out of 5 stars">
-                                            <?php for ($starIndex = 1; $starIndex <= 5; $starIndex++): ?>
-                                                <i class="fas fa-star<?php echo $starIndex <= $rating ? '' : ' product-card-rating-muted'; ?>"></i>
-                                            <?php endfor; ?>
-                                        </div>
-                                        <div class="product-card-price"><?php echo htmlspecialchars(formatCurrency($currentPrice)); ?></div>
-                                        <?php if ($savings !== null): ?>
-                                            <div class="product-card-savings">Save <?php echo htmlspecialchars(formatCurrency($savings)); ?></div>
-                                            <div class="product-card-old-price"><?php echo htmlspecialchars(formatCurrency($oldPrice)); ?></div>
-                                        <?php endif; ?>
-                                        <?php if ($productCheckoutUrl !== ''): ?>
-                                            <a class="product-card-cta" href="<?php echo htmlspecialchars($productCheckoutUrl); ?>">
-                                                <i class="fas fa-shopping-cart"></i>
-                                                Buy Now
-                                            </a>
-                                        <?php endif; ?>
-                                    </div>
-                                </article>
-                            <?php endforeach; ?>
+                            <h3><?php echo number_format($monthly_summary['total_orders'] ?? 0); ?></h3>
+                            <p>Monthly Orders</p>
                         </div>
                     </div>
                 </div>
-                <?php endif; ?>
                 
                 <!-- Charts and Commission Info -->
                 <div class="dashboard-grid">
@@ -796,20 +570,10 @@ $recent_transactions = agentDashboardSafeCall(
                         <div class="widget-header">
                             <h3 class="widget-title">Weekly Sales</h3>
                             <div class="widget-actions">
-                                <button
-                                    type="button"
-                                    class="btn btn-outline weekly-sales-toggle active"
-                                    data-week="current"
-                                    style="padding: 0.5rem 1rem; font-size: 0.75rem;"
-                                >
+                                <button class="btn btn-outline" style="padding: 0.5rem 1rem; font-size: 0.75rem;">
                                     Current Week
                                 </button>
-                                <button
-                                    type="button"
-                                    class="btn btn-outline weekly-sales-toggle"
-                                    data-week="previous"
-                                    style="padding: 0.5rem 1rem; font-size: 0.75rem;"
-                                >
+                                <button class="btn btn-outline" style="padding: 0.5rem 1rem; font-size: 0.75rem;">
                                     Previous Week
                                 </button>
                             </div>
@@ -831,7 +595,7 @@ $recent_transactions = agentDashboardSafeCall(
                                 <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 2rem;">
                                     <div style="text-align: center;">
                                         <h3 style="margin: 0; color: var(--brand-primary);">
-                                            ₵<?php echo number_format($pending_commission, 2); ?>
+                                            <?php echo formatCurrency((float) $pending_commission); ?>
                                         </h3>
                                         <p style="color: var(--text-muted); font-size: 0.875rem; margin: 0.5rem 0;">
                                             Pending Commission
@@ -839,7 +603,7 @@ $recent_transactions = agentDashboardSafeCall(
                                     </div>
                                     <div style="text-align: center;">
                                         <h3 style="margin: 0; color: var(--success-color);">
-                                            ₵<?php echo number_format($liquidated_commission, 2); ?>
+                                            <?php echo formatCurrency((float) $liquidated_commission); ?>
                                         </h3>
                                         <p style="color: var(--text-muted); font-size: 0.875rem; margin: 0.5rem 0;">
                                             Total Liquidated
@@ -853,7 +617,7 @@ $recent_transactions = agentDashboardSafeCall(
                                     <?php foreach ($commission_by_network as $network): ?>
                                     <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">
                                         <span style="font-weight: 500;"><?php echo htmlspecialchars($network['network_name']); ?></span>
-                                        <span style="color: var(--brand-primary);">₵<?php echo number_format($network['total_commission'], 2); ?></span>
+                                        <span style="color: var(--brand-primary);"><?php echo formatCurrency((float) ($network['total_commission'] ?? 0)); ?></span>
                                     </div>
                                     <?php endforeach; ?>
                                 </div>
@@ -885,13 +649,10 @@ $recent_transactions = agentDashboardSafeCall(
                                     <thead>
                                         <tr>
                                             <th>Reference</th>
-                                            <th>Buyer</th>
                                             <th>Number</th>
-                                            <th>Network</th>
                                             <th>Type</th>
                                             <th>Amount</th>
                                             <th>Status</th>
-                                            <th>Order Status</th>
                                             <th>Date</th>
                                         </tr>
                                     </thead>
@@ -913,16 +674,6 @@ $recent_transactions = agentDashboardSafeCall(
                                             </td>
                                             <td>
                                                 <?php
-                                                    $buyerType = strtolower((string) ($transaction['buyer_type'] ?? 'customer'));
-                                                    $buyerName = $transaction['buyer_display'] ?? ($buyerType === 'guest' ? 'Guest User' : 'Customer');
-                                                ?>
-                                                <div><?php echo htmlspecialchars($buyerName); ?></div>
-                                                <span class="badge badge-<?php echo $buyerType === 'guest' ? 'warning' : 'secondary'; ?>" style="margin-top: 0.25rem;">
-                                                    <?php echo $buyerType === 'guest' ? 'Guest order' : 'Customer order'; ?>
-                                                </span>
-                                            </td>
-                                            <td>
-                                                <?php
                                                     $beneficiary = $transaction['beneficiary_number'] ?? '';
                                                     if (empty($beneficiary) && !empty($transaction['description'])) {
                                                         if (preg_match('/(233\\d{9}|0\\d{9})/', $transaction['description'], $m)) {
@@ -933,47 +684,20 @@ $recent_transactions = agentDashboardSafeCall(
                                                 ?>
                                             </td>
                                             <td>
-                                                <?php
-                                                    $networkName = detectGhanaNetworkLabel(
-                                                        $transaction['network_name'] ?? '',
-                                                        $transaction['beneficiary_number'] ?? '',
-                                                        $transaction['metadata_beneficiary'] ?? '',
-                                                        $transaction['metadata_msisdn'] ?? '',
-                                                        $transaction['metadata_phone'] ?? ''
-                                                    );
-                                                    echo htmlspecialchars($networkName);
-                                                ?>
-                                            </td>
-                                            <td>
                                                 <span class="badge badge-secondary">
                                                     <?php
-                                                    $type = $transaction['transaction_type_display'] ?? $transaction['transaction_type'] ?? 'purchase';
-                                                    echo ucfirst(str_replace('_', ' ', $type));
+                                                        $type = $transaction['transaction_type_display'] ?? $transaction['transaction_type'] ?? 'purchase';
+                                                        echo ucfirst(str_replace('_', ' ', $type));
                                                     ?>
                                                 </span>
-                                                <?php if (($transaction['buyer_type'] ?? '') === 'guest'): ?>
-                                                    <div class="text-muted" style="font-size: 0.75rem; margin-top: 0.2rem;">
-                                                        Store link guest
-                                                    </div>
-                                                <?php endif; ?>
                                             </td>
-                                            <td><?php echo formatCurrency((float) ($transaction['display_amount'] ?? $transaction['amount'] ?? 0)); ?></td>
+                                            <td><?php echo formatCurrency($transaction['amount']); ?></td>
                                             <td>
                                                 <?php
                                                     $statusRaw = strtolower($transaction['status_display'] ?? $transaction['status'] ?? 'pending');
-                                                    if (in_array($statusRaw, ['success', 'completed', 'delivered'], true)) {
-                                                        $statusLabel = 'Delivered';
-                                                        $statusClass = 'success';
-                                                    } elseif ($statusRaw === 'processing') {
-                                                        $statusLabel = 'Processing';
-                                                        $statusClass = 'primary';
-                                                    } elseif (in_array($statusRaw, ['failed', 'cancelled'], true)) {
-                                                        $statusLabel = ucfirst($statusRaw);
-                                                        $statusClass = 'danger';
-                                                    } else {
-                                                        $statusLabel = ucfirst($statusRaw ?: 'pending');
-                                                        $statusClass = 'warning';
-                                                    }
+                                                    $isDelivered = in_array($statusRaw, ['success', 'completed', 'delivered'], true);
+                                                    $statusLabel = $isDelivered ? 'Delivered' : 'Pending';
+                                                    $statusClass = $isDelivered ? 'success' : 'warning';
                                                     $statusTime = !empty($transaction['created_at']) ? date('g:i A', strtotime($transaction['created_at'])) : '';
                                                 ?>
                                                 <span class="badge badge-<?php echo $statusClass; ?>">
@@ -985,34 +709,13 @@ $recent_transactions = agentDashboardSafeCall(
                                                     </div>
                                                 <?php endif; ?>
                                             </td>
-                                            <td>
-                                                <?php
-                                                    $orderStatusRaw = strtolower($transaction['status_display'] ?? $transaction['status'] ?? 'pending');
-                                                    if (in_array($orderStatusRaw, ['success', 'completed', 'delivered'], true)) {
-                                                        $orderStatusLabel = 'Delivered';
-                                                        $orderStatusClass = 'success';
-                                                    } elseif ($orderStatusRaw === 'processing') {
-                                                        $orderStatusLabel = 'Processing';
-                                                        $orderStatusClass = 'primary';
-                                                    } elseif (in_array($orderStatusRaw, ['failed', 'cancelled'], true)) {
-                                                        $orderStatusLabel = ucfirst($orderStatusRaw);
-                                                        $orderStatusClass = 'danger';
-                                                    } else {
-                                                        $orderStatusLabel = ucfirst($orderStatusRaw ?: 'pending');
-                                                        $orderStatusClass = 'warning';
-                                                    }
-                                                ?>
-                                                <span class="badge badge-<?php echo $orderStatusClass; ?>">
-                                                    <?php echo $orderStatusLabel; ?>
-                                                </span>
-                                            </td>
                                             <td><?php echo date('M j, H:i', strtotime($transaction['created_at'])); ?></td>
                                         </tr>
                                         <?php endforeach; ?>
                                         
                                         <?php if (empty($recent_transactions)): ?>
                                         <tr>
-                                            <td colspan="8" class="text-center text-muted">No transactions found</td>
+                                            <td colspan="5" class="text-center text-muted">No transactions found</td>
                                         </tr>
                                         <?php endif; ?>
                                     </tbody>
@@ -1021,7 +724,6 @@ $recent_transactions = agentDashboardSafeCall(
                         </div>
                     </div>
                     
-                    <?php if (false): ?>
                     <!-- Sales by Network -->
                     <div class="widget">
                         <div class="widget-header">
@@ -1053,10 +755,10 @@ $recent_transactions = agentDashboardSafeCall(
                                         </div>
                                         <div style="text-align: right;">
                                             <div style="font-weight: 500; color: var(--brand-primary);">
-                                                ₵<?php echo number_format($network['total_sales'] ?? 0, 2); ?>
+                                                <?php echo formatCurrency((float) ($network['total_sales'] ?? 0)); ?>
                                             </div>
                                             <div style="font-size: 0.875rem; color: var(--text-muted);">
-                                                ₵<?php echo number_format($network['commission_earned'] ?? 0, 2); ?> commission
+                                                <?php echo formatCurrency((float) ($network['commission_earned'] ?? 0)); ?> commission
                                             </div>
                                         </div>
                                     </div>
@@ -1070,9 +772,72 @@ $recent_transactions = agentDashboardSafeCall(
                             <?php endif; ?>
                         </div>
                     </div>
-                    <?php endif; ?>
                 </div>
 
+                <!-- Top Customers -->
+                <div class="dashboard-grid">
+                    <div class="widget">
+                        <div class="widget-header">
+                            <h3 class="widget-title">Top Customers (Weekly)</h3>
+                        </div>
+                        <div class="widget-body">
+                            <?php if (!empty($top_customers_weekly)): ?>
+                                <?php foreach ($top_customers_weekly as $customer): ?>
+                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid var(--border-color);">
+                                    <div>
+                                        <div style="font-weight: 500;"><?php echo htmlspecialchars($customer['full_name'] ?? ''); ?></div>
+                                        <?php if (!empty($customer['email'])): ?>
+                                            <div style="font-size: 0.875rem; color: var(--text-muted);"><?php echo htmlspecialchars($customer['email']); ?></div>
+                                        <?php endif; ?>
+                                    </div>
+                                    <div style="text-align: right;">
+                                        <div style="font-weight: 500;"><?php echo htmlspecialchars(formatCurrency((float) ($customer['total_sales'] ?? 0), 'GHS')); ?></div>
+                                        <div style="font-size: 0.875rem; color: var(--text-muted);">
+                                            <?php echo number_format((int) ($customer['total_orders'] ?? 0)); ?> orders
+                                        </div>
+                                    </div>
+                                </div>
+                                <?php endforeach; ?>
+                            <?php else: ?>
+                                <div class="empty-state" style="padding: 2rem; text-align: center;">
+                                    <i class="fas fa-users" style="font-size: 2rem; color: var(--text-muted); margin-bottom: 1rem;"></i>
+                                    <p style="color: var(--text-muted);">No customer sales yet</p>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+
+                    <div class="widget">
+                        <div class="widget-header">
+                            <h3 class="widget-title">Top Customers (Monthly)</h3>
+                        </div>
+                        <div class="widget-body">
+                            <?php if (!empty($top_customers_monthly)): ?>
+                                <?php foreach ($top_customers_monthly as $customer): ?>
+                                <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.75rem 0; border-bottom: 1px solid var(--border-color);">
+                                    <div>
+                                        <div style="font-weight: 500;"><?php echo htmlspecialchars($customer['full_name'] ?? ''); ?></div>
+                                        <?php if (!empty($customer['email'])): ?>
+                                            <div style="font-size: 0.875rem; color: var(--text-muted);"><?php echo htmlspecialchars($customer['email']); ?></div>
+                                        <?php endif; ?>
+                                    </div>
+                                    <div style="text-align: right;">
+                                        <div style="font-weight: 500;"><?php echo htmlspecialchars(formatCurrency((float) ($customer['total_sales'] ?? 0), 'GHS')); ?></div>
+                                        <div style="font-size: 0.875rem; color: var(--text-muted);">
+                                            <?php echo number_format((int) ($customer['total_orders'] ?? 0)); ?> orders
+                                        </div>
+                                    </div>
+                                </div>
+                                <?php endforeach; ?>
+                            <?php else: ?>
+                                <div class="empty-state" style="padding: 2rem; text-align: center;">
+                                    <i class="fas fa-users" style="font-size: 2rem; color: var(--text-muted); margin-bottom: 1rem;"></i>
+                                    <p style="color: var(--text-muted);">No customer sales yet</p>
+                                </div>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                </div>
             </div>
         </main>
     </div>
@@ -1139,25 +904,19 @@ $recent_transactions = agentDashboardSafeCall(
         });
         
         function initCharts() {
-            const salesCanvas = document.getElementById('salesChart');
-            if (!salesCanvas) return;
-
-            const salesCtx = salesCanvas.getContext('2d');
-            const weeklySalesSets = {
-                current: <?php echo json_encode($weekly_sales); ?>,
-                previous: <?php echo json_encode($previous_weekly_sales); ?>
-            };
-            const toggleButtons = document.querySelectorAll('.weekly-sales-toggle');
-
-            const salesChart = new Chart(salesCtx, {
+            // Sales Chart with dynamic data
+            const salesCtx = document.getElementById('salesChart').getContext('2d');
+            const salesData = <?php echo json_encode($weekly_sales); ?>;
+            
+            new Chart(salesCtx, {
                 type: 'line',
                 data: {
-                    labels: (weeklySalesSets.current || []).map(d => d.short_day || d.day || ''),
+                    labels: salesData.map(d => d.short_day),
                     datasets: [{
-                        label: 'Sales (₵)',
-                        data: (weeklySalesSets.current || []).map(d => d.sales || 0),
-                        borderColor: '#8B5CF6',
-                        backgroundColor: 'rgba(139, 92, 246, 0.1)',
+                        label: 'Sales (GH\\u20B5)',
+                        data: salesData.map(d => d.sales),
+                        borderColor: '#541388',
+                        backgroundColor: 'rgba(84, 19, 136, 0.1)',
                         borderWidth: 2,
                         fill: true,
                         tension: 0.4
@@ -1173,7 +932,7 @@ $recent_transactions = agentDashboardSafeCall(
                         tooltip: {
                             callbacks: {
                                 label: function(context) {
-                                    return 'Sales: ₵' + context.parsed.y.toLocaleString();
+                                    return 'Sales: GH\\u20B5' + context.parsed.y.toLocaleString();
                                 }
                             }
                         }
@@ -1182,11 +941,11 @@ $recent_transactions = agentDashboardSafeCall(
                         y: {
                             beginAtZero: true,
                             grid: {
-                                color: 'rgba(0,0,0,0.1)'
+                                color: 'rgba(46, 41, 78, 0.1)'
                             },
                             ticks: {
                                 callback: function(value) {
-                                    return '₵' + value.toLocaleString();
+                                    return 'GH\\u20B5' + value.toLocaleString();
                                 }
                             }
                         },
@@ -1198,28 +957,6 @@ $recent_transactions = agentDashboardSafeCall(
                     }
                 }
             });
-
-            const applyWeeklySalesView = function(weekKey) {
-                const selectedData = weeklySalesSets[weekKey] || [];
-                salesChart.data.labels = selectedData.map(d => d.short_day || d.day || '');
-                salesChart.data.datasets[0].data = selectedData.map(d => d.sales || 0);
-                salesChart.update();
-
-                toggleButtons.forEach(function(button) {
-                    const isActive = button.dataset.week === weekKey;
-                    button.classList.toggle('active', isActive);
-                    button.classList.toggle('btn-primary', isActive);
-                    button.classList.toggle('btn-outline', !isActive);
-                });
-            };
-
-            toggleButtons.forEach(function(button) {
-                button.addEventListener('click', function() {
-                    applyWeeklySalesView(button.dataset.week || 'current');
-                });
-            });
-
-            applyWeeklySalesView('current');
         }
 
         // Copy helper

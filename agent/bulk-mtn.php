@@ -9,24 +9,19 @@ requireRole('agent');
 
 $current_user = getCurrentUser();
 $wallet_balance = getWalletBalance($current_user['id']);
-ensureDataPackageStockStatusColumn();
-$agent_display_name = (string)($current_user['full_name'] ?? $_SESSION['username'] ?? 'Agent');
-$agent_initial = strtoupper(substr(trim($agent_display_name) !== '' ? trim($agent_display_name) : 'A', 0, 1));
 
 // Get MTN packages with agent pricing (allow multiple packages but prevent duplicates)
 $mtn_packages = [];
 $stmt = $db->prepare("
     SELECT dp.id, dp.name, dp.data_size, dp.validity_days,
-           COALESCE(dp.stock_status, 'in_stock') AS stock_status,
            COALESCE(pp_agent.price, pp_customer.price, dp.price) as effective_price
     FROM data_packages dp 
     LEFT JOIN networks n ON n.id = dp.network_id 
     LEFT JOIN package_pricing pp_agent ON pp_agent.package_id = dp.id AND pp_agent.user_type = 'agent'
     LEFT JOIN package_pricing pp_customer ON pp_customer.package_id = dp.id AND pp_customer.user_type = 'customer'
-    WHERE n.name = 'MTN' AND dp.status = 'active'
-      AND COALESCE(dp.stock_status, 'in_stock') = 'in_stock'
+    WHERE n.name = 'MTN' AND dp.status = 'active' 
     GROUP BY dp.id, dp.name, dp.data_size, dp.validity_days,
-             COALESCE(dp.stock_status, 'in_stock'), COALESCE(pp_agent.price, pp_customer.price, dp.price)
+             COALESCE(pp_agent.price, pp_customer.price, dp.price)
     ORDER BY COALESCE(pp_agent.price, pp_customer.price, dp.price) ASC
 ");
 $stmt->execute();
@@ -55,7 +50,153 @@ $flash = getFlashMessage();
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
         
-        <?php renderAgentSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item">
+                    <a href="dashboard.php" class="nav-link">
+                        <i class="fas fa-home"></i>
+                        Dashboard
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Services</div>
+                <div class="nav-item">
+                    <a href="at-business.php" class="nav-link">
+                        <i class="fas fa-mobile-alt"></i>
+                        AT Business
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="mtn-business.php" class="nav-link">
+                        <i class="fas fa-mobile-alt"></i>
+                        MTN Business
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="afa-registration.php" class="nav-link">
+                        <i class="fas fa-user-check"></i>
+                        AFA Registration
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="bulk-mtn.php" class="nav-link active">
+                        <i class="fas fa-layer-group"></i>
+                        Bulk MTN
+                    </a>
+                </div>
+                    <div class="nav-item">
+                        <a href="result-checker.php" class="nav-link">
+                            <i class="fas fa-award"></i>
+                            Result Checker
+                        </a>
+                    </div>
+                <div class="nav-item">
+                    <a href="telecel-business.php" class="nav-link">
+                        <i class="fas fa-signal"></i>
+                        Telecel Business
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Transaction</div>
+                <div class="nav-item">
+                    <a href="transactions.php" class="nav-link">
+                        <i class="fas fa-money-bill-wave"></i>
+                        Transactions
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="histories.php" class="nav-link">
+                        <i class="fas fa-history"></i>
+                        Data Histories
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="reference.php" class="nav-link">
+                        <i class="fas fa-search"></i>
+                        Reference
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Operations</div>
+                <div class="nav-item">
+                    <a href="customer_topup.php" class="nav-link">
+                        <i class="fas fa-user-plus"></i>
+                        Customer Top-up
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="wallet.php" class="nav-link">
+                        <i class="fas fa-wallet"></i>
+                        Wallet
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="support.php" class="nav-link">
+                        <i class="fas fa-life-ring"></i>
+                        Support
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Business</div>
+                <div class="nav-item">
+                    <a href="pricing.php" class="nav-link">
+                        <i class="fas fa-tags"></i>
+                        Custom Pricing
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Users</div>
+                <div class="nav-item">
+                    <a href="customers.php" class="nav-link">
+                        <i class="fas fa-user-friends"></i>
+                        Customers
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Commission</div>
+                <div class="nav-item">
+                    <a href="commission.php" class="nav-link">
+                        <i class="fas fa-percentage"></i>
+                        Commission
+                    </a>
+                </div>
+                    <div class="nav-item">
+                        <a href="withdraw-profit.php" class="nav-link">
+                            <i class="fas fa-wallet"></i>
+                            Withdraw Profit
+                        </a>
+                    </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item">
+                    <a href="settings.php" class="nav-link">
+                        <i class="fas fa-cog"></i>
+                        Settings
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="api-access.php" class="nav-link">
+                        <i class="fas fa-key"></i>
+                        API Access
+                    </a>
+                </div>
+            </li>
+        </ul>
     </nav>
 
     <!-- Main Content -->
@@ -81,13 +222,13 @@ $flash = getFlashMessage();
                 <div class="user-dropdown">
                     <button class="user-dropdown-toggle" onclick="toggleUserDropdown()">
                         <div class="user-avatar">
-                            <?php echo htmlspecialchars($agent_initial); ?>
+                            <i class="fas fa-user"></i>
                         </div>
-                        <div class="user-info">
-                            <div class="user-name"><?php echo htmlspecialchars($agent_display_name); ?></div>
-                            <div class="user-role">Agent</div>
+                        <div>
+                            <div style="font-weight: 500;"><?php echo htmlspecialchars($current_user['full_name']); ?></div>
+                            <div style="font-size: 0.75rem; color: var(--text-muted);">Agent</div>
                         </div>
-                        <i class="fas fa-chevron-down dropdown-arrow"></i>
+                        <i class="fas fa-chevron-down" style="margin-left: 0.5rem;"></i>
                     </button>
                     
                     <div class="user-dropdown-menu" id="userDropdown">
@@ -105,6 +246,9 @@ $flash = getFlashMessage();
                 </div>
             </div>
         </header>
+
+<?php echo renderNotificationSlides('agents'); ?>
+
 
         <div class="dashboard-content">
             <div class="page-title">
@@ -482,7 +626,7 @@ $flash = getFlashMessage();
         gap: 0.5rem;
         padding: 0.5rem 1rem;
         background: var(--success-color);
-        color: white;
+        color: #F1E9DA;
         border-radius: var(--border-radius);
         font-weight: 600;
         margin-right: 1rem;
@@ -493,24 +637,11 @@ $flash = getFlashMessage();
             grid-template-columns: 1fr !important;
         }
     }
-
-    @media (max-width: 768px) {
-        .wallet-balance {
-            display: none;
-        }
-
-        .user-dropdown-toggle {
-            min-width: 44px;
-        }
-
-        .user-avatar {
-            flex-shrink: 0;
-        }
-    }
 </style>
     <!-- IMMEDIATE Icon Fix for square placeholder issues -->
     <script src="../immediate_icon_fix.js"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
-
 

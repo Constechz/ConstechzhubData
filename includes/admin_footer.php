@@ -117,7 +117,7 @@ function enhanceTopNavigation() {
 
     const avatar = toggle.querySelector('.user-avatar');
     if (avatar && !avatar.style.boxShadow) {
-        avatar.style.boxShadow = '0 6px 12px rgba(99, 102, 241, 0.25)';
+        avatar.style.boxShadow = '0 6px 12px rgba(84, 19, 136, 0.25)';
     }
 
     let info = toggle.querySelector('.user-info');
@@ -162,14 +162,43 @@ function enhanceTopNavigation() {
     }
 }
 
+function positionProfitWithdrawalsNavItem() {
+    const sidebarNav = document.querySelector('.sidebar .sidebar-nav');
+    if (!sidebarNav) return;
+
+    const systemResetLink = sidebarNav.querySelector('a[href*="system-reset.php"]');
+    const profitWithdrawalsLink = sidebarNav.querySelector('a[href*="profit-withdrawals.php"]');
+    if (!systemResetLink || !profitWithdrawalsLink || systemResetLink === profitWithdrawalsLink) {
+        return;
+    }
+
+    const systemResetItem = systemResetLink.closest('.nav-item, li.nav-item');
+    const profitWithdrawalsItem = profitWithdrawalsLink.closest('.nav-item, li.nav-item');
+    if (!systemResetItem || !profitWithdrawalsItem || systemResetItem === profitWithdrawalsItem) {
+        return;
+    }
+
+    const originalSection = profitWithdrawalsItem.closest('.nav-section');
+    if (systemResetItem.nextElementSibling !== profitWithdrawalsItem) {
+        systemResetItem.insertAdjacentElement('afterend', profitWithdrawalsItem);
+    }
+
+    if (originalSection) {
+        const hasAnyItems = originalSection.querySelector('.nav-item, li.nav-item');
+        if (!hasAnyItems) {
+            originalSection.remove();
+        }
+    }
+}
+
 document.addEventListener('DOMContentLoaded', function(){ 
     initTheme(); 
     enhanceTopNavigation();
+    positionProfitWithdrawalsNavItem();
 });
 </script>
 
 <!-- PWA Installation Manager -->
-<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/phone-paste.js')); ?>"></script>
-<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/pwa-install.js')); ?>"></script>
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/pwa-install.js')); ?>""></script>
 </body>
 </html>

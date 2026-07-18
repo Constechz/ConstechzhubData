@@ -6,8 +6,8 @@ require_once '../includes/order_status.php';
 requireRole('agent');
 
 // Get agent ID
+$agent_id = $_SESSION['user_id'];
 $current_user = getCurrentUser();
-$agent_id = (int)($current_user['id'] ?? $_SESSION['user_id']);
 
 // Pagination
 $page = isset($_GET['page']) ? max(1, intval($_GET['page'])) : 1;
@@ -34,14 +34,6 @@ $status_filter = isset($_GET['status']) ? $_GET['status'] : '';
 $date_from = isset($_GET['date_from']) ? $_GET['date_from'] : '';
 $date_to = isset($_GET['date_to']) ? $_GET['date_to'] : '';
 
-$status_filter_groups = [
-    'pending' => ['pending'],
-    'processing' => ['processing'],
-    'successful' => ['success', 'completed', 'delivered'],
-    'success' => ['success', 'completed', 'delivered'],
-    'failed' => ['failed', 'cancelled'],
-];
-
 // Build query
 $where_conditions = ["(bo.agent_id = ? OR bo.user_id = ?)"];
 $params = [$agent_id, $agent_id];
@@ -54,13 +46,9 @@ if (!empty($network_filter)) {
 }
 
 if (!empty($status_filter)) {
-    $status_values = $status_filter_groups[$status_filter] ?? [$status_filter];
-    $status_placeholders = implode(', ', array_fill(0, count($status_values), '?'));
-    $where_conditions[] = "bo.status IN ({$status_placeholders})";
-    foreach ($status_values as $status_value) {
-        $params[] = $status_value;
-        $types .= "s";
-    }
+    $where_conditions[] = "bo.status = ?";
+    $params[] = $status_filter;
+    $types .= "s";
 }
 
 if (!empty($date_from)) {
@@ -97,38 +85,28 @@ $orders_query = "
     SELECT bo.*, dp.name as package_name, dp.data_size, dp.validity_days,
            n.name as network_name, n.color as network_color,
            t.amount as transaction_amount,
-           t.balance_after,
-           CASE WHEN bo.agent_id > 0 AND (bo.user_id IS NULL OR bo.user_id != bo.agent_id) THEN bo.amount ELSE COALESCE(NULLIF(bo.agent_cost, 0), NULLIF(pp.price, 0), bo.amount, dp.price, 0) END as agent_price,
-           COALESCE(
-               ap.profit_amount,
-               CASE
-                   WHEN bo.agent_id = ?
-                        AND bo.agent_cost IS NOT NULL
-                   THEN GREATEST(COALESCE(bo.amount, 0) - COALESCE(bo.agent_cost, 0), 0)
-                   ELSE 0
-               END,
-               0
-           ) as order_profit,
+           COALESCE(acp.custom_price, pp.price, 0) as agent_price,
            CASE WHEN oir.id IS NULL THEN 0 ELSE 1 END AS has_open_issue
     FROM bundle_orders bo
     JOIN data_packages dp ON dp.id = bo.package_id
     JOIN networks n ON n.id = dp.network_id
     LEFT JOIN transactions t ON t.id = bo.transaction_id
-    LEFT JOIN agent_custom_pricing acp ON acp.package_id = dp.id AND acp.agent_id = ? AND acp.is_active = 1
-    LEFT JOIN agent_profits ap ON ap.order_id = bo.id AND ap.agent_id = ? AND ap.status <> 'cancelled'
+    LEFT JOIN agent_custom_pricing acp ON acp.package_id = dp.id AND acp.agent_id = ?
     LEFT JOIN package_pricing pp ON pp.package_id = dp.id AND pp.user_type = 'agent'
-    LEFT JOIN package_pricing pp_customer ON pp_customer.package_id = dp.id AND pp_customer.user_type = 'customer'
     LEFT JOIN order_issue_reports oir ON oir.order_id = bo.id AND oir.reporter_id = ? AND oir.status IN ('open','in_progress')
     $where_clause
     ORDER BY bo.created_at DESC
     LIMIT ? OFFSET ?
 ";
 
-$orders_params = array_merge([$agent_id, $agent_id, $agent_id, $agent_id], $params, [$limit, $offset]);
-$orders_types = "iiii" . $types . "ii";
+$params[] = $agent_id;
+$params[] = $agent_id;
+$params[] = $limit;
+$params[] = $offset;
+$types .= "iiii";
 
 $stmt = $db->prepare($orders_query);
-$stmt->bind_param($orders_types, ...$orders_params);
+$stmt->bind_param($types, ...$params);
 $stmt->execute();
 $orders_rs = $stmt->get_result();
 
@@ -140,21 +118,13 @@ $stats_query = "
     SELECT 
         COUNT(*) as total_orders,
         SUM(CASE WHEN LOWER(bo.status) IN ('success','completed','delivered') THEN 1 ELSE 0 END) as successful_orders,
-        SUM(CASE WHEN LOWER(bo.status) = 'processing' THEN 1 ELSE 0 END) as processing_orders,
-        SUM(CASE WHEN LOWER(bo.status) = 'pending' THEN 1 ELSE 0 END) as pending_orders,
+        SUM(CASE WHEN LOWER(bo.status) IN ('pending','processing') THEN 1 ELSE 0 END) as pending_orders,
         SUM(CASE WHEN LOWER(bo.status) IN ('failed','cancelled') THEN 1 ELSE 0 END) as failed_orders,
-        SUM(
-            CASE
-                WHEN LOWER(bo.status) IN ('processing','success','completed','delivered') THEN
-                    CASE WHEN bo.agent_id > 0 AND (bo.user_id IS NULL OR bo.user_id != bo.agent_id) THEN bo.amount ELSE COALESCE(NULLIF(bo.agent_cost, 0), NULLIF(pp.price, 0), bo.amount, dp.price, 0) END
-                ELSE 0
-            END
-        ) as total_revenue
+        SUM(CASE WHEN LOWER(bo.status) IN ('success','completed','delivered') THEN COALESCE(acp.custom_price, pp.price, 0) ELSE 0 END) as total_revenue
     FROM bundle_orders bo
     JOIN data_packages dp ON dp.id = bo.package_id
-    LEFT JOIN agent_custom_pricing acp ON acp.package_id = dp.id AND acp.agent_id = ? AND acp.is_active = 1
+    LEFT JOIN agent_custom_pricing acp ON acp.package_id = dp.id AND acp.agent_id = ?
     LEFT JOIN package_pricing pp ON pp.package_id = dp.id AND pp.user_type = 'agent'
-    LEFT JOIN package_pricing pp_customer ON pp_customer.package_id = dp.id AND pp_customer.user_type = 'customer'
     WHERE (bo.agent_id = ? OR bo.user_id = ?)
 ";
 
@@ -166,7 +136,6 @@ $stats = $stmt->get_result()->fetch_assoc() ?: [];
 $stats_defaults = [
     'total_orders'       => 0,
     'successful_orders'  => 0,
-    'processing_orders'  => 0,
     'pending_orders'     => 0,
     'failed_orders'      => 0,
     'total_revenue'      => 0.0,
@@ -206,46 +175,196 @@ $flash = getFlashMessage();
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-        <?php renderAgentSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item">
+                    <a href="dashboard.php" class="nav-link">
+                        <i class="fas fa-home"></i>
+                        Dashboard
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Services</div>
+                <div class="nav-item">
+                    <a href="at-business.php" class="nav-link">
+                        <i class="fas fa-mobile-alt"></i>
+                        AT Business
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="mtn-business.php" class="nav-link">
+                        <i class="fas fa-mobile-alt"></i>
+                        MTN Business
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="afa-registration.php" class="nav-link">
+                        <i class="fas fa-user-check"></i>
+                        AFA Registration
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="bulk-mtn.php" class="nav-link">
+                        <i class="fas fa-layer-group"></i>
+                        Bulk MTN
+                    </a>
+                </div>
+                    <div class="nav-item">
+                        <a href="result-checker.php" class="nav-link">
+                            <i class="fas fa-award"></i>
+                            Result Checker
+                        </a>
+                    </div>
+                <div class="nav-item">
+                    <a href="telecel-business.php" class="nav-link">
+                        <i class="fas fa-signal"></i>
+                        Telecel Business
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Transaction</div>
+                <div class="nav-item">
+                    <a href="transactions.php" class="nav-link">
+                        <i class="fas fa-money-bill-wave"></i>
+                        Transactions
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="histories.php" class="nav-link active">
+                        <i class="fas fa-history"></i>
+                        Data Histories
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="reference.php" class="nav-link">
+                        <i class="fas fa-search"></i>
+                        Reference
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Operations</div>
+                <div class="nav-item">
+                    <a href="customer_topup.php" class="nav-link">
+                        <i class="fas fa-user-plus"></i>
+                        Customer Top-up
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="support.php" class="nav-link">
+                        <i class="fas fa-life-ring"></i>
+                        Support
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Business</div>
+                <div class="nav-item">
+                    <a href="pricing.php" class="nav-link">
+                        <i class="fas fa-tags"></i>
+                        Custom Pricing
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="paystack.php" class="nav-link">
+                        <i class="fas fa-credit-card"></i>
+                        Payment Settings
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Users</div>
+                <div class="nav-item">
+                    <a href="customers.php" class="nav-link">
+                        <i class="fas fa-user-friends"></i>
+                        Customers
+                    </a>
+                </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Commission</div>
+                <div class="nav-item">
+                    <a href="commission.php" class="nav-link">
+                        <i class="fas fa-percentage"></i>
+                        Commission
+                    </a>
+                </div>
+                    <div class="nav-item">
+                        <a href="withdraw-profit.php" class="nav-link">
+                            <i class="fas fa-wallet"></i>
+                            Withdraw Profit
+                        </a>
+                    </div>
+            </li>
+            
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item">
+                    <a href="settings.php" class="nav-link">
+                        <i class="fas fa-cog"></i>
+                        Settings
+                    </a>
+                </div>
+                <div class="nav-item">
+                    <a href="api-access.php" class="nav-link">
+                        <i class="fas fa-key"></i>
+                        API Access
+                    </a>
+                </div>
+            </li>
+        </ul>
     </nav>
 
     <!-- Main Content -->
     <main class="main-content">
         <header class="dashboard-header">
             <div class="header-left">
-                <button class="mobile-menu-toggle"><i class="fas fa-bars"></i></button>
+                <button class="mobile-menu-toggle">
+                    <i class="fas fa-bars"></i>
+                </button>
                 <nav class="breadcrumb">
-                    <div class="breadcrumb-item"><i class="fas fa-history"></i></div>
+                    <div class="breadcrumb-item">
+                        <i class="fas fa-history"></i>
+                    </div>
                     <div class="breadcrumb-item">Transaction</div>
                     <div class="breadcrumb-item active">Histories</div>
                 </nav>
             </div>
+            
             <div class="header-actions">
                 <button class="theme-toggle" onclick="toggleTheme()">
-                    <i id="theme-icon" class="fas fa-moon"></i>
+                    <i class="fas fa-sun" id="theme-icon"></i>
                 </button>
+                
                 <div class="user-dropdown">
                     <button class="user-dropdown-toggle" onclick="toggleUserDropdown()">
                         <div class="user-avatar">
-                            <?php
-                                $displayName = (string)($current_user['full_name'] ?? $_SESSION['username'] ?? 'A');
-                                echo strtoupper(substr(trim($displayName), 0, 1));
-                            ?>
+                            <?php echo strtoupper(substr($current_user['full_name'] ?? $_SESSION['username'], 0, 1)); ?>
                         </div>
-                        <div class="user-info">
-                            <div class="user-name"><?php echo htmlspecialchars($displayName); ?></div>
-                            <div class="user-role">Agent</div>
+                        <div>
+                            <div style="font-weight: 500;"><?php echo htmlspecialchars($current_user['full_name'] ?? $_SESSION['username']); ?></div>
+                            <div style="font-size: 0.75rem; color: var(--text-muted);">Agent</div>
                         </div>
-                        <i class="fas fa-chevron-down dropdown-arrow"></i>
+                        <i class="fas fa-chevron-down" style="margin-left: 0.5rem;"></i>
                     </button>
-                    <div id="userDropdown" class="user-dropdown-menu">
+                    
+                    <div class="user-dropdown-menu" id="userDropdown">
                         <a href="profile.php" class="dropdown-item">
                             <i class="fas fa-user"></i> Profile
                         </a>
                         <a href="settings.php" class="dropdown-item">
                             <i class="fas fa-cog"></i> Settings
                         </a>
-                        <hr class="dropdown-divider">
+                        <hr style="margin: 0.5rem 0; border: none; border-top: 1px solid var(--border-color);">
                         <a href="../logout.php" class="dropdown-item">
                             <i class="fas fa-sign-out-alt"></i> Logout
                         </a>
@@ -253,6 +372,9 @@ $flash = getFlashMessage();
                 </div>
             </div>
         </header>
+
+<?php echo renderNotificationSlides('agents'); ?>
+
 
         <div class="dashboard-content">
             <div class="page-title">
@@ -284,15 +406,6 @@ $flash = getFlashMessage();
                     <div class="stat-content">
                         <div class="stat-value"><?php echo number_format((int)($stats['successful_orders'] ?? 0)); ?></div>
                         <div class="stat-label">Successful</div>
-                    </div>
-                </div>
-                <div class="stat-card warning">
-                    <div class="stat-icon">
-                        <i class="fas fa-spinner"></i>
-                    </div>
-                    <div class="stat-content">
-                        <div class="stat-value"><?php echo number_format((int)($stats['processing_orders'] ?? 0)); ?></div>
-                        <div class="stat-label">Processing</div>
                     </div>
                 </div>
                 <div class="stat-card warning">
@@ -349,8 +462,7 @@ $flash = getFlashMessage();
                                 <select name="status" id="status" class="form-control">
                                     <option value="">All Status</option>
                                     <option value="pending" <?php echo $status_filter === 'pending' ? 'selected' : ''; ?>>Pending</option>
-                                    <option value="processing" <?php echo $status_filter === 'processing' ? 'selected' : ''; ?>>Processing</option>
-                                    <option value="successful" <?php echo in_array($status_filter, ['successful', 'success'], true) ? 'selected' : ''; ?>>Successful</option>
+                                    <option value="success" <?php echo $status_filter === 'success' ? 'selected' : ''; ?>>Success</option>
                                     <option value="failed" <?php echo $status_filter === 'failed' ? 'selected' : ''; ?>>Failed</option>
                                 </select>
                             </div>
@@ -396,20 +508,18 @@ $flash = getFlashMessage();
                             <table class="table mobile-responsive-orders-table">
                                 <thead>
                                     <tr>
-                                         <th>Order ID</th>
-                                         <th>Network</th>
-                                         <th>Package</th>
-                                         <th>Beneficiary</th>
-                                         <th>Amount</th>
-                                         <th>Balance Remaining</th>
-                                         <th>Profit</th>
-                                         <th>Status</th>
-                                         <th>Actions</th>
+                                        <th>Order ID</th>
+                                        <th>Network</th>
+                                        <th>Package</th>
+                                        <th>Beneficiary</th>
+                                        <th>Amount</th>
+                                        <th>Status</th>
+                                        <th class="d-none d-md-table-cell">Date</th>
+                                        <th>Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     <?php foreach ($orders as $order): ?>
-                                        <?php $display_network_name = detectGhanaNetworkLabel($order['network_name'] ?? '', $order['beneficiary_number'] ?? ''); ?>
                                         <tr>
                                             <td data-label="Order ID">
                                                 <span class="order-id">#<?php echo str_pad($order['id'], 6, '0', STR_PAD_LEFT); ?></span>
@@ -419,14 +529,14 @@ $flash = getFlashMessage();
                                             </td>
                                             <td data-label="Network">
                                                 <div class="network-badge">
-                                                    <span class="network-indicator" style="background-color: <?php echo htmlspecialchars($order['network_color'] ?? '#007bff'); ?>"></span>
-                                                    <?php echo htmlspecialchars($display_network_name); ?>
+                                                    <span class="network-indicator" style="background-color: <?php echo htmlspecialchars($order['network_color'] ?? '#541388'); ?>"></span>
+                                                    <?php echo htmlspecialchars($order['network_name']); ?>
                                                 </div>
                                             </td>
                                             <td data-label="Package">
                                                 <div class="package-info">
                                                     <div class="package-name"><?php echo htmlspecialchars($order['package_name']); ?></div>
-                                                    <small class="text-muted"><?php echo htmlspecialchars($order['data_size']); ?> &middot; <?php echo intval($order['validity_days']); ?> days</small>
+                                                    <small class="text-muted"><?php echo htmlspecialchars($order['data_size']); ?> &bull; <?php echo intval($order['validity_days']); ?> days</small>
                                                 </div>
                                             </td>
                                             <td data-label="Beneficiary">
@@ -435,23 +545,28 @@ $flash = getFlashMessage();
                                             <td data-label="Amount">
                                                 <span class="amount"><?php echo CURRENCY . number_format($order['agent_price'], 2); ?></span>
                                             </td>
-                                            <td data-label="Balance Remaining">
-                                                <?php if (isset($order['balance_after']) && $order['balance_after'] !== null): ?>
-                                                    <span class="amount text-muted"><?php echo CURRENCY . number_format((float)$order['balance_after'], 2); ?></span>
-                                                <?php else: ?>
-                                                    <span class="text-muted">&mdash;</span>
-                                                <?php endif; ?>
-                                            </td>
-                                            <td data-label="Profit">
-                                                <span class="amount text-success"><?php echo CURRENCY . number_format((float) ($order['order_profit'] ?? 0), 2); ?></span>
-                                            </td>
-                                            <?php $status_info = getOrderStatusDisplay($order['status']); ?>
+                                            <?php
+                                                $status_info = getOrderStatusDisplay($order['status']);
+                                                $raw_status = strtolower($order['status']);
+                                                if (in_array($raw_status, ['success', 'completed', 'delivered'], true)) {
+                                                    $status_class = 'status-badge success';
+                                                } elseif (in_array($raw_status, ['pending', 'processing'], true)) {
+                                                    $status_class = 'status-badge pending';
+                                                } else {
+                                                    $status_class = 'status-badge failed';
+                                                }
+                                            ?>
                                             <td data-label="Status">
-                                                <span class="badge" style="background-color: <?php echo $status_info['color']; ?>; color: white; padding: 0.25rem 0.5rem; border-radius: 0.25rem; font-size: 0.75rem;" title="<?php echo htmlspecialchars($status_info['description']); ?>">
+                                                <span class="<?php echo $status_class; ?>" title="<?php echo htmlspecialchars($status_info['description']); ?>">
                                                     <i class="fas <?php echo $status_info['icon']; ?>"></i> <?php echo $status_info['label']; ?>
                                                 </span>
                                             </td>
-
+                                            <td class="d-none d-md-table-cell" data-label="Date">
+                                                <div class="date-info">
+                                                    <div><?php echo date('M j, Y', strtotime($order['created_at'])); ?></div>
+                                                    <small class="text-muted"><?php echo date('g:i A', strtotime($order['created_at'])); ?></small>
+                                                </div>
+                                            </td>
                                             <?php
                                                 $hasOpenIssue = !empty($order['has_open_issue']);
                                                 $orderAgeMinutes = max(0, floor((time() - strtotime($order['created_at'])) / 60));
@@ -469,28 +584,26 @@ $flash = getFlashMessage();
                                                     'id' => (int) $order['id'],
                                                     'reference' => $order['order_reference'] ?? '',
                                                     'package' => $order['package_name'],
-                                                    'network' => $display_network_name,
+                                                    'network' => $order['network_name'],
                                                     'phone' => $order['beneficiary_number'],
                                                     'status' => $status_info['label'],
                                                     'raw_status' => $order['status'],
                                                     'amount' => (float) ($order['agent_price'] ?? 0),
                                                     'amount_formatted' => CURRENCY . number_format((float) ($order['agent_price'] ?? 0), 2),
-                                                    'profit' => (float) ($order['order_profit'] ?? 0),
-                                                    'profit_formatted' => CURRENCY . number_format((float) ($order['order_profit'] ?? 0), 2),
                                                     'created_at' => date('M j, Y g:i A', strtotime($order['created_at']))
                                                 ];
                                                 $orderPayloadJson = htmlspecialchars(json_encode($orderPayload, JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP), ENT_QUOTES, 'UTF-8');
                                             ?>
                                             <td data-label="Actions">
-                                                <div class="action-buttons order-actions">
+                                                <div class="action-buttons">
                                                     <button class="btn btn-sm btn-outline-primary"
                                                             data-order-id="<?php echo (int) $order['id']; ?>"
                                                             onclick="viewOrderDetails(this)"
                                                             title="View details">
                                                         <i class="fas fa-eye"></i>
                                                     </button>
-                                                    <?php if (strtolower((string) ($order['status'] ?? '')) === 'failed'): ?>
-                                                        <button class="btn btn-sm btn-outline-warning" onclick="retryOrder(this, <?php echo (int) $order['id']; ?>)" title="Retry order (no extra charge)">
+                                                    <?php if ($order['status'] === 'failed'): ?>
+                                                        <button class="btn btn-sm btn-outline-warning" onclick="retryOrder(<?php echo $order['id']; ?>)" title="Retry order">
                                                             <i class="fas fa-redo"></i>
                                                         </button>
                                                     <?php endif; ?>
@@ -624,12 +737,7 @@ $flash = getFlashMessage();
     // User dropdown
     function toggleUserDropdown() {
         const dropdown = document.getElementById('userDropdown');
-        const toggle = document.querySelector('.user-dropdown-toggle');
-        if (!dropdown || !toggle) {
-            return;
-        }
-        const isOpen = dropdown.classList.toggle('show');
-        toggle.classList.toggle('open', isOpen);
+        dropdown.classList.toggle('show');
     }
 
     // Close dropdown when clicking outside
@@ -639,7 +747,6 @@ $flash = getFlashMessage();
         
         if (dropdown && toggle && !toggle.contains(event.target)) {
             dropdown.classList.remove('show');
-            toggle.classList.remove('open');
         }
     });
 
@@ -684,9 +791,6 @@ $flash = getFlashMessage();
                 const amountFormatted = typeof order.amount === 'number'
                     ? '<?php echo CURRENCY; ?>' + Number(order.amount).toFixed(2)
                     : order.amount;
-                const profitFormatted = typeof order.order_profit === 'number'
-                    ? '<?php echo CURRENCY; ?>' + Number(order.order_profit).toFixed(2)
-                    : (order.order_profit || 'N/A');
 
                 orderDetailsContainer.innerHTML = `
                     <div class="order-detail-item"><strong>Order ID:</strong> #${String(order.id).padStart(6, '0')}</div>
@@ -695,7 +799,6 @@ $flash = getFlashMessage();
                     <div class="order-detail-item"><strong>Network:</strong> ${order.network_name || 'N/A'}</div>
                     <div class="order-detail-item"><strong>Package:</strong> ${order.package_name || 'N/A'} (${order.data_size || 'N/A'})</div>
                     <div class="order-detail-item"><strong>Amount:</strong> ${amountFormatted || 'N/A'}</div>
-                    <div class="order-detail-item"><strong>Profit:</strong> ${profitFormatted || 'N/A'}</div>
                     <div class="order-detail-item"><strong>Recipient:</strong> ${order.beneficiary_number || 'N/A'}</div>
                     <div class="order-detail-item"><strong>Customer:</strong> ${order.customer_name || 'N/A'} (${order.customer_email || 'N/A'})</div>
                     <div class="order-detail-item"><strong>Transaction Ref:</strong> ${order.transaction_reference || 'N/A'}</div>
@@ -721,60 +824,11 @@ $flash = getFlashMessage();
         document.body.classList.remove('modal-open');
     }
     
-    function retryOrder(button, orderId) {
-        const retrySettings = window.ORDER_RETRY_SETTINGS || {};
-        const apiUrl = retrySettings.apiUrl || 'retry_order.php';
-        const csrfToken = retrySettings.csrfToken || '';
-
-        if (!orderId) {
-            alert('Invalid order selected for retry.');
-            return;
+    function retryOrder(orderId) {
+        if (confirm('Are you sure you want to retry this order?')) {
+            // Implement retry logic
+            alert('Retry functionality will be implemented');
         }
-
-        if (!csrfToken) {
-            alert('Session security token missing. Please refresh and try again.');
-            return;
-        }
-
-        if (!confirm('Retry this failed order now? No additional wallet deduction will be made.')) {
-            return;
-        }
-
-        const btn = button && button.tagName ? button : null;
-        const originalHtml = btn ? btn.innerHTML : '';
-        if (btn) {
-            btn.disabled = true;
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
-        }
-
-        fetch(apiUrl, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                order_id: Number(orderId),
-                csrf_token: csrfToken
-            })
-        })
-            .then(async (response) => {
-                const payload = await response.json().catch(() => ({}));
-                if (!response.ok || !payload.success) {
-                    const message = payload.message || 'Retry request failed.';
-                    throw new Error(message);
-                }
-                alert(payload.message || 'Retry submitted successfully.');
-                window.location.reload();
-            })
-            .catch((error) => {
-                alert(error.message || 'Retry request failed.');
-            })
-            .finally(() => {
-                if (btn) {
-                    btn.disabled = false;
-                    btn.innerHTML = originalHtml;
-                }
-            });
     }
     
     // Close modal when clicking outside
@@ -803,542 +857,635 @@ window.ORDER_ESCALATION_SETTINGS = {
     minDelayMinutes: <?php echo (int) $order_report_delay_minutes; ?>,
     role: 'agent'
 };
-</script>
-<script>
-window.ORDER_RETRY_SETTINGS = {
-    apiUrl: 'retry_order.php',
-    csrfToken: '<?php echo $order_issue_token; ?>'
-};
-</script>
-<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/order-escalation.js')); ?>""></script>
-
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/order-escalation.js')); ?>"></script>
 <style>
-/* Responsive Styles for Data Histories Page */
-@media (min-width: 769px) {
-    html, body, .dashboard-wrapper, .main-content {
-        overflow-x: hidden !important;
-    }
-    .main-content {
-        width: calc(100% - 250px) !important;
-        max-width: calc(100% - 250px) !important;
-    }
-    .mobile-responsive-orders-table th,
-    .mobile-responsive-orders-table td {
-        padding: 10px 8px !important;
-        font-size: 0.9rem !important;
-    }
-    .table-responsive {
-        overflow-x: hidden !important;
-    }
-    .mobile-responsive-orders-table {
-        min-width: 100% !important;
-        width: 100% !important;
-    }
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+
+/* Apply Outfit font to container */
+.dashboard-content, .breadcrumb, .widget, .stat-card {
+    font-family: 'Outfit', 'Inter', sans-serif !important;
 }
 
-/* Header + profile actions alignment */
-.dashboard-header .header-actions {
-    margin-right: 0;
-    gap: 0.75rem;
+/* Premium Title Block */
+.page-title {
+    margin-bottom: 2rem;
 }
-
-.dashboard-header .user-dropdown-toggle {
-    min-width: 220px;
-}
-
-.dashboard-header .user-dropdown-menu {
-    right: 0;
-    left: auto;
-}
-
-.dashboard-header .user-dropdown-toggle .user-info {
-    display: flex !important;
-    min-width: 0;
-    flex-direction: column;
-}
-
-.dashboard-header .user-dropdown-toggle > div:not(.user-avatar),
-.dashboard-header .user-dropdown-toggle > span:not(.user-avatar) {
-    display: block !important;
-}
-
-.dashboard-header .user-dropdown-toggle .user-name {
+.page-title h1 {
+    font-size: 2.25rem;
+    font-weight: 700;
     color: var(--text-primary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    letter-spacing: -0.5px;
+    margin-bottom: 0.5rem;
+}
+.page-subtitle {
+    font-size: 1rem;
+    color: var(--text-secondary);
+    opacity: 0.85;
 }
 
-.dashboard-header .user-dropdown-toggle .user-role {
-    color: var(--text-muted);
-    white-space: nowrap;
+/* Premium Card & Widget Styles */
+.widget {
+    background: var(--card-bg, #ffffff);
+    border: 1px solid var(--border-color, #eaeaea);
+    border-radius: 16px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.02);
+    margin-bottom: 2rem;
+    transition: all 0.3s ease;
     overflow: hidden;
-    text-overflow: ellipsis;
+}
+[data-theme="dark"] .widget {
+    background: #1e1b2f;
+    border-color: rgba(255, 255, 255, 0.06);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
 }
 
-/* Cleaner widget structure */
-.widget-header h3,
-.widget-header .widget-title {
+.widget-header {
+    border-bottom: 1px solid var(--border-color, #eaeaea);
+    padding: 1.25rem 1.5rem;
+    background: rgba(84, 19, 136, 0.02);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+[data-theme="dark"] .widget-header {
+    border-bottom-color: rgba(255, 255, 255, 0.06) !important;
+    background: rgba(255, 255, 255, 0.01);
+}
+
+.widget-header h3 {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: var(--text-primary);
     margin: 0;
 }
 
-.widget-actions {
-    color: var(--text-muted);
-    font-size: 0.9rem;
-}
-
-/* Better table readability on desktop */
-.mobile-responsive-orders-table td {
-    vertical-align: top;
-}
-
-.order-id {
-    font-weight: 700;
-    letter-spacing: 0.02em;
-}
-
-/* Filter Form Responsiveness */
-.responsive-filter-form .filter-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 1rem;
-    align-items: end;
-}
-
-.responsive-filter-form .filter-group {
-    flex: 1;
-    min-width: 150px;
-}
-
-.responsive-filter-form .filter-actions {
-    display: flex;
-    gap: 0.5rem;
-    align-items: end;
-}
-
-/* Responsive Stats Grid */
+/* Stats Grid & Cards */
 .responsive-stats-grid {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 1rem;
-    margin-bottom: 2rem;
+    gap: 1.25rem;
+    margin-bottom: 2.5rem;
 }
 
-.order-actions {
+.stat-card {
+    background: var(--card-bg, #ffffff);
+    border: 1px solid var(--border-color, #eaeaea);
+    border-radius: 16px;
+    padding: 1.5rem;
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    justify-content: flex-end;
-    gap: 0.45rem;
-    margin-bottom: 0;
+    gap: 1.25rem;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.02);
+    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), box-shadow 0.3s ease;
+}
+[data-theme="dark"] .stat-card {
+    background: #1e1b2f;
+    border-color: rgba(255, 255, 255, 0.06);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.12);
 }
 
-.order-actions .btn {
-    width: 40px;
-    height: 40px;
-    min-width: 40px;
-    min-height: 40px;
-    padding: 0;
+.stat-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 15px 35px rgba(84, 19, 136, 0.08);
+}
+[data-theme="dark"] .stat-card:hover {
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.25);
+}
+
+.stat-icon {
+    width: 48px;
+    height: 48px;
     border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.25rem;
+    background: rgba(84, 19, 136, 0.08);
+    color: #541388;
+}
+[data-theme="dark"] .stat-icon {
+    background: rgba(162, 105, 220, 0.15);
+    color: #b388eb;
+}
+
+/* Colored Stats card variants */
+.stat-card.success .stat-icon {
+    background: rgba(46, 204, 113, 0.1);
+    color: #2ecc71;
+}
+.stat-card.warning .stat-icon {
+    background: rgba(241, 196, 15, 0.1);
+    color: #f1c40f;
+}
+.stat-card.danger .stat-icon {
+    background: rgba(231, 76, 60, 0.1);
+    color: #e74c3c;
+}
+.stat-card.info .stat-icon {
+    background: rgba(52, 152, 219, 0.1);
+    color: #3498db;
+}
+
+.stat-value {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1.2;
+}
+
+.stat-label {
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 0.25rem;
+}
+
+/* Filters UI */
+.responsive-filter-form .filter-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1.25rem;
+    align-items: end;
+}
+.responsive-filter-form .filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+.responsive-filter-form label {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+.responsive-filter-form .form-control {
+    width: 100%;
+    border-radius: 10px;
+    padding: 0.65rem 1rem;
+    border: 1px solid var(--border-color, #eaeaea);
+    background: var(--bg-secondary, #f9f9f9);
+    color: var(--text-primary);
+    transition: all 0.25s ease;
+}
+[data-theme="dark"] .responsive-filter-form .form-control {
+    background: #120e24;
+    border-color: rgba(255, 255, 255, 0.08);
+}
+.responsive-filter-form .form-control:focus {
+    border-color: #541388;
+    box-shadow: 0 0 0 3px rgba(84, 19, 136, 0.15);
+    background: var(--bg-primary, #ffffff);
+}
+.responsive-filter-form .filter-actions {
+    display: flex;
+    gap: 0.75rem;
+}
+.responsive-filter-form .filter-actions .btn {
+    padding: 0.65rem 1.25rem;
+    border-radius: 10px;
+    font-weight: 600;
+    font-size: 0.9rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    border-width: 1px;
-    box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
+    gap: 0.5rem;
+    cursor: pointer;
+    transition: all 0.25s ease;
 }
 
-.order-actions .btn i {
+/* Table Design */
+.table-responsive {
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+}
+[data-theme="dark"] .table-responsive {
+    border-color: rgba(255, 255, 255, 0.06);
+}
+
+.table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.table th {
+    background: rgba(84, 19, 136, 0.03);
+    color: var(--text-primary);
+    font-weight: 600;
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 1.15rem 1.25rem;
+    border-bottom: 2px solid var(--border-color);
+    text-align: left;
+}
+[data-theme="dark"] .table th {
+    background: rgba(255, 255, 255, 0.02);
+    border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+
+.table td {
+    padding: 1.15rem 1.25rem;
+    border-bottom: 1px solid var(--border-color);
+    vertical-align: middle;
+}
+[data-theme="dark"] .table td {
+    border-bottom-color: rgba(255, 255, 255, 0.04);
+}
+
+.table tbody tr {
+    transition: background-color 0.2s ease;
+}
+
+.table tbody tr:hover {
+    background-color: rgba(84, 19, 136, 0.02);
+}
+[data-theme="dark"] .table tbody tr:hover {
+    background-color: rgba(255, 255, 255, 0.01);
+}
+
+/* Row-specific column details */
+.order-id {
+    font-weight: 700;
+    color: #541388;
+}
+[data-theme="dark"] .order-id {
+    color: #b388eb;
+}
+
+.network-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    font-weight: 600;
+}
+
+.network-indicator {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.package-name {
+    font-weight: 600;
+    color: var(--text-primary);
     font-size: 0.95rem;
 }
 
-.order-actions .btn-outline-primary {
-    background: rgba(59, 130, 246, 0.1);
-    color: #2563eb;
-    border-color: rgba(37, 99, 235, 0.22);
+.phone-number {
+    font-family: monospace;
+    font-size: 0.95rem;
+    font-weight: 500;
+    color: var(--text-primary);
 }
 
-.order-actions .btn-outline-warning {
-    background: rgba(245, 158, 11, 0.12);
-    color: #b45309;
-    border-color: rgba(180, 83, 9, 0.22);
+.amount {
+    font-weight: 700;
+    color: var(--text-primary);
+    font-size: 1rem;
 }
 
-.order-actions .btn-outline-danger {
-    background: rgba(239, 68, 68, 0.1);
-    color: #dc2626;
-    border-color: rgba(220, 38, 38, 0.22);
+/* Premium Pill Badges for Order Statuses */
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.8rem;
+    border-radius: 30px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    white-space: nowrap;
 }
 
-.order-actions .btn-outline-success {
-    background: rgba(34, 197, 94, 0.1);
-    color: #15803d;
-    border-color: rgba(21, 128, 61, 0.22);
+.status-badge.success {
+    background: rgba(46, 204, 113, 0.12);
+    color: #27ae60;
+    border: 1px solid rgba(46, 204, 113, 0.2);
+}
+[data-theme="dark"] .status-badge.success {
+    background: rgba(46, 204, 113, 0.18);
+    color: #2ecc71;
 }
 
-.order-actions .btn:hover {
-    transform: translateY(-1px);
-    box-shadow: 0 12px 22px rgba(15, 23, 42, 0.12);
+.status-badge.pending {
+    background: rgba(243, 156, 18, 0.12);
+    color: #d35400;
+    border: 1px solid rgba(243, 156, 18, 0.2);
+}
+[data-theme="dark"] .status-badge.pending {
+    background: rgba(241, 196, 15, 0.18);
+    color: #f1c40f;
 }
 
-/* Mobile Responsive Orders Table */
+.status-badge.failed {
+    background: rgba(231, 76, 60, 0.12);
+    color: #c0392b;
+    border: 1px solid rgba(231, 76, 60, 0.2);
+}
+[data-theme="dark"] .status-badge.failed {
+    background: rgba(231, 76, 60, 0.18);
+    color: #ff7675;
+}
+
+/* Action Buttons */
+.action-buttons {
+    display: flex;
+    gap: 0.5rem;
+}
+
+.action-buttons .btn {
+    border-radius: 50% !important;
+    width: 32px !important;
+    height: 32px !important;
+    display: inline-flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    padding: 0 !important;
+    transition: all 0.25s ease;
+    border: 1px solid var(--border-color);
+    background: transparent;
+    cursor: pointer;
+}
+
+.btn-outline-primary { color: #541388; border-color: rgba(84, 19, 136, 0.3) !important; }
+.btn-outline-primary:hover { background: #541388 !important; color: #fff !important; }
+
+.btn-outline-warning { color: #f1c40f; border-color: rgba(241, 196, 15, 0.3) !important; }
+.btn-outline-warning:hover { background: #f1c40f !important; color: #fff !important; }
+
+.btn-outline-danger { color: #e74c3c; border-color: rgba(231, 76, 60, 0.3) !important; }
+.btn-outline-danger:hover { background: #e74c3c !important; color: #fff !important; }
+
+.btn-outline-success { color: #2ecc71; border-color: rgba(46, 204, 113, 0.3) !important; }
+.btn-outline-success:hover { background: #2ecc71 !important; color: #fff !important; }
+
+/* Pagination Styling */
+.pagination-wrapper {
+    padding: 1.25rem 1.5rem;
+    border-top: 1px solid var(--border-color);
+    background: rgba(84, 19, 136, 0.01);
+}
+[data-theme="dark"] .pagination-wrapper {
+    border-top-color: rgba(255, 255, 255, 0.06);
+}
+
+.pagination {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.pagination-btn {
+    padding: 0.55rem 1.25rem;
+    border-radius: 30px;
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    font-weight: 600;
+    text-decoration: none;
+    transition: all 0.25s ease;
+    background: var(--card-bg);
+}
+
+.pagination-btn:hover {
+    background: #541388;
+    color: #fff;
+    border-color: #541388;
+}
+
+.pagination-info {
+    font-weight: 500;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+/* Modal Styling */
+.modal {
+    background: rgba(28, 24, 48, 0.5) !important;
+    backdrop-filter: blur(8px);
+}
+.modal-content {
+    background: var(--card-bg, #ffffff) !important;
+    border: 1px solid var(--border-color);
+    border-radius: 20px !important;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.15) !important;
+    overflow: hidden;
+}
+[data-theme="dark"] .modal-content {
+    background: #1e1b2f !important;
+    border-color: rgba(255, 255, 255, 0.08);
+}
+.modal-header {
+    border-bottom: 1px solid var(--border-color) !important;
+    padding: 1.25rem 1.5rem !important;
+    background: rgba(84, 19, 136, 0.02);
+}
+[data-theme="dark"] .modal-header {
+    border-bottom-color: rgba(255, 255, 255, 0.06) !important;
+}
+.modal-close {
+    font-size: 1.5rem;
+    font-weight: 700;
+    cursor: pointer;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    transition: color 0.2s ease;
+}
+.modal-close:hover {
+    color: #e74c3c;
+}
+.order-detail-item {
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.95rem;
+}
+[data-theme="dark"] .order-detail-item {
+    border-bottom-color: rgba(255, 255, 255, 0.04);
+}
+.order-detail-item strong {
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+/* Escalation Modal specifics */
+.order-issue-modal {
+    background: rgba(28, 24, 48, 0.5) !important;
+    backdrop-filter: blur(8px);
+}
+.order-issue-modal__dialog {
+    background: var(--card-bg, #ffffff) !important;
+    border: 1px solid var(--border-color);
+    border-radius: 20px !important;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.15) !important;
+    padding: 2rem !important;
+}
+[data-theme="dark"] .order-issue-modal__dialog {
+    background: #1e1b2f !important;
+    border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Empty state */
+.empty-state {
+    padding: 3rem 1.5rem;
+    text-align: center;
+}
+.empty-state i {
+    font-size: 3rem;
+    color: var(--text-muted);
+    margin-bottom: 1rem;
+}
+
+/* Mobile Responsiveness & Stacking */
 @media (max-width: 991px) {
-    .mobile-responsive-orders-table {
-        font-size: 0.875rem;
-    }
-    
-    .mobile-responsive-orders-table th,
-    .mobile-responsive-orders-table td {
-        padding: 0.5rem 0.25rem;
-        vertical-align: middle;
-    }
-    
-    .mobile-responsive-orders-table .badge {
-        font-size: 0.7rem;
-        padding: 0.2rem 0.4rem;
-    }
-    
-    .action-buttons {
-        display: flex;
-        gap: 0.25rem;
-    }
-    
-    .action-buttons .btn {
-        padding: 0.25rem 0.5rem;
-    }
-
-    .order-actions {
-        gap: 0.35rem;
-    }
-
-    .order-actions .btn {
-        width: 36px;
-        height: 36px;
-        min-width: 36px;
-        min-height: 36px;
-        padding: 0;
-        border-radius: 10px;
-        box-shadow: none;
+    .responsive-filter-form .filter-row {
+        grid-template-columns: 1fr 1fr;
     }
 }
 
 @media (max-width: 767px) {
-    .dashboard-header .header-actions {
-        margin-left: auto;
-        gap: 0.5rem;
-    }
-
-    .dashboard-header .user-dropdown-toggle {
-        min-width: 154px;
-        padding: 0.45rem 0.65rem;
-        gap: 0.45rem;
-    }
-
-    .dashboard-header .user-avatar {
-        width: 30px;
-        height: 30px;
-        font-size: 0.82rem;
-    }
-
-    .dashboard-header .user-dropdown-toggle .user-name {
-        font-size: 0.78rem;
-    }
-
-    .dashboard-header .user-dropdown-toggle .user-role {
-        font-size: 0.66rem;
-    }
-
-    .dashboard-header .dropdown-arrow {
-        display: inline-flex !important;
-    }
-
-    .dashboard-header .user-dropdown-menu {
-        min-width: 190px;
-    }
-
-    .widget-header {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 0.5rem;
-    }
-
-    .widget-actions {
-        width: 100%;
-    }
-
-    /* Filter Form Mobile Layout */
-    .responsive-filter-form .filter-row {
-        flex-direction: column;
-        align-items: stretch;
+    .dashboard-content {
+        padding: 1.25rem 1rem;
     }
     
-    .responsive-filter-form .filter-group,
-    .responsive-filter-form .filter-actions {
-        width: 100%;
-    }
-    
-    .responsive-filter-form .filter-actions {
-        margin-top: 1rem;
-        justify-content: center;
-    }
-    
-    /* Stats Grid Mobile Layout */
     .responsive-stats-grid {
         grid-template-columns: 1fr 1fr;
         gap: 0.75rem;
     }
     
-    /* Mobile Table Card Layout */
+    .stat-card {
+        padding: 1rem;
+        gap: 0.75rem;
+    }
+    
+    .stat-icon {
+        width: 40px;
+        height: 40px;
+        font-size: 1rem;
+    }
+    
+    .stat-value {
+        font-size: 1.35rem;
+    }
+    
+    .responsive-filter-form .filter-row {
+        grid-template-columns: 1fr;
+        gap: 1rem;
+    }
+    
+    .responsive-filter-form .filter-actions {
+        width: 100%;
+        margin-top: 0.5rem;
+    }
+    
+    .responsive-filter-form .filter-actions .btn {
+        flex: 1;
+    }
+    
+    /* Stacking Mobile Table Layout */
     .mobile-responsive-orders-table {
-        border: 0;
+        border: none !important;
     }
     
     .mobile-responsive-orders-table thead {
-        border: none;
-        clip: rect(0 0 0 0);
-        height: 1px;
-        margin: -1px;
-        overflow: hidden;
-        padding: 0;
-        position: absolute;
-        width: 1px;
+        display: none !important;
     }
     
     .mobile-responsive-orders-table tbody,
     .mobile-responsive-orders-table tr,
     .mobile-responsive-orders-table td {
-        display: block;
+        display: block !important;
     }
     
     .mobile-responsive-orders-table tr {
-        border: 1px solid var(--border-color);
-        border-radius: 0.5rem;
-        padding: 1rem;
-        margin-bottom: 1rem;
-        background: var(--bg-primary);
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        border: 1px solid var(--border-color) !important;
+        border-radius: 14px !important;
+        padding: 1.25rem !important;
+        margin-bottom: 1.25rem !important;
+        background: var(--card-bg) !important;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.02) !important;
+    }
+    [data-theme="dark"] .mobile-responsive-orders-table tr {
+        border-color: rgba(255, 255, 255, 0.06) !important;
+        background: #1e1b2f !important;
     }
     
     .mobile-responsive-orders-table td {
-        border: none;
-        padding: 0.5rem 0;
-        position: relative;
-        padding-left: 40% !important;
-        text-align: right;
+        border: none !important;
+        padding: 0.65rem 0 !important;
+        position: relative !important;
+        padding-left: 42% !important;
+        text-align: right !important;
+        font-size: 0.9rem !important;
     }
     
     .mobile-responsive-orders-table td:before {
         content: attr(data-label) ":";
-        position: absolute;
-        left: 0;
-        width: 35%;
-        padding-right: 0.5rem;
-        white-space: nowrap;
-        font-weight: 600;
-        color: var(--text-muted);
-        text-align: left;
+        position: absolute !important;
+        left: 0 !important;
+        width: 38% !important;
+        padding-right: 0.5rem !important;
+        white-space: nowrap !important;
+        font-weight: 600 !important;
+        color: var(--text-secondary) !important;
+        text-align: left !important;
     }
     
     .mobile-responsive-orders-table td:first-child {
-        border-top: 0;
-        font-weight: bold;
-        background: var(--bg-secondary);
-        margin: -1rem -1rem 0.5rem -1rem;
-        padding: 0.75rem 1rem;
-        border-radius: 0.5rem 0.5rem 0 0;
-        text-align: center;
+        font-weight: bold !important;
+        background: rgba(84, 19, 136, 0.03) !important;
+        margin: -1.25rem -1.25rem 0.75rem -1.25rem !important;
+        padding: 0.75rem 1.25rem !important;
+        border-radius: 14px 14px 0 0 !important;
+        text-align: center !important;
+        padding-left: 1.25rem !important;
+    }
+    [data-theme="dark"] .mobile-responsive-orders-table td:first-child {
+        background: rgba(255, 255, 255, 0.02) !important;
     }
     
     .mobile-responsive-orders-table td:first-child:before {
-        display: none;
+        display: none !important;
     }
     
-    /* Specific mobile adaptations */
-    .network-badge {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        justify-content: flex-end;
-    }
-    
-    .network-indicator {
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        flex-shrink: 0;
-    }
-    
-    .package-info {
-        text-align: right;
-    }
-    
-    .package-name {
-        font-weight: 500;
-        margin-bottom: 0.25rem;
+    .network-badge, .package-info, .date-info, .action-buttons {
+        justify-content: flex-end !important;
+        text-align: right !important;
     }
     
     .action-buttons {
-        justify-content: flex-end;
-    }
-
-    .mobile-responsive-orders-table td[data-label="Actions"] {
-        padding-top: 0.75rem;
-    }
-
-    .mobile-responsive-orders-table td[data-label="Actions"]:before {
-        margin-bottom: 0.45rem;
-    }
-
-    .mobile-responsive-orders-table td[data-label="Actions"] .order-actions {
-        display: inline-flex;
-        flex-direction: row;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-        align-items: center;
-        gap: 0.4rem;
-    }
-    
-    .date-info {
-        text-align: right;
-    }
-    
-    .amount {
-        font-weight: bold;
-        color: var(--accent-green);
+        gap: 0.5rem !important;
     }
 }
 
-@media (max-width: 575px) {
-    /* Ultra-small screens */
+@media (max-width: 480px) {
     .responsive-stats-grid {
         grid-template-columns: 1fr;
     }
     
-    .page-title h1 {
-        font-size: 1.75rem;
-    }
-    
-    .dashboard-content {
-        padding: 1rem;
-    }
-    
-    .widget {
-        margin-bottom: 1rem;
-    }
-    
-    .responsive-filter-form .filter-actions .btn {
-        flex: 1;
-        min-width: 0;
-    }
-    
-    .pagination-wrapper {
-        padding: 1rem;
-    }
-    
     .pagination {
         flex-direction: column;
-        gap: 0.5rem;
-        align-items: center;
+        gap: 1rem;
     }
     
     .pagination-btn {
-        padding: 0.5rem 1rem;
-        width: 200px;
+        width: 100%;
         text-align: center;
-    }
-}
-
-/* Modal Responsiveness */
-@media (max-width: 767px) {
-    .modal-content {
-        margin: 1rem;
-        width: calc(100% - 2rem);
-    }
-    
-    .modal-header {
-        padding: 1rem;
-    }
-    
-    .modal-body {
-        padding: 1rem;
-    }
-}
-
-/* Dark theme adjustments for mobile */
-[data-theme="dark"] .mobile-responsive-orders-table tr {
-    background: var(--dark-bg-secondary);
-    border-color: var(--dark-border-color);
-}
-
-[data-theme="dark"] .mobile-responsive-orders-table td:first-child {
-    background: var(--dark-bg-tertiary);
-}
-
-@media (max-width: 767px) {
-    body,
-    .dashboard-wrapper,
-    .main-content {
-        overflow-x: hidden;
-    }
-
-    .table-responsive {
-        overflow-x: hidden;
-    }
-
-    .mobile-responsive-orders-table tr {
-        overflow-wrap: anywhere;
-    }
-
-    .mobile-responsive-orders-table td {
-        padding-left: 0 !important;
-        text-align: left;
-        word-break: break-word;
-    }
-
-    .mobile-responsive-orders-table td:before {
-        position: static;
-        width: auto;
-        display: block;
-        padding-right: 0;
-        white-space: normal;
-        margin-bottom: 0.25rem;
-    }
-
-    .mobile-responsive-orders-table td:first-child {
-        text-align: left;
-    }
-
-    .network-badge,
-    .package-info,
-    .date-info {
-        text-align: left;
-        justify-content: flex-start;
-    }
-
-    .action-buttons {
-        flex-wrap: wrap;
-        justify-content: flex-start;
-    }
-
-    .mobile-responsive-orders-table td[data-label="Actions"] .order-actions {
-        justify-content: flex-start;
-    }
-
-    .mobile-responsive-orders-table td[data-label="Actions"] .order-actions .btn {
-        width: 34px;
-        height: 34px;
-        min-width: 34px;
-        min-height: 34px;
-        border-radius: 9px;
-    }
-
-    .mobile-responsive-orders-table td[data-label="Actions"] .order-actions .btn i {
-        font-size: 0.82rem;
     }
 }
 </style>
     <!-- IMMEDIATE Icon Fix for square placeholder issues -->
     <script src="../immediate_icon_fix.js"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
-
 

@@ -4,11 +4,19 @@ require_once '../config/config.php';
 // Require admin role
 requireRole('admin');
 
-ensureDataPackageStockStatusColumn();
-
 // Handle package operations
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
+    $return_network = isset($_POST['return_network']) ? sanitize($_POST['return_network']) : '';
+    $return_type = isset($_POST['return_type']) ? sanitize($_POST['return_type']) : '';
+    $redirectParams = [];
+    if ($return_network !== '') {
+        $redirectParams['network'] = $return_network;
+    }
+    if ($return_type !== '') {
+        $redirectParams['type'] = $return_type;
+    }
+    $redirectUrl = 'packages.php' . (!empty($redirectParams) ? ('?' . http_build_query($redirectParams)) : '');
     
     if ($action === 'add') {
         $name = sanitize($_POST['name']);
@@ -16,7 +24,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $type = sanitize($_POST['type']);
         $size = sanitize($_POST['size']);
         $validity = intval($_POST['validity']);
-        $stock_status = ($_POST['stock_status'] ?? 'in_stock') === 'out_of_stock' ? 'out_of_stock' : 'in_stock';
         
         if ($name && $network && $type && $size && $validity) {
             // Get network ID
@@ -26,8 +33,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $networkResult = $networkStmt->get_result();
             
             if ($networkRow = $networkResult->fetch_assoc()) {
-                $stmt = $db->prepare("INSERT INTO data_packages (name, network_id, package_type, data_size, validity_days, stock_status) VALUES (?, ?, ?, ?, ?, ?)");
-                $stmt->bind_param('sissis', $name, $networkRow['id'], $type, $size, $validity, $stock_status);
+                $stmt = $db->prepare("INSERT INTO data_packages (name, network_id, package_type, data_size, validity_days) VALUES (?, ?, ?, ?, ?)");
+                $stmt->bind_param('sissi', $name, $networkRow['id'], $type, $size, $validity);
                 
                 if ($stmt->execute()) {
                     setFlashMessage('success', 'Package added successfully');
@@ -40,32 +47,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             setFlashMessage('error', 'All fields are required');
         }
-        header('Location: packages.php');
+        header('Location: ' . $redirectUrl);
         exit();
     }
 
-    if ($action === 'edit') {
+    if ($action === 'update') {
         $id = intval($_POST['id'] ?? 0);
         $name = sanitize($_POST['name'] ?? '');
         $network = sanitize($_POST['network'] ?? '');
         $type = sanitize($_POST['type'] ?? '');
         $size = sanitize($_POST['size'] ?? '');
         $validity = intval($_POST['validity'] ?? 0);
-        $stock_status = ($_POST['stock_status'] ?? 'in_stock') === 'out_of_stock' ? 'out_of_stock' : 'in_stock';
 
-        if ($id > 0 && $name && $network && $type && $size && $validity > 0) {
+        if ($id > 0 && $name !== '' && $network !== '' && $type !== '' && $size !== '' && $validity > 0) {
             $networkStmt = $db->prepare("SELECT id FROM networks WHERE name = ? LIMIT 1");
             $networkStmt->bind_param('s', $network);
             $networkStmt->execute();
             $networkResult = $networkStmt->get_result();
 
             if ($networkRow = $networkResult->fetch_assoc()) {
-                $stmt = $db->prepare("
-                    UPDATE data_packages
-                    SET name = ?, network_id = ?, package_type = ?, data_size = ?, validity_days = ?, stock_status = ?
-                    WHERE id = ?
-                ");
-                $stmt->bind_param('sissisi', $name, $networkRow['id'], $type, $size, $validity, $stock_status, $id);
+                $stmt = $db->prepare("UPDATE data_packages SET name = ?, network_id = ?, package_type = ?, data_size = ?, validity_days = ? WHERE id = ?");
+                $networkId = (int) $networkRow['id'];
+                $stmt->bind_param('sissii', $name, $networkId, $type, $size, $validity, $id);
 
                 if ($stmt->execute()) {
                     setFlashMessage('success', 'Package updated successfully');
@@ -76,10 +79,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 setFlashMessage('error', 'Invalid network selected');
             }
         } else {
-            setFlashMessage('error', 'All fields are required for editing');
+            setFlashMessage('error', 'All fields are required and validity must be greater than 0');
         }
-
-        header('Location: packages.php');
+        header('Location: ' . $redirectUrl);
         exit();
     }
     
@@ -93,7 +95,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } else {
             setFlashMessage('error', 'Failed to delete package');
         }
-        header('Location: packages.php');
+        header('Location: ' . $redirectUrl);
         exit();
     }
 }
@@ -101,56 +103,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // Fetch filters
 $selected_network = isset($_GET['network']) ? sanitize($_GET['network']) : '';
 $selected_type = isset($_GET['type']) ? sanitize($_GET['type']) : '';
-$edit_id = isset($_GET['edit_id']) ? intval($_GET['edit_id']) : 0;
 
 // Fetch networks
 $networks = [];
 $result = $db->query("SELECT name FROM networks WHERE is_active = 1 AND name != 'Vodafone' ORDER BY name ASC");
 while ($row = $result->fetch_assoc()) { $networks[] = $row['name']; }
 
-// Fetch package being edited
-$edit_package = null;
-if ($edit_id > 0) {
-    $editStmt = $db->prepare("
-        SELECT dp.id, dp.name, n.name AS network, dp.package_type, dp.data_size, dp.validity_days,
-               COALESCE(dp.stock_status, 'in_stock') AS stock_status
-        FROM data_packages dp
-        JOIN networks n ON n.id = dp.network_id
-        WHERE dp.id = ?
-        LIMIT 1
-    ");
-    $editStmt->bind_param('i', $edit_id);
-    $editStmt->execute();
-    $editResult = $editStmt->get_result();
-    $edit_package = $editResult ? $editResult->fetch_assoc() : null;
-
-    if (!$edit_package) {
-        setFlashMessage('error', 'Selected package was not found');
-        header('Location: packages.php');
-        exit();
-    }
-
-    if ($action === 'toggle_stock') {
-        $id = intval($_POST['id'] ?? 0);
-        $stock_status = ($_POST['stock_status'] ?? 'in_stock') === 'out_of_stock' ? 'out_of_stock' : 'in_stock';
-        if ($id > 0) {
-            $stmt = $db->prepare("UPDATE data_packages SET stock_status = ? WHERE id = ?");
-            $stmt->bind_param('si', $stock_status, $id);
-            if ($stmt->execute()) {
-                setFlashMessage('success', 'Package stock status updated');
-            } else {
-                setFlashMessage('error', 'Failed to update package stock status');
-            }
-        }
-        header('Location: packages.php');
-        exit();
-    }
-}
-
 // Fetch packages
 $query = "
-    SELECT dp.id, dp.name, n.name AS network, dp.package_type, dp.data_size, dp.validity_days,
-           COALESCE(dp.stock_status, 'in_stock') AS stock_status, dp.created_at,
+    SELECT dp.id, dp.name, n.name AS network, dp.package_type, dp.data_size, dp.validity_days, dp.created_at,
            COUNT(bo.id) as total_orders
     FROM data_packages dp
     JOIN networks n ON n.id = dp.network_id AND n.is_active = 1 AND n.name != 'Vodafone'
@@ -173,7 +134,7 @@ if ($selected_type !== '') {
     $types .= 's';
 }
 
-$query .= " GROUP BY dp.id, dp.name, n.name, dp.package_type, dp.data_size, dp.validity_days, dp.stock_status, dp.created_at ORDER BY n.name, dp.package_type, dp.data_size";
+$query .= " GROUP BY dp.id, dp.name, n.name, dp.package_type, dp.data_size, dp.validity_days, dp.created_at ORDER BY n.name, dp.package_type, dp.data_size";
 
 if (!empty($params)) {
     $stmt = $db->prepare($query);
@@ -198,79 +159,6 @@ $flash = getFlashMessage();
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/style.css')); ?>">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>">
-    <style>
-        .dashboard-wrapper {
-            overflow-x: hidden;
-        }
-
-        .main-content,
-        .dashboard-content,
-        .widget,
-        .widget-body {
-            min-width: 0;
-        }
-
-        .main-content {
-            width: calc(100% - 250px);
-        }
-
-        .packages-header,
-        .packages-toolbar {
-            min-width: 0;
-            flex-wrap: wrap;
-            gap: 0.75rem;
-        }
-
-        .packages-table-wrap {
-            max-width: 100%;
-        }
-
-        @media (min-width: 769px) {
-            .packages-table-wrap {
-                overflow-x: hidden;
-            }
-
-            .packages-table {
-                width: 100%;
-                min-width: 0;
-                table-layout: fixed;
-            }
-
-            .packages-table th,
-            .packages-table td {
-                white-space: normal;
-                overflow-wrap: anywhere;
-            }
-
-            .packages-table th:nth-child(1),
-            .packages-table td:nth-child(1) {
-                width: 52px;
-            }
-
-            .packages-table th:nth-child(6),
-            .packages-table td:nth-child(6),
-            .packages-table th:nth-child(8),
-            .packages-table td:nth-child(8) {
-                width: 82px;
-            }
-
-            .packages-table th:nth-child(10),
-            .packages-table td:nth-child(10) {
-                width: 122px;
-            }
-
-            .packages-table .package-actions {
-                flex-wrap: wrap;
-                white-space: normal;
-            }
-        }
-
-        @media (max-width: 768px) {
-            .main-content {
-                width: 100%;
-            }
-        }
-    </style>
 </head>
 <body>
 <div class="dashboard-wrapper">
@@ -279,7 +167,35 @@ $flash = getFlashMessage();
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-                    <?php renderAdminSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Management</div>
+                <div class="nav-item"><a href="packages.php" class="nav-link active"><i class="fas fa-box"></i> Data Packages</a></div>
+                <div class="nav-item"><a href="pricing.php" class="nav-link"><i class="fas fa-tags"></i> Pricing</a></div>
+                <div class="nav-item"><a href="afa-registration.php" class="nav-link"><i class="fas fa-user-check"></i> AFA Registration</a></div>
+                <div class="nav-item"><a href="users.php" class="nav-link"><i class="fas fa-users"></i> Users</a></div>
+                <div class="nav-item"><a href="agents.php" class="nav-link"><i class="fas fa-user-tie"></i> Agents</a></div>
+            
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Analytics</div>
+                <div class="nav-item"><a href="transactions.php" class="nav-link"><i class="fas fa-history"></i> Transactions</a></div>
+                <div class="nav-item"><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></div>
+                <div class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item"><a href="notifications.php" class="nav-link"><i class="fas fa-bell"></i> Notification Settings</a></div>
+                <div class="nav-item"><a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> System Settings</a></div>
+                <div class="nav-item"><a href="email-broadcast.php" class="nav-link"><i class="fas fa-paper-plane"></i> Email Broadcasts</a></div>
+                <div class="nav-item"><a href="system-reset.php" class="nav-link"><i class="fas fa-broom"></i> System Reset</a></div>
+            </li>
+        </ul>
                 <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
     </nav>
 
@@ -339,66 +255,6 @@ $flash = getFlashMessage();
                 </div>
             <?php endif; ?>
 
-            <?php if ($edit_package): ?>
-                <div class="widget" style="margin-bottom: 2rem;">
-                    <div class="widget-header">
-                        <h3 class="widget-title">Edit Package #<?php echo (int)$edit_package['id']; ?></h3>
-                    </div>
-                    <div class="widget-body">
-                        <form method="post" class="form-grid">
-                            <input type="hidden" name="action" value="edit">
-                            <input type="hidden" name="id" value="<?php echo (int)$edit_package['id']; ?>">
-
-                            <div class="form-group">
-                                <label for="edit_name">Package Name</label>
-                                <input type="text" id="edit_name" name="name" class="form-control" required value="<?php echo htmlspecialchars($edit_package['name']); ?>">
-                            </div>
-                            <div class="form-group">
-                                <label for="edit_network">Network</label>
-                                <select id="edit_network" name="network" class="form-control" required>
-                                    <option value="">Select Network</option>
-                                    <?php foreach ($networks as $net): ?>
-                                        <option value="<?php echo htmlspecialchars($net); ?>" <?php echo $edit_package['network'] === $net ? 'selected' : ''; ?>>
-                                            <?php echo htmlspecialchars($net); ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label for="edit_type">Package Type</label>
-                                <select id="edit_type" name="type" class="form-control" required>
-                                    <option value="data" <?php echo $edit_package['package_type'] === 'data' ? 'selected' : ''; ?>>Data</option>
-                                    <option value="voice" <?php echo $edit_package['package_type'] === 'voice' ? 'selected' : ''; ?>>Voice</option>
-                                    <option value="sms" <?php echo $edit_package['package_type'] === 'sms' ? 'selected' : ''; ?>>SMS</option>
-                                    <option value="combo" <?php echo $edit_package['package_type'] === 'combo' ? 'selected' : ''; ?>>Combo</option>
-                                </select>
-                            </div>
-                            <div class="form-group">
-                                <label for="edit_size">Data Size</label>
-                                <input type="text" id="edit_size" name="size" class="form-control" required value="<?php echo htmlspecialchars($edit_package['data_size']); ?>">
-                            </div>
-                            <div class="form-group">
-                                <label for="edit_validity">Validity (Days)</label>
-                                <input type="number" id="edit_validity" name="validity" class="form-control" required min="1" value="<?php echo (int)$edit_package['validity_days']; ?>">
-                            </div>
-                            <div class="form-group">
-                                <label for="edit_stock_status">Stock Status</label>
-                                <select id="edit_stock_status" name="stock_status" class="form-control" required>
-                                    <option value="in_stock" <?php echo ($edit_package['stock_status'] ?? 'in_stock') === 'in_stock' ? 'selected' : ''; ?>>In Stock</option>
-                                    <option value="out_of_stock" <?php echo ($edit_package['stock_status'] ?? 'in_stock') === 'out_of_stock' ? 'selected' : ''; ?>>Out of Stock</option>
-                                </select>
-                            </div>
-                            <div class="form-group form-actions">
-                                <button type="submit" class="btn btn-primary">
-                                    <i class="fas fa-save"></i> Save Changes
-                                </button>
-                                <a href="packages.php" class="btn btn-secondary">Cancel</a>
-                            </div>
-                        </form>
-                    </div>
-                </div>
-            <?php endif; ?>
-
             <!-- Add Package Form -->
             <div class="widget" style="margin-bottom: 2rem;">
                 <div class="widget-header">
@@ -407,13 +263,15 @@ $flash = getFlashMessage();
                 <div class="widget-body">
                     <form method="post" class="form-grid">
                         <input type="hidden" name="action" value="add">
+                        <input type="hidden" name="return_network" value="<?php echo htmlspecialchars($selected_network); ?>">
+                        <input type="hidden" name="return_type" value="<?php echo htmlspecialchars($selected_type); ?>">
                         <div class="form-group">
-                            <label for="add_name">Package Name</label>
-                            <input type="text" id="add_name" name="name" class="form-control" required placeholder="e.g. MTN 1GB Daily">
+                            <label for="name">Package Name</label>
+                            <input type="text" id="name" name="name" class="form-control" required placeholder="e.g. MTN 1GB Daily">
                         </div>
                         <div class="form-group">
-                            <label for="add_network">Network</label>
-                            <select id="add_network" name="network" class="form-control" required>
+                            <label for="network">Network</label>
+                            <select id="network" name="network" class="form-control" required>
                                 <option value="">Select Network</option>
                                 <?php foreach ($networks as $net): ?>
                                     <option value="<?php echo htmlspecialchars($net); ?>"><?php echo htmlspecialchars($net); ?></option>
@@ -421,8 +279,8 @@ $flash = getFlashMessage();
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="add_type">Package Type</label>
-                            <select id="add_type" name="type" class="form-control" required>
+                            <label for="type">Package Type</label>
+                            <select id="type" name="type" class="form-control" required>
                                 <option value="">Select Type</option>
                                 <option value="data">Data</option>
                                 <option value="voice">Voice</option>
@@ -431,19 +289,12 @@ $flash = getFlashMessage();
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="add_size">Data Size</label>
-                            <input type="text" id="add_size" name="size" class="form-control" required placeholder="e.g. 1GB, 500MB">
+                            <label for="size">Data Size</label>
+                            <input type="text" id="size" name="size" class="form-control" required placeholder="e.g. 1GB, 500MB">
                         </div>
                         <div class="form-group">
-                            <label for="add_validity">Validity (Days)</label>
-                            <input type="number" id="add_validity" name="validity" class="form-control" required min="1" placeholder="e.g. 30">
-                        </div>
-                        <div class="form-group">
-                            <label for="add_stock_status">Stock Status</label>
-                            <select id="add_stock_status" name="stock_status" class="form-control" required>
-                                <option value="in_stock" selected>In Stock</option>
-                                <option value="out_of_stock">Out of Stock</option>
-                            </select>
+                            <label for="validity">Validity (Days)</label>
+                            <input type="number" id="validity" name="validity" class="form-control" required min="1" placeholder="e.g. 30">
                         </div>
                         <div class="form-group form-actions">
                             <button type="submit" class="btn btn-primary">
@@ -484,7 +335,7 @@ $flash = getFlashMessage();
                     <?php endif; ?>
                 </div>
                 <div class="widget-body">
-                    <div class="table-responsive packages-table-wrap">
+                    <div class="table-responsive">
                         <table class="table responsive-table-stack packages-table">
                             <thead>
                                 <tr>
@@ -494,7 +345,6 @@ $flash = getFlashMessage();
                                     <th>Type</th>
                                     <th>Size</th>
                                     <th>Validity</th>
-                                    <th>Stock</th>
                                     <th>Orders</th>
                                     <th>Created</th>
                                     <th>Actions</th>
@@ -502,40 +352,57 @@ $flash = getFlashMessage();
                             </thead>
                             <tbody>
                             <?php if (empty($packages)): ?>
-                                <tr><td colspan="10" class="text-center text-muted">No packages found</td></tr>
+                                <tr><td colspan="9" class="text-center text-muted">No packages found</td></tr>
                             <?php else: ?>
                                 <?php foreach ($packages as $pkg): ?>
+                                    <?php $updateFormId = 'update-package-' . intval($pkg['id']); ?>
                                     <tr>
-                                        <td data-label="ID"><?php echo $pkg['id']; ?></td>
-                                        <td data-label="Network"><span class="badge badge-info"><?php echo htmlspecialchars($pkg['network']); ?></span></td>
-                                        <td data-label="Package Name" class="package-name-cell"><?php echo htmlspecialchars($pkg['name']); ?></td>
-                                        <td data-label="Type"><span class="badge badge-secondary"><?php echo htmlspecialchars($pkg['package_type']); ?></span></td>
-                                        <td data-label="Size"><?php echo htmlspecialchars($pkg['data_size']); ?></td>
-                                        <td data-label="Validity"><?php echo intval($pkg['validity_days']); ?> days</td>
-                                        <td data-label="Stock">
-                                            <?php if (($pkg['stock_status'] ?? 'in_stock') === 'out_of_stock'): ?>
-                                                <span class="badge badge-danger">Out of Stock</span>
-                                            <?php else: ?>
-                                                <span class="badge badge-success">In Stock</span>
-                                            <?php endif; ?>
+                                        <td data-label="ID">
+                                            <?php echo $pkg['id']; ?>
+                                            <form id="<?php echo $updateFormId; ?>" method="post" style="display:none;">
+                                                <input type="hidden" name="action" value="update">
+                                                <input type="hidden" name="id" value="<?php echo $pkg['id']; ?>">
+                                                <input type="hidden" name="return_network" value="<?php echo htmlspecialchars($selected_network); ?>">
+                                                <input type="hidden" name="return_type" value="<?php echo htmlspecialchars($selected_type); ?>">
+                                            </form>
+                                        </td>
+                                        <td data-label="Network">
+                                            <select name="network" class="form-control" required form="<?php echo $updateFormId; ?>">
+                                                <?php foreach ($networks as $net): ?>
+                                                    <option value="<?php echo htmlspecialchars($net); ?>" <?php echo $pkg['network'] === $net ? 'selected' : ''; ?>>
+                                                        <?php echo htmlspecialchars($net); ?>
+                                                    </option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </td>
+                                        <td data-label="Package Name">
+                                            <input type="text" name="name" class="form-control" required form="<?php echo $updateFormId; ?>" value="<?php echo htmlspecialchars($pkg['name']); ?>">
+                                        </td>
+                                        <td data-label="Type">
+                                            <select name="type" class="form-control" required form="<?php echo $updateFormId; ?>">
+                                                <option value="data" <?php echo $pkg['package_type']==='data' ? 'selected' : ''; ?>>Data</option>
+                                                <option value="voice" <?php echo $pkg['package_type']==='voice' ? 'selected' : ''; ?>>Voice</option>
+                                                <option value="sms" <?php echo $pkg['package_type']==='sms' ? 'selected' : ''; ?>>SMS</option>
+                                                <option value="combo" <?php echo $pkg['package_type']==='combo' ? 'selected' : ''; ?>>Combo</option>
+                                            </select>
+                                        </td>
+                                        <td data-label="Size">
+                                            <input type="text" name="size" class="form-control" required form="<?php echo $updateFormId; ?>" value="<?php echo htmlspecialchars($pkg['data_size']); ?>">
+                                        </td>
+                                        <td data-label="Validity">
+                                            <input type="number" name="validity" class="form-control" min="1" required form="<?php echo $updateFormId; ?>" value="<?php echo intval($pkg['validity_days']); ?>">
                                         </td>
                                         <td data-label="Orders"><?php echo intval($pkg['total_orders']); ?></td>
                                         <td data-label="Created"><?php echo date('M j, Y', strtotime($pkg['created_at'])); ?></td>
-                                        <td data-label="Actions" class="actions-cell package-actions">
-                                            <a href="packages.php?edit_id=<?php echo (int)$pkg['id']; ?>" class="btn btn-primary btn-sm" title="Edit Package">
-                                                <i class="fas fa-edit"></i>
-                                            </a>
-                                            <form method="post">
-                                                <input type="hidden" name="action" value="toggle_stock">
-                                                <input type="hidden" name="id" value="<?php echo $pkg['id']; ?>">
-                                                <input type="hidden" name="stock_status" value="<?php echo (($pkg['stock_status'] ?? 'in_stock') === 'out_of_stock') ? 'in_stock' : 'out_of_stock'; ?>">
-                                                <button type="submit" class="btn btn-secondary btn-sm" title="<?php echo (($pkg['stock_status'] ?? 'in_stock') === 'out_of_stock') ? 'Mark In Stock' : 'Mark Out of Stock'; ?>">
-                                                    <i class="fas <?php echo (($pkg['stock_status'] ?? 'in_stock') === 'out_of_stock') ? 'fa-check' : 'fa-ban'; ?>"></i>
-                                                </button>
-                                            </form>
-                                            <form method="post" onsubmit="return confirm('Are you sure you want to delete this package?')">
+                                        <td data-label="Actions" style="white-space: nowrap;">
+                                            <button type="submit" form="<?php echo $updateFormId; ?>" class="btn btn-primary btn-sm" title="Save Package">
+                                                <i class="fas fa-save"></i>
+                                            </button>
+                                            <form method="post" style="display:inline;" onsubmit="return confirm('Are you sure you want to delete this package?')">
                                                 <input type="hidden" name="action" value="delete">
                                                 <input type="hidden" name="id" value="<?php echo $pkg['id']; ?>">
+                                                <input type="hidden" name="return_network" value="<?php echo htmlspecialchars($selected_network); ?>">
+                                                <input type="hidden" name="return_type" value="<?php echo htmlspecialchars($selected_type); ?>">
                                                 <button type="submit" class="btn btn-danger btn-sm" title="Delete Package">
                                                     <i class="fas fa-trash"></i>
                                                 </button>

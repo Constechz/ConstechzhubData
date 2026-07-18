@@ -67,12 +67,9 @@ try {
         }
         
         $active_gateway = getActivePaymentGateway();
-        $gateway_mode = getPaymentGatewayMode();
-        $enabled_gateways = getEnabledPaymentGateways();
         $paymentMethods = [
-            'paystack' => in_array('paystack', $enabled_gateways, true),
-            'moolre' => in_array('moolre', $enabled_gateways, true),
-            'gateway' => !empty($enabled_gateways),
+            'paystack' => $active_gateway === 'paystack',
+            'moolre' => $active_gateway === 'moolre',
             'topup_request' => true
         ];
 
@@ -95,9 +92,7 @@ try {
                 'user_role' => $current['role'],
                 'agent_id' => $agentId,
                 'store_slug' => $store_slug ?? null,
-                'agent_paystack_active' => $has_agent_paystack ?? null,
-                'gateway_mode' => $gateway_mode,
-                'enabled_gateways' => $enabled_gateways
+                'agent_paystack_active' => $has_agent_paystack ?? null
             ]
         ]);
         

@@ -5,15 +5,6 @@ require_once __DIR__ . '/includes/seo.php';
 // Prevent browser caching for real-time updates
 preventBrowserCaching();
 
-function getVipDashboardRedirectUrl() {
-    $vip_dashboard_path = __DIR__ . '/vip/dashboard.php';
-    if (is_file($vip_dashboard_path)) {
-        return SITE_URL . '/vip/dashboard.php';
-    }
-
-    return SITE_URL . '/customer/dashboard.php';
-}
-
 // Redirect if already logged in
 if (isLoggedIn()) {
     $role = normalizeUserRole($_SESSION['user_role'] ?? '');
@@ -21,8 +12,6 @@ if (isLoggedIn()) {
     
     if ($role === 'admin') {
         header('Location: ' . SITE_URL . '/admin/dashboard.php');
-    } elseif ($role === 'vip') {
-        header('Location: ' . getVipDashboardRedirectUrl());
     } elseif ($role === 'agent') {
         header('Location: ' . SITE_URL . '/agent/dashboard.php');
     } else {
@@ -41,6 +30,22 @@ if (isLoggedIn()) {
 
 $error = '';
 $success = '';
+
+$site_whatsapp_number = trim((string) getSetting('site_whatsapp_number', '0249020304'));
+if ($site_whatsapp_number === '') {
+    $site_whatsapp_number = '0249020304';
+}
+$site_whatsapp_digits = preg_replace('/\D+/', '', $site_whatsapp_number);
+if (strpos($site_whatsapp_digits, '233') === 0) {
+    $site_whatsapp_international = $site_whatsapp_digits;
+} elseif (strpos($site_whatsapp_digits, '0') === 0 && strlen($site_whatsapp_digits) >= 9) {
+    $site_whatsapp_international = '233' . substr($site_whatsapp_digits, 1);
+} elseif ($site_whatsapp_digits !== '') {
+    $site_whatsapp_international = '233' . ltrim($site_whatsapp_digits, '0');
+} else {
+    $site_whatsapp_international = '233249020304';
+}
+$site_whatsapp_link = 'https://wa.me/' . $site_whatsapp_international;
 
 // Handle login form submission
 if ($_POST) {
@@ -129,8 +134,6 @@ if ($_POST) {
                 $role = normalizeUserRole($user['role']);
                 if ($role === 'admin') {
                     header('Location: ' . SITE_URL . '/admin/dashboard.php');
-                } elseif ($role === 'vip') {
-                    header('Location: ' . getVipDashboardRedirectUrl());
                 } elseif ($role === 'agent') {
                     header('Location: ' . SITE_URL . '/agent/dashboard.php');
                 } else {
@@ -172,11 +175,11 @@ if ($flash) {
     <link rel="preload" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>" as="style" onload="this.onload=null;this.rel='stylesheet'">
     <noscript><link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>"></noscript>
     <link rel="manifest" href="manifest.php">
-    <meta name="theme-color" content="#8B5CF6">
+    <meta name="theme-color" content="#541388">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="mobile-web-app-capable" content="yes">
-    <link rel="apple-touch-icon" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-192.png')); ?>">
+    <link rel="apple-touch-icon" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-192.png')); ?>"">
     <style>
         .login-container {
             position: relative;
@@ -192,14 +195,14 @@ if ($flash) {
             gap: 0.3rem;
             padding: 0.25rem;
             border-radius: 999px;
-            background: rgba(255, 255, 255, 0.75);
+            background: rgba(241, 233, 218, 0.75);
             border: 1px solid var(--border-color);
-            box-shadow: 0 12px 30px rgba(15, 23, 42, 0.18);
+            box-shadow: 0 12px 30px rgba(46, 41, 78, 0.18);
             backdrop-filter: blur(10px);
         }
         [data-theme="dark"] .login-action-buttons {
-            background: rgba(15, 23, 42, 0.65);
-            border-color: rgba(148, 163, 184, 0.2);
+            background: rgba(46, 41, 78, 0.65);
+            border-color: rgba(241, 233, 218, 0.2);
         }
         .login-action-btn {
             width: 34px;
@@ -215,27 +218,19 @@ if ($flash) {
         }
         .login-action-btn:hover {
             transform: translateY(-1px);
-            box-shadow: 0 10px 20px rgba(15, 23, 42, 0.2);
+            box-shadow: 0 10px 20px rgba(46, 41, 78, 0.2);
             border-color: var(--brand-primary);
         }
         .login-action-btn:active {
             transform: translateY(0);
         }
         .login-whatsapp {
-            background: #25D366;
-            color: #ffffff;
+            background: #2E294E;
+            color: #F1E9DA;
             border: none;
         }
         .login-whatsapp:hover {
-            background: #1ebe5d;
-        }
-        .login-home {
-            background: linear-gradient(135deg, var(--brand-primary), var(--brand-secondary));
-            color: #ffffff;
-            border: none;
-        }
-        .login-home:hover {
-            background: linear-gradient(135deg, var(--brand-secondary), var(--brand-primary));
+            background: #2E294E;
         }
         @media (max-width: 576px) {
             .login-action-buttons {
@@ -249,6 +244,7 @@ if ($flash) {
             }
         }
     </style>
+    <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/public-polish.css')); ?>">
 </head>
 <body>
     <div class="login-container">
@@ -256,10 +252,7 @@ if ($flash) {
             <button class="theme-toggle login-theme-toggle login-action-btn" type="button" aria-label="Toggle theme">
                 <i class="fas fa-moon" id="theme-icon"></i>
             </button>
-            <a class="login-action-btn login-home" href="<?php echo SITE_URL; ?>/" aria-label="Go to homepage">
-                <i class="fas fa-house"></i>
-            </a>
-            <a class="login-action-btn login-whatsapp" href="https://wa.me/233249020304" target="_blank" rel="noopener" aria-label="Chat on WhatsApp">
+            <a class="login-action-btn login-whatsapp" href="<?php echo htmlspecialchars($site_whatsapp_link); ?>" target="_blank" rel="noopener" aria-label="Chat on WhatsApp">
                 <i class="fab fa-whatsapp"></i>
             </a>
         </div>
@@ -417,9 +410,10 @@ if ($flash) {
 
     <!-- PWA Service Worker Registration -->
     <script>
+        // PWA service worker registration
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', function() {
-                navigator.serviceWorker.register('<?php echo htmlspecialchars(dbh_asset('sw.js'), ENT_QUOTES, 'UTF-8'); ?>')
+                navigator.serviceWorker.register('/sw.js')
                     .then(function(registration) {
                         console.log('ServiceWorker registration successful');
                     })
@@ -435,3 +429,4 @@ if ($flash) {
     <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/page-events-guard.js')); ?>"></script>
 </body>
 </html>
+

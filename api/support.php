@@ -133,6 +133,33 @@ try {
         $stmt->bind_param('si', $status, $ticket_id);
         $stmt->execute();
         jsonResponse(['status' => 'success']);
+    } elseif ($action === 'delete_ticket' && $method === 'POST') {
+        $ticket_id = (int)($payload['ticket_id'] ?? 0);
+        if ($ticket_id <= 0) jsonResponse(['status' => 'error', 'message' => 'Invalid ticket']);
+        $stmt = $db->prepare("SELECT assigned_to_role, agent_id FROM support_tickets WHERE id = ? LIMIT 1");
+        $stmt->bind_param('i', $ticket_id);
+        $stmt->execute();
+        $t = $stmt->get_result()->fetch_assoc();
+        if (!$t) jsonResponse(['status' => 'error', 'message' => 'Ticket not found'], 404);
+        $allowed = ($current['role'] === 'admin' && $t['assigned_to_role'] === 'admin') || ($current['role'] === 'agent' && $t['assigned_to_role'] === 'agent' && (int)$t['agent_id'] === (int)$current['id']);
+        if (!$allowed) jsonResponse(['status' => 'error', 'message' => 'Forbidden'], 403);
+        $stmt = $db->prepare("DELETE FROM support_tickets WHERE id = ? LIMIT 1");
+        $stmt->bind_param('i', $ticket_id);
+        $stmt->execute();
+        jsonResponse(['status' => 'success', 'message' => 'Ticket deleted']);
+    } elseif ($action === 'delete_all_tickets' && $method === 'POST') {
+        if ($current['role'] === 'admin') {
+            $stmt = $db->prepare("DELETE FROM support_tickets WHERE assigned_to_role = 'admin'");
+        } elseif ($current['role'] === 'agent') {
+            $stmt = $db->prepare("DELETE FROM support_tickets WHERE assigned_to_role = 'agent' AND agent_id = ?");
+            $stmt->bind_param('i', $current['id']);
+        } else {
+            jsonResponse(['status' => 'error', 'message' => 'Forbidden'], 403);
+        }
+        $stmt->execute();
+        $deleted = (int)$stmt->affected_rows;
+        $message = $deleted > 0 ? "Deleted {$deleted} ticket(s)." : 'No tickets to delete.';
+        jsonResponse(['status' => 'success', 'deleted' => $deleted, 'message' => $message]);
     } else {
         jsonResponse(['status' => 'error', 'message' => 'Invalid action or method'], 400);
     }

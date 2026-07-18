@@ -93,7 +93,7 @@ try {
         $stmt->bind_param("i", $user_id);
         $stmt->execute();
         
-    } elseif (isCustomerAccountRole($user_role)) {
+    } elseif ($user_role === 'customer') {
         // Handle customer-specific cleanup
         
         // Cancel pending orders

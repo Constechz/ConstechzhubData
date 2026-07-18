@@ -90,19 +90,6 @@ function dbh_customer_reference_phone_display($phone) {
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/dashboard.css')); ?>"">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>">
     <style>
-        .wallet-balance {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.45rem;
-            padding: 0.5rem 0.9rem;
-            background: var(--success-color);
-            color: #fff;
-            border-radius: 999px;
-            font-weight: 600;
-            margin-right: 0.75rem;
-            white-space: nowrap;
-        }
-
         .lookup-card {
             display: grid;
             gap: 1rem;
@@ -129,215 +116,16 @@ function dbh_customer_reference_phone_display($phone) {
             border-radius: 999px;
             font-size: 0.75rem;
             font-weight: 600;
-            color: #0f172a;
+            color: #2E294E;
             display: inline-flex;
             align-items: center;
             gap: 0.35rem;
-        }
-
-        @media (max-width: 768px) {
-            .dashboard-header {
-                align-items: center;
-                padding: 0.8rem 0.9rem;
-            }
-
-            .header-actions {
-                display: flex;
-                align-items: center;
-                gap: 0.35rem;
-                flex-wrap: nowrap;
-                min-width: 0;
-            }
-
-            .wallet-balance {
-                margin-right: 0;
-                padding: 0.38rem 0.55rem;
-                font-size: 0.78rem;
-                min-height: 34px;
-                min-width: 0;
-                gap: 0.3rem;
-                flex: 0 1 auto;
-            }
-
-            .wallet-balance i {
-                font-size: 0.72rem;
-            }
-
-            .wallet-balance span {
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-            }
-
-            .theme-toggle {
-                width: 34px;
-                height: 34px;
-                min-width: 34px;
-                min-height: 34px;
-            }
-
-            .user-dropdown {
-                min-width: 0;
-            }
-
-            .user-dropdown-toggle {
-                min-height: 34px;
-                padding: 0.22rem 0.42rem;
-                gap: 0.35rem;
-                max-width: min(50vw, 175px);
-                min-width: 0;
-            }
-
-            .user-dropdown-toggle .user-info {
-                display: flex;
-                min-width: 0;
-            }
-
-            .user-dropdown-toggle .user-name {
-                max-width: 112px;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-                font-size: 0.8rem;
-            }
-
-            .user-dropdown-toggle .user-role,
-            .user-dropdown-toggle .dropdown-arrow {
-                display: none;
-            }
-
-            .user-avatar {
-                width: 26px;
-                height: 26px;
-                font-size: 0.75rem;
-            }
-        }
-
-        @media (max-width: 480px) {
-            .dashboard-header {
-                padding: 0.7rem 0.85rem;
-            }
-
-            .header-actions {
-                gap: 0.3rem;
-            }
-
-            .wallet-balance {
-                padding: 0.34rem 0.45rem;
-                font-size: 0.72rem;
-                min-height: 32px;
-                gap: 0.25rem;
-            }
-
-            .wallet-balance i {
-                font-size: 0.66rem;
-            }
-
-            .theme-toggle {
-                width: 32px;
-                height: 32px;
-                min-width: 32px;
-                min-height: 32px;
-            }
-
-            .user-dropdown-toggle {
-                padding: 0.18rem 0.34rem;
-                min-height: 32px;
-                max-width: min(47vw, 145px);
-            }
-
-            .user-dropdown-toggle .user-name {
-                max-width: 78px;
-                font-size: 0.74rem;
-            }
-
-            .user-avatar {
-                width: 24px;
-                height: 24px;
-                font-size: 0.7rem;
-            }
         }
     </style>
 </head>
 <body>
 <div class="dashboard-wrapper">
-    <!-- Sidebar -->
-    <nav class="sidebar">
-        <div class="sidebar-brand">
-            <h3><?php echo $agent_store ? htmlspecialchars($agent_store['store_name']) : htmlspecialchars(getSiteName()); ?></h3>
-            <?php if ($agent_store): ?>
-                <small style="opacity: 0.7; font-size: 0.8rem;">by <?php echo htmlspecialchars($agent_store['agent_name']); ?></small>
-            <?php endif; ?>
-        </div>
-        
-        <ul class="sidebar-nav">
-            <li class="nav-section">
-                <div class="nav-section-title">Dashboard</div>
-                <div class="nav-item">
-                    <a href="dashboard.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-home"></i>
-                        Dashboard
-                    </a>
-                </div>
-            </li>
-            
-            <li class="nav-section">
-                <div class="nav-section-title">Services</div>
-                <div class="nav-item">
-                    <a href="buy-data.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-mobile-alt"></i>
-                        Buy Data
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="bulk-mtn.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-layer-group"></i>
-                        Bulk MTN
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="result-checker.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-award"></i>
-                        Result Checker
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="order-history.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-history"></i>
-                        Order History
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="reference.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link active">
-                        <i class="fas fa-search"></i>
-                        Reference
-                    </a>
-                </div>
-            </li>
-            
-            <li class="nav-section">
-                <div class="nav-section-title">Account</div>
-                <div class="nav-item">
-                    <a href="wallet.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-wallet"></i>
-                        Wallet
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="profile.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-user"></i>
-                        Profile
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="support.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-life-ring"></i>
-                        Support
-                    </a>
-                </div>
-            </li>
-        </ul>
-    </nav>
+    <?php require_once '../includes/customer_sidebar.php'; ?>
 
     <!-- Main Content -->
     <main class="main-content">
@@ -364,11 +152,11 @@ function dbh_customer_reference_phone_display($phone) {
                         <div class="user-avatar">
                             <i class="fas fa-user"></i>
                         </div>
-                        <div class="user-info">
-                            <div class="user-name"><?php echo htmlspecialchars($current_user['full_name']); ?></div>
-                            <div class="user-role">Customer</div>
+                        <div>
+                            <div style="font-weight: 500;"><?php echo htmlspecialchars($current_user['full_name']); ?></div>
+                            <div style="font-size: 0.75rem; color: var(--text-muted);">Customer</div>
                         </div>
-                        <i class="fas fa-chevron-down dropdown-arrow" style="margin-left: 0.5rem;"></i>
+                        <i class="fas fa-chevron-down" style="margin-left: 0.5rem;"></i>
                     </button>
                     
                     <div class="user-dropdown-menu" id="userDropdown">
@@ -386,6 +174,9 @@ function dbh_customer_reference_phone_display($phone) {
                 </div>
             </div>
         </header>
+
+<?php echo renderNotificationSlides('customers'); ?>
+
 
         <div class="dashboard-content">
             <div class="page-title">
@@ -433,7 +224,7 @@ function dbh_customer_reference_phone_display($phone) {
                                             <div>
                                                 <strong><?php echo htmlspecialchars($order['package_name']); ?></strong>
                                                 <div style="color: var(--text-muted); font-size: 0.85rem;">
-                                                    <?php echo htmlspecialchars($order['network_name']); ?> • <?php echo htmlspecialchars($order['data_size']); ?>
+                                                    <?php echo htmlspecialchars($order['network_name']); ?> â€¢ <?php echo htmlspecialchars($order['data_size']); ?>
                                                 </div>
                                             </div>
                                             <span class="status-pill" style="background: <?php echo htmlspecialchars($status['color']); ?>;">
@@ -499,6 +290,8 @@ function dbh_customer_reference_phone_display($phone) {
     });
 </script>
 <script src="../immediate_icon_fix.js"></script>
+
+<script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>"></script>
 </body>
 </html>
 

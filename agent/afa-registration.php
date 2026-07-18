@@ -9,6 +9,9 @@ $current_user = getCurrentUser();
 $wallet_balance = getWalletBalance($current_user['id']);
 $csrf_token = generateCSRF();
 $flash = getFlashMessage();
+$settings_table_ready = function_exists('dbh_table_exists') && dbh_table_exists('afa_registration_settings');
+$pricing_table_ready = function_exists('dbh_table_exists') && dbh_table_exists('agent_afa_registration_pricing');
+$registrations_table_ready = function_exists('dbh_table_exists') && dbh_table_exists('afa_registrations');
 
 $settings = [
     'agent_price' => 0,
@@ -19,9 +22,16 @@ $settings = [
     'allow_wallet_customer' => 1,
     'allow_gateway_customer' => 1,
 ];
-$settings_rs = $db->query("SELECT * FROM afa_registration_settings ORDER BY id DESC LIMIT 1");
-if ($settings_rs && ($settings_row = $settings_rs->fetch_assoc())) {
-    $settings = array_merge($settings, $settings_row);
+if ($settings_table_ready) {
+    try {
+        $settings_rs = $db->query("SELECT * FROM afa_registration_settings ORDER BY id DESC LIMIT 1");
+        if ($settings_rs && ($settings_row = $settings_rs->fetch_assoc())) {
+            $settings = array_merge($settings, $settings_row);
+        }
+    } catch (Exception $e) {
+        error_log('AFA agent settings load failed: ' . $e->getMessage());
+        $settings_table_ready = false;
+    }
 }
 
 $agent_base_price = round((float) ($settings['agent_price'] ?? 0), 2);
@@ -36,6 +46,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
         exit();
     }
 
+    if (!$pricing_table_ready) {
+        setFlashMessage('error', 'AFA customer pricing table is not available. Please run the database migration.');
+        header('Location: afa-registration.php');
+        exit();
+    }
+
     $raw_custom = trim((string) ($_POST['custom_price'] ?? ''));
     if ($raw_custom === '') {
         $stmt = $db->prepare("INSERT INTO agent_afa_registration_pricing (agent_id, custom_price, is_active) VALUES (?, 0, 0) ON DUPLICATE KEY UPDATE custom_price = VALUES(custom_price), is_active = VALUES(is_active), updated_at = CURRENT_TIMESTAMP");
@@ -44,8 +60,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
             $ok = $stmt->execute();
             $stmt->close();
             setFlashMessage($ok ? 'success' : 'error', $ok ? 'Customer custom price disabled.' : 'Failed to update customer price.');
-        } else {
-            setFlashMessage('error', 'Failed to update customer price.');
         }
     } else {
         $custom_price = round(max(0, (float) $raw_custom), 2);
@@ -58,8 +72,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
                 $ok = $stmt->execute();
                 $stmt->close();
                 setFlashMessage($ok ? 'success' : 'error', $ok ? 'Customer custom price updated.' : 'Failed to update customer price.');
-            } else {
-                setFlashMessage('error', 'Failed to update customer price.');
             }
         }
     }
@@ -69,26 +81,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
 }
 
 $agent_custom_price = null;
-$stmt = $db->prepare("SELECT custom_price FROM agent_afa_registration_pricing WHERE agent_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1");
-if ($stmt) {
-    $stmt->bind_param('i', $current_user['id']);
-    $stmt->execute();
-    if ($row = $stmt->get_result()->fetch_assoc()) {
-        $agent_custom_price = (float) ($row['custom_price'] ?? 0);
+if ($pricing_table_ready) {
+    try {
+        $stmt = $db->prepare("SELECT custom_price FROM agent_afa_registration_pricing WHERE agent_id = ? AND is_active = 1 ORDER BY updated_at DESC LIMIT 1");
+        if ($stmt) {
+            $stmt->bind_param('i', $current_user['id']);
+            $stmt->execute();
+            if ($row = $stmt->get_result()->fetch_assoc()) {
+                $agent_custom_price = (float) ($row['custom_price'] ?? 0);
+            }
+            $stmt->close();
+        }
+    } catch (Exception $e) {
+        error_log('AFA agent custom price load failed: ' . $e->getMessage());
+        $pricing_table_ready = false;
     }
-    $stmt->close();
 }
 
 $recent = [];
-$stmt = $db->prepare("SELECT reference, beneficiary_name, phone, ghana_card_number, occupation, date_of_birth, region, location, amount, status, payment_gateway, created_at FROM afa_registrations WHERE user_id = ? ORDER BY id DESC LIMIT 10");
-if ($stmt) {
-    $stmt->bind_param('i', $current_user['id']);
-    $stmt->execute();
-    $res = $stmt->get_result();
-    while ($row = $res->fetch_assoc()) {
-        $recent[] = $row;
+if ($registrations_table_ready) {
+    try {
+        $stmt = $db->prepare("SELECT reference, beneficiary_name, COALESCE(NULLIF(phone, ''), phone_number) AS phone, amount, status, payment_gateway, created_at FROM afa_registrations WHERE user_id = ? ORDER BY id DESC LIMIT 10");
+        if ($stmt) {
+            $stmt->bind_param('i', $current_user['id']);
+            $stmt->execute();
+            $res = $stmt->get_result();
+            while ($row = $res->fetch_assoc()) {
+                $recent[] = $row;
+            }
+            $stmt->close();
+        }
+    } catch (Exception $e) {
+        error_log('AFA agent recent load failed: ' . $e->getMessage());
+        $recent = [];
     }
-    $stmt->close();
 }
 
 $gateway = getActivePaymentGateway();
@@ -121,16 +147,12 @@ $has_gateway_choice = count($enabled_gateways) > 1;
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/css/icon-fixes.css')); ?>">
     <link rel="stylesheet" href="<?php echo htmlspecialchars(dbh_asset('assets/vendor/fontawesome/css/all.min.css')); ?>">
     <style>
-        html,
-        body {
+        html, body {
             max-width: 100%;
             overflow-x: hidden;
         }
 
-        .dashboard-wrapper,
-        .main-content,
-        .dashboard-content,
-        .afa-shell {
+        .dashboard-wrapper, .main-content, .dashboard-content, .afa-shell {
             width: 100%;
             max-width: 100%;
         }
@@ -143,7 +165,7 @@ $has_gateway_choice = count($enabled_gateways) > 1;
         .afa-card {
             background: #fff;
             border: 1px solid #e5e7eb;
-            border-radius: 14px;
+            border-radius: 12px;
             padding: 1rem;
             margin-bottom: 1rem;
         }
@@ -169,21 +191,9 @@ $has_gateway_choice = count($enabled_gateways) > 1;
             justify-content: center;
             border-radius: 999px;
             border: 1px solid #fca5a5;
-            background: #ffffff;
+            background: #fff;
             color: #b91c1c;
             text-decoration: none;
-            transition: all 0.2s ease;
-        }
-
-        .logout-icon:hover,
-        .logout-icon:focus-visible {
-            background: #fee2e2;
-            border-color: #ef4444;
-            color: #991b1b;
-        }
-
-        .logout-icon:focus-visible {
-            outline: none;
         }
 
         .pricing-grid {
@@ -240,23 +250,6 @@ $has_gateway_choice = count($enabled_gateways) > 1;
             white-space: nowrap;
         }
 
-        .afa-table .afa-details-row {
-            background: #fafafa;
-        }
-        .afa-table .afa-details-cell {
-            white-space: normal !important;
-            font-size: 0.85rem;
-            color: #4b5563;
-            border-bottom: 2px solid #edf2f7;
-        }
-        [data-theme="dark"] .afa-table .afa-details-row {
-            background: #1f2937;
-        }
-        [data-theme="dark"] .afa-table .afa-details-cell {
-            color: #d1d5db;
-            border-bottom-color: #2f3746;
-        }
-
         [data-theme="dark"] .afa-card {
             background: #111827;
             border-color: #374151;
@@ -274,19 +267,6 @@ $has_gateway_choice = count($enabled_gateways) > 1;
             border-bottom-color: #2f3746;
         }
 
-        [data-theme="dark"] .logout-icon {
-            background: #111827;
-            border-color: #7f1d1d;
-            color: #fca5a5;
-        }
-
-        [data-theme="dark"] .logout-icon:hover,
-        [data-theme="dark"] .logout-icon:focus-visible {
-            background: #3f1d1d;
-            border-color: #ef4444;
-            color: #fecaca;
-        }
-
         @media (max-width: 992px) {
             .two-col {
                 grid-template-columns: 1fr;
@@ -298,48 +278,21 @@ $has_gateway_choice = count($enabled_gateways) > 1;
                 padding: 0.75rem;
             }
 
-            .dashboard-header {
-                padding: 0.45rem 0.55rem;
-            }
-
             .header-left h2 {
                 margin: 0;
-                font-size: 1.1rem;
-                line-height: 1.2;
-            }
-
-            .header-left {
-                gap: 0.35rem;
+                font-size: 1.05rem;
             }
 
             .header-actions {
-                margin-right: 0;
                 gap: 0.3rem;
                 flex-wrap: wrap;
                 justify-content: flex-end;
             }
 
-            .theme-toggle {
-                width: 34px;
-                height: 34px;
-            }
-
+            .theme-toggle,
             .logout-icon {
                 width: 34px;
                 height: 34px;
-            }
-
-            .header-actions .btn {
-                max-width: 100%;
-                min-height: 34px;
-                min-width: 34px;
-                padding: 0.35rem 0.55rem;
-                font-size: 0.72rem;
-                border-radius: 8px;
-            }
-
-            .header-actions .btn i {
-                font-size: 0.72rem;
             }
 
             .pricing-grid,
@@ -381,7 +334,6 @@ $has_gateway_choice = count($enabled_gateways) > 1;
                 gap: 0.6rem;
                 white-space: normal;
                 overflow-wrap: anywhere;
-                word-break: break-word;
                 text-align: right;
             }
 
@@ -397,66 +349,11 @@ $has_gateway_choice = count($enabled_gateways) > 1;
             .afa-table .empty-row td {
                 display: block;
                 text-align: left;
-                padding: 0.6rem;
             }
 
             .afa-table .empty-row td::before {
                 content: none;
             }
-        }
-
-        @media (max-width: 480px) {
-            .dashboard-header {
-                padding: 0.4rem 0.45rem;
-            }
-
-            .header-left h2 {
-                font-size: 0.95rem;
-            }
-
-            .theme-toggle {
-                width: 30px;
-                height: 30px;
-            }
-
-            .logout-icon {
-                width: 30px;
-                height: 30px;
-            }
-
-            .header-actions .btn {
-                min-height: 30px;
-                min-width: 30px;
-                padding: 0.3rem 0.45rem;
-                font-size: 0.68rem;
-            }
-        }
-
-        @media (max-width: 360px) {
-            .header-left h2 {
-                font-size: 0.85rem;
-            }
-
-            .header-actions {
-                gap: 0.2rem;
-            }
-
-            .theme-toggle,
-            .logout-icon {
-                width: 28px;
-                height: 28px;
-            }
-
-            .header-actions .btn {
-                min-height: 28px;
-                min-width: 28px;
-                padding: 0.25rem 0.4rem;
-                font-size: 0.64rem;
-            }
-        }
-
-        [data-theme="dark"] .afa-table td::before {
-            color: #d1d5db;
         }
     </style>
 </head>
@@ -466,7 +363,6 @@ $has_gateway_choice = count($enabled_gateways) > 1;
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-
         <?php renderAgentSidebar(); ?>
     </nav>
 
@@ -500,7 +396,7 @@ $has_gateway_choice = count($enabled_gateways) > 1;
                         <div class="metric"><span>Active Gateway</span><strong><?php echo htmlspecialchars($gateway_label); ?></strong></div>
                         <div class="metric"><span>Customer Price</span><strong><?php echo htmlspecialchars(formatCurrency($agent_custom_price !== null ? $agent_custom_price : $agent_base_price, CURRENCY)); ?></strong></div>
                     </div>
-                    <span class="pill"><i class="fas fa-info-circle"></i> You can set custom customer price for users linked to your store.</span>
+                    <span class="pill"><i class="fas fa-info-circle"></i> You can set a custom AFA price for customers linked to your store.</span>
                 </div>
 
                 <div class="two-col">
@@ -510,7 +406,7 @@ $has_gateway_choice = count($enabled_gateways) > 1;
                             <input type="hidden" name="action" value="save_customer_pricing">
                             <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrf_token); ?>">
                             <div class="form-group">
-                                <label for="custom_price">Custom Customer Price (GHS)</label>
+                                <label for="custom_price">Custom Customer Price (<?php echo htmlspecialchars(CURRENCY); ?>)</label>
                                 <input id="custom_price" type="number" class="form-control" name="custom_price" min="0" step="0.01" placeholder="Leave blank to disable" value="<?php echo $agent_custom_price !== null ? htmlspecialchars(number_format($agent_custom_price, 2, '.', '')) : ''; ?>">
                                 <small class="note">Must be at least <?php echo htmlspecialchars(formatCurrency($agent_base_price, CURRENCY)); ?>.</small>
                             </div>
@@ -564,27 +460,31 @@ $has_gateway_choice = count($enabled_gateways) > 1;
                     <h3 style="margin-top:0;">Recent AFA Registrations</h3>
                     <div class="afa-table-wrap">
                         <table class="afa-table">
-                            <thead><tr><th>Reference</th><th>Beneficiary</th><th>Amount</th><th>Gateway</th><th>Status</th><th>Date</th></tr></thead>
+                            <thead><tr><th>Reference</th><th>Beneficiary</th><th>Phone</th><th>Amount</th><th>Gateway</th><th>Status</th><th>Date</th></tr></thead>
                             <tbody>
                             <?php if (empty($recent)): ?>
-                                <tr class="empty-row"><td colspan="6">No AFA registrations yet.</td></tr>
+                                <tr class="empty-row"><td colspan="7">No AFA registrations yet.</td></tr>
                             <?php else: foreach ($recent as $row): ?>
                                 <tr>
-                                    <td data-label="Reference"><?php echo htmlspecialchars($row['reference']); ?></td>
-                                    <td data-label="Beneficiary"><?php echo htmlspecialchars($row['beneficiary_name']); ?></td>
+                                    <td data-label="Reference"><?php echo htmlspecialchars((string) $row['reference']); ?></td>
+                                    <td data-label="Beneficiary"><?php echo htmlspecialchars((string) $row['beneficiary_name']); ?></td>
+                                    <td data-label="Phone"><?php echo htmlspecialchars((string) $row['phone']); ?></td>
                                     <td data-label="Amount"><?php echo htmlspecialchars(formatCurrency((float) $row['amount'], CURRENCY)); ?></td>
                                     <td data-label="Gateway"><?php echo htmlspecialchars(strtoupper((string) ($row['payment_gateway'] ?? '-'))); ?></td>
-                                    <td data-label="Status"><?php echo htmlspecialchars(ucfirst((string) $row['status'])); ?></td>
-                                    <td data-label="Date"><?php echo htmlspecialchars(date('M j, Y g:i A', strtotime((string) $row['created_at']))); ?></td>
-                                </tr>
-                                <tr class="afa-details-row">
-                                    <td colspan="6" class="afa-details-cell">
-                                        <strong>Phone:</strong> <?php echo htmlspecialchars((string) ($row['phone'] ?? 'N/A')); ?> |
-                                        <strong>Card No:</strong> <?php echo htmlspecialchars((string) ($row['ghana_card_number'] ?? 'N/A')); ?> |
-                                        <strong>Occupation:</strong> <?php echo htmlspecialchars((string) ($row['occupation'] ?? 'N/A')); ?> |
-                                        <strong>DOB:</strong> <?php echo htmlspecialchars((string) ($row['date_of_birth'] ?? 'N/A')); ?> |
-                                        <strong>Location:</strong> <?php echo htmlspecialchars((string) ($row['location'] ?? 'N/A')); ?>
+                                    <td data-label="Status">
+                                        <?php
+                                        $status_class = 'bg-secondary';
+                                        $status_val = strtolower($row['status'] ?? 'pending');
+                                        if ($status_val === 'pending') $status_class = 'badge-warning text-dark';
+                                        elseif (in_array($status_val, ['completed', 'delivered', 'success'], true)) $status_class = 'badge-success';
+                                        elseif ($status_val === 'processing') $status_class = 'badge-info';
+                                        elseif (in_array($status_val, ['failed', 'refunded'], true)) $status_class = 'badge-danger';
+                                        
+                                        $status_text = $status_val === 'processing' ? 'Ongoing' : ucfirst($status_val);
+                                        ?>
+                                        <span class="badge <?php echo $status_class; ?>"><?php echo htmlspecialchars($status_text); ?></span>
                                     </td>
+                                    <td data-label="Date"><?php echo htmlspecialchars(date('M j, Y g:i A', strtotime((string) $row['created_at']))); ?></td>
                                 </tr>
                             <?php endforeach; endif; ?>
                             </tbody>
@@ -631,38 +531,25 @@ if (form) {
     const defaultGateway = <?php echo json_encode($gateway); ?>;
 
     const normalizePhone = () => {
-        if (!phoneInput) {
-            return;
+        if (phoneInput) {
+            phoneInput.value = phoneInput.value.replace(/\D+/g, '').slice(0, 15);
         }
-        phoneInput.value = phoneInput.value.replace(/\D+/g, '').slice(0, 15);
     };
 
     const normalizeCard = () => {
-        if (!cardInput) {
-            return;
+        if (cardInput) {
+            cardInput.value = cardInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 13);
         }
-        cardInput.value = cardInput.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 13);
     };
 
-    if (phoneInput) {
-        phoneInput.addEventListener('input', normalizePhone);
-        normalizePhone();
-    }
-
-    if (cardInput) {
-        cardInput.addEventListener('input', normalizeCard);
-        normalizeCard();
-    }
+    if (phoneInput) phoneInput.addEventListener('input', normalizePhone);
+    if (cardInput) cardInput.addEventListener('input', normalizeCard);
 
     const toggleGatewayChoice = () => {
-        if (!gatewayChoiceWrap || !paymentMethodInput) {
-            return;
-        }
+        if (!gatewayChoiceWrap || !paymentMethodInput) return;
         const useGateway = paymentMethodInput.value === 'gateway';
         gatewayChoiceWrap.style.display = useGateway ? 'block' : 'none';
-        if (gatewayChoiceInput) {
-            gatewayChoiceInput.disabled = !useGateway;
-        }
+        if (gatewayChoiceInput) gatewayChoiceInput.disabled = !useGateway;
     };
     if (paymentMethodInput) {
         paymentMethodInput.addEventListener('change', toggleGatewayChoice);
@@ -742,4 +629,3 @@ document.addEventListener('DOMContentLoaded', function() {
 <script src="../immediate_icon_fix.js"></script>
 </body>
 </html>
-

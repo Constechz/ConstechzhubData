@@ -147,8 +147,7 @@ try {
     
     <!-- PWA Meta Tags -->
     <link rel="manifest" href="../manifest.php">
-    <link rel="icon" type="image/png" href="<?php echo htmlspecialchars(dbh_asset('assets/images/icon-192.png')); ?>">
-    <meta name="theme-color" content="#6366f1">
+    <meta name="theme-color" content="#541388">
     
     <!-- iOS PWA Support -->
     <meta name="apple-mobile-web-app-capable" content="yes">
@@ -164,7 +163,7 @@ try {
     <meta name="application-name" content="<?php echo SITE_NAME; ?>">
     
     <!-- Microsoft PWA Support -->
-    <meta name="msapplication-TileColor" content="#6366f1">
+    <meta name="msapplication-TileColor" content="#541388">
     <meta name="msapplication-TileImage" content="../assets/images/icon-192.png">
     <meta name="msapplication-config" content="none">
     
@@ -199,95 +198,7 @@ try {
 </head>
 <body>
     <div class="dashboard-wrapper">
-        <!-- Sidebar -->
-        <nav class="sidebar">
-            <div class="sidebar-brand">
-                <h3><?php echo $agent_store ? htmlspecialchars($agent_store['store_name']) : htmlspecialchars(getSiteName()); ?></h3>
-                <?php if ($agent_store): ?>
-                    <small style="opacity: 0.7; font-size: 0.8rem;">by <?php echo htmlspecialchars($agent_store['agent_name']); ?></small>
-                <?php endif; ?>
-            </div>
-            
-            <ul class="sidebar-nav">
-                <li class="nav-section">
-                    <div class="nav-section-title">Dashboard</div>
-                    <div class="nav-item">
-                        <a href="dashboard.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link active">
-                            <i class="fas fa-home"></i>
-                            Dashboard
-                        </a>
-                    </div>
-                </li>
-                
-            <li class="nav-section">
-                <div class="nav-section-title">Services</div>
-                <div class="nav-item">
-                    <a href="buy-data.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-mobile-alt"></i>
-                        Buy Data
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="bulk-mtn.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-layer-group"></i>
-                        Bulk MTN
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="result-checker.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-award"></i>
-                        Result Checker
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="afa-registration.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-id-card"></i>
-                        AFA Registration
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="order-history.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-history"></i>
-                        Order History
-                    </a>
-                </div>
-                <div class="nav-item">
-                    <a href="reference.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                        <i class="fas fa-search"></i>
-                        Reference
-                    </a>
-                </div>
-            </li>
-                
-                <li class="nav-section">
-                    <div class="nav-section-title">Account</div>
-                    <div class="nav-item">
-                        <a href="wallet.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                            <i class="fas fa-wallet"></i>
-                            Wallet
-                        </a>
-                    </div>
-                    <div class="nav-item">
-                        <a href="profile.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                            <i class="fas fa-user"></i>
-                            Profile
-                        </a>
-                    </div>
-                    <div class="nav-item">
-                        <a href="constchat.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                            <i class="fas fa-comments"></i>
-                            Constchat
-                        </a>
-                    </div>
-                    <div class="nav-item">
-                        <a href="support.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="nav-link">
-                            <i class="fas fa-life-ring"></i>
-                            Support
-                        </a>
-                    </div>
-                </li>
-            </ul>
-        </nav>
+        <?php require_once '../includes/customer_sidebar.php'; ?>
         
         <!-- Main Content -->
         <main class="main-content">
@@ -414,6 +325,10 @@ try {
                                 <a href="wallet.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="btn btn-outline" style="text-decoration: none; text-align: center; padding: 1rem;">
                                     <i class="fas fa-plus" style="display: block; font-size: 1.5rem; margin-bottom: 0.5rem;"></i>
                                     Fund Wallet
+                                </a>
+                                <a href="afa-registration.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="btn btn-outline" style="text-decoration: none; text-align: center; padding: 1rem;">
+                                    <i class="fas fa-user-check" style="display: block; font-size: 1.5rem; margin-bottom: 0.5rem;"></i>
+                                    AFA Registration
                                 </a>
                                 <a href="order-history.php<?php echo $store_slug ? '?store=' . urlencode($store_slug) : ''; ?>" class="btn btn-outline" style="text-decoration: none; text-align: center; padding: 1rem;">
                                     <i class="fas fa-history" style="display: block; font-size: 1.5rem; margin-bottom: 0.5rem;"></i>
@@ -594,4 +509,5 @@ try {
     <script src="<?php echo htmlspecialchars(dbh_asset('assets/js/notifications.js')); ?>""></script>
 </body>
 </html>
+
 

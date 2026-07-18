@@ -33,42 +33,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit();
     }
     
-    if ($action === 'toggle_store_status') {
-        $id = intval($_POST['id']);
-        $checkStmt = $db->prepare("SELECT id FROM agent_stores WHERE agent_id = ? LIMIT 1");
-        $checkStmt->bind_param('i', $id);
-        $checkStmt->execute();
-        $storeResult = $checkStmt->get_result()->fetch_assoc();
-        $checkStmt->close();
-        
-        if ($storeResult) {
-            $stmt = $db->prepare("UPDATE agent_stores SET admin_active = NOT COALESCE(admin_active, 1) WHERE agent_id = ?");
-            $stmt->bind_param('i', $id);
-            if ($stmt->execute()) {
-                setFlashMessage('success', 'Agent store link status updated successfully');
-            } else {
-                setFlashMessage('error', 'Failed to update agent store link status');
-            }
-            $stmt->close();
-        } else {
-            setFlashMessage('error', 'This agent does not have a sub-store configured yet.');
-        }
-        
-        $redirectParams = [];
-        if (!empty($_GET['status'])) {
-            $redirectParams['status'] = $_GET['status'];
-        }
-        if (!empty($_GET['search'])) {
-            $redirectParams['search'] = $_GET['search'];
-        }
-        if (!empty($_GET['page'])) {
-            $redirectParams['page'] = (int)$_GET['page'];
-        }
-        $redirectUrl = 'agents.php' . (!empty($redirectParams) ? ('?' . http_build_query($redirectParams)) : '');
-        header('Location: ' . $redirectUrl);
-        exit();
-    }
-    
     if ($action === 'delete') {
         $id = intval($_POST['id']);
         $stmt = $db->prepare("DELETE FROM users WHERE id = ? AND role = 'agent'");
@@ -145,10 +109,11 @@ $offset = ($page - 1) * $per_page;
 // Fetch agents for current page (basic profile info)
 $query = "
     SELECT u.id, u.username, u.full_name, u.email, u.phone, u.is_active, u.created_at,
-           COALESCE((SELECT SUM(balance) FROM wallets WHERE user_id = u.id), 0) as wallet_balance,
+           COALESCE(w.balance, 0) as wallet_balance,
            aps.public_key, aps.is_active as paystack_active,
-           ast.store_name, ast.store_slug, ast.admin_active, ast.is_active as store_active
+           ast.store_name, ast.store_slug
     FROM users u
+    LEFT JOIN wallets w ON w.user_id = u.id
     LEFT JOIN agent_paystack_settings aps ON aps.agent_id = u.id
     LEFT JOIN agent_stores ast ON ast.agent_id = u.id
     WHERE u.role = 'agent'
@@ -259,7 +224,34 @@ $flash = getFlashMessage();
         <div class="sidebar-brand">
             <h3><?php echo htmlspecialchars(getSiteName()); ?></h3>
         </div>
-                    <?php renderAdminSidebar(); ?>
+        <ul class="sidebar-nav">
+            <li class="nav-section">
+                <div class="nav-section-title">Dashboard</div>
+                <div class="nav-item"><a href="dashboard.php" class="nav-link"><i class="fas fa-home"></i> Dashboard</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Management</div>
+                <div class="nav-item"><a href="packages.php" class="nav-link"><i class="fas fa-box"></i> Data Packages</a></div>
+                <div class="nav-item"><a href="pricing.php" class="nav-link"><i class="fas fa-tags"></i> Pricing</a></div>
+                <div class="nav-item"><a href="afa-registration.php" class="nav-link"><i class="fas fa-user-check"></i> AFA Registration</a></div>
+                <div class="nav-item"><a href="users.php" class="nav-link"><i class="fas fa-users"></i> Users</a></div>
+                <div class="nav-item"><a href="agents.php" class="nav-link active"><i class="fas fa-user-tie"></i> Agents</a></div>
+            
+                <div class="nav-item"><a href="result-checker.php" class="nav-link"><i class="fas fa-award"></i> Result Checker</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Analytics</div>
+                <div class="nav-item"><a href="transactions.php" class="nav-link"><i class="fas fa-history"></i> Transactions</a></div>
+                <div class="nav-item"><a href="reports.php" class="nav-link"><i class="fas fa-chart-bar"></i> Reports</a></div>
+                <div class="nav-item"><a href="epayment.php" class="nav-link"><i class="fas fa-wallet"></i> ePayment</a></div>
+            </li>
+            <li class="nav-section">
+                <div class="nav-section-title">Settings</div>
+                <div class="nav-item"><a href="settings.php" class="nav-link"><i class="fas fa-cog"></i> System Settings</a></div>
+                <div class="nav-item"><a href="email-broadcast.php" class="nav-link"><i class="fas fa-paper-plane"></i> Email Broadcasts</a></div>
+                <div class="nav-item"><a href="system-reset.php" class="nav-link"><i class="fas fa-broom"></i> System Reset</a></div>
+            </li>
+        </ul>
                 <div class="nav-item"><a href="profit-withdrawals.php" class="nav-link"><i class="fas fa-hand-holding-usd"></i> Profit Withdrawals</a></div>
     </nav>
 
@@ -364,19 +356,7 @@ $flash = getFlashMessage();
                                                     <span class="agent-phone"><?php echo htmlspecialchars($agent['phone']); ?></span>
                                                 <?php endif; ?>
                                                 <?php if (!empty($agent['store_name'])): ?>
-                                                    <?php
-                                                        $admin_active = isset($agent['admin_active']) ? (int)$agent['admin_active'] : 1;
-                                                        $store_active = isset($agent['store_active']) ? (int)$agent['store_active'] : 1;
-                                                        $store_status_badge = '';
-                                                        if ($admin_active === 0) {
-                                                            $store_status_badge = ' <span class="badge badge-danger" style="font-size:0.65rem; padding:1px 4px; vertical-align:middle;">Store Blocked</span>';
-                                                        } elseif ($store_active === 0) {
-                                                            $store_status_badge = ' <span class="badge badge-warning" style="font-size:0.65rem; padding:1px 4px; vertical-align:middle;">Store Paused</span>';
-                                                        } else {
-                                                            $store_status_badge = ' <span class="badge badge-success" style="font-size:0.65rem; padding:1px 4px; vertical-align:middle;">Store Active</span>';
-                                                        }
-                                                    ?>
-                                                    <span class="agent-store">Store: <?php echo htmlspecialchars($agent['store_name']) . $store_status_badge; ?></span>
+                                                    <span class="agent-store">Store: <?php echo htmlspecialchars($agent['store_name']); ?></span>
                                                 <?php endif; ?>
                                             </div>
                                         </td>
@@ -521,39 +501,6 @@ $flash = getFlashMessage();
                         </div>
                     </form>
                 </div>
-                
-                <div class="detail-form-card">
-                    <h4>Store Link Status</h4>
-                    <?php if (empty($agent['store_name'])): ?>
-                        <p class="detail-note text-muted">No store configured for this agent</p>
-                    <?php else: ?>
-                        <?php
-                            $admin_active = isset($agent['admin_active']) ? (int)$agent['admin_active'] : 1;
-                            $store_active = isset($agent['store_active']) ? (int)$agent['store_active'] : 1;
-                            
-                            $status_text = 'Active';
-                            $status_class = 'text-success';
-                            if ($admin_active === 0) {
-                                $status_text = 'Blocked by Admin';
-                                $status_class = 'text-danger';
-                            } elseif ($store_active === 0) {
-                                $status_text = 'Paused by Agent';
-                                $status_class = 'text-warning';
-                            }
-                        ?>
-                        <form method="post" class="detail-form">
-                            <input type="hidden" name="action" value="toggle_store_status">
-                            <input type="hidden" name="id" value="<?php echo $agent['id']; ?>">
-                            <p class="detail-note">Currently: <strong class="<?php echo $status_class; ?>"><?php echo $status_text; ?></strong></p>
-                            <div class="form-actions compact">
-                                <button type="submit" class="btn btn-<?php echo $admin_active ? 'warning' : 'success'; ?>">
-                                    <?php echo $admin_active ? 'Disable Store Link' : 'Enable Store Link'; ?>
-                                </button>
-                            </div>
-                        </form>
-                    <?php endif; ?>
-                </div>
-
                 <div class="detail-form-card">
                     <h4>Delete Agent</h4>
                     <form method="post" class="detail-form" onsubmit="return confirm('Are you sure you want to delete this agent?');">
@@ -690,7 +637,7 @@ $flash = getFlashMessage();
     left: 0;
     width: 100%;
     height: 100%;
-    background-color: rgba(0, 0, 0, 0.45);
+    background-color: rgba(46, 41, 78, 0.45);
     z-index: 10000;
     display: none;
     padding: 2rem 1rem;
@@ -702,18 +649,18 @@ $flash = getFlashMessage();
 }
 
 .modal-content {
-    background: var(--card-bg, #fff);
+    background: var(--card-bg, #F1E9DA);
     border-radius: 10px;
     margin: 0 auto;
     padding: 24px;
     max-width: 760px;
-    box-shadow: 0 10px 40px rgba(15, 23, 42, 0.2);
+    box-shadow: 0 10px 40px rgba(46, 41, 78, 0.2);
     position: relative;
 }
 
 [data-theme="dark"] .modal-content {
-    background: #1f2937;
-    color: #e2e8f0;
+    background: #2E294E;
+    color: #F1E9DA;
 }
 
 .modal-content .close {
@@ -722,11 +669,11 @@ $flash = getFlashMessage();
     right: 20px;
     font-size: 1.5rem;
     cursor: pointer;
-    color: var(--text-muted, #64748b);
+    color: var(--text-muted, #541388);
 }
 
 [data-theme="dark"] .modal-content .close {
-    color: #cbd5f5;
+    color: #F1E9DA;
 }
 
 .agent-summary {
@@ -737,24 +684,24 @@ $flash = getFlashMessage();
 
 .agent-name {
     font-weight: 600;
-    color: var(--text-color, #1f2937);
+    color: var(--text-color, #2E294E);
 }
 
 [data-theme="dark"] .agent-name {
-    color: #e2e8f0;
+    color: #F1E9DA;
 }
 
 .agent-email,
 .agent-phone,
 .agent-store {
     font-size: 0.8rem;
-    color: var(--text-muted, #64748b);
+    color: var(--text-muted, #541388);
 }
 
 [data-theme="dark"] .agent-email,
 [data-theme="dark"] .agent-phone,
 [data-theme="dark"] .agent-store {
-    color: #cbd5f5;
+    color: #F1E9DA;
 }
 
 .table-actions {
@@ -783,15 +730,15 @@ $flash = getFlashMessage();
 }
 
 .detail-card {
-    background: var(--card-muted-bg, #f8fafc);
-    border: 1px solid var(--border-color, #e2e8f0);
+    background: var(--card-muted-bg, #F1E9DA);
+    border: 1px solid var(--border-color, #F1E9DA);
     border-radius: 8px;
     padding: 1rem 1.25rem;
 }
 
 [data-theme="dark"] .detail-card {
-    background: #1f2937;
-    border-color: #374151;
+    background: #2E294E;
+    border-color: #2E294E;
 }
 
 .detail-card h3 {
@@ -812,17 +759,17 @@ $flash = getFlashMessage();
 
 .detail-list dt {
     font-weight: 600;
-    color: var(--text-muted, #64748b);
+    color: var(--text-muted, #541388);
 }
 
 .detail-list dd {
     margin: 0;
     text-align: right;
-    color: var(--text-color, #1f2937);
+    color: var(--text-color, #2E294E);
 }
 
 [data-theme="dark"] .detail-list dd {
-    color: #e2e8f0;
+    color: #F1E9DA;
 }
 
 .detail-actions {
@@ -832,15 +779,15 @@ $flash = getFlashMessage();
 }
 
 .detail-form-card {
-    border: 1px solid var(--border-color, #e2e8f0);
+    border: 1px solid var(--border-color, #F1E9DA);
     border-radius: 8px;
     padding: 1rem;
-    background: var(--card-bg, #fff);
+    background: var(--card-bg, #F1E9DA);
 }
 
 [data-theme="dark"] .detail-form-card {
-    border-color: #374151;
-    background: #111827;
+    border-color: #2E294E;
+    background: #2E294E;
 }
 
 .detail-form-card h4 {
@@ -849,12 +796,12 @@ $flash = getFlashMessage();
 
 .detail-note {
     margin: 0 0 0.75rem 0;
-    color: var(--text-muted, #64748b);
+    color: var(--text-muted, #541388);
     font-size: 0.85rem;
 }
 
 [data-theme="dark"] .detail-note {
-    color: #cbd5f5;
+    color: #F1E9DA;
 }
 
 .detail-form .form-actions.compact {
@@ -863,11 +810,11 @@ $flash = getFlashMessage();
     gap: 0.5rem;
     margin-top: 0.75rem;
     padding-top: 0.75rem;
-    border-top: 1px solid var(--border-color, #e2e8f0);
+    border-top: 1px solid var(--border-color, #F1E9DA);
 }
 
 [data-theme="dark"] .detail-form .form-actions.compact {
-    border-top-color: #4a5568;
+    border-top-color: #2E294E;
 }
 
 .table-responsive {
@@ -926,15 +873,15 @@ $flash = getFlashMessage();
 
     .table-responsive tbody tr {
         margin-bottom: 1rem;
-        border: 1px solid var(--border-color, #e2e8f0);
+        border: 1px solid var(--border-color, #F1E9DA);
         border-radius: 8px;
         padding: 0.75rem 1rem;
-        background: var(--card-bg, #fff);
+        background: var(--card-bg, #F1E9DA);
     }
 
     [data-theme="dark"] .table-responsive tbody tr {
-        background: #1f2937;
-        border-color: #374151;
+        background: #2E294E;
+        border-color: #2E294E;
     }
 
     .table-responsive tbody td {
@@ -954,7 +901,7 @@ $flash = getFlashMessage();
     .table-responsive tbody td::before {
         content: attr(data-label);
         font-weight: 600;
-        color: var(--text-muted, #64748b);
+        color: var(--text-muted, #541388);
         font-size: 0.8rem;
     }
 

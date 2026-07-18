@@ -22,7 +22,7 @@ class ThemeManager {
         // Update meta theme-color for mobile browsers
         const metaThemeColor = document.querySelector('meta[name="theme-color"]');
         if (metaThemeColor) {
-            metaThemeColor.setAttribute('content', theme === 'dark' ? '#0B0017' : '#ffffff');
+            metaThemeColor.setAttribute('content', theme === 'dark' ? '#2E294E' : '#F1E9DA');
         }
         
         // Dispatch theme change event
@@ -128,25 +128,32 @@ function insertAgentSmsNavLink() {
     settingsSection.appendChild(navItem);
 }
 
-function removeSystemResetSidebarLink() {
-    try {
-        const selectors = [
-            '.sidebar a[href*="system-reset.php"]',
-            '.sidebar a[href*="system-reset.php/"]',
-            '.sidebar a[href*="/admin/system-reset.php"]'
-        ];
+function positionProfitWithdrawalsNavItem() {
+    const sidebarNav = document.querySelector('.sidebar .sidebar-nav');
+    if (!sidebarNav) return;
 
-        const links = document.querySelectorAll(selectors.join(','));
-        links.forEach((link) => {
-            const navItem = link.closest('.nav-item') || link.closest('li');
-            if (navItem) {
-                navItem.remove();
-            } else {
-                link.remove();
-            }
-        });
-    } catch (err) {
-        console.log('System reset link cleanup skipped:', err);
+    const systemResetLink = sidebarNav.querySelector('a[href*="system-reset.php"]');
+    const profitWithdrawalsLink = sidebarNav.querySelector('a[href*="profit-withdrawals.php"]');
+    if (!systemResetLink || !profitWithdrawalsLink || systemResetLink === profitWithdrawalsLink) {
+        return;
+    }
+
+    const systemResetItem = systemResetLink.closest('.nav-item, li.nav-item');
+    const profitWithdrawalsItem = profitWithdrawalsLink.closest('.nav-item, li.nav-item');
+    if (!systemResetItem || !profitWithdrawalsItem || systemResetItem === profitWithdrawalsItem) {
+        return;
+    }
+
+    const originalSection = profitWithdrawalsItem.closest('.nav-section');
+    if (systemResetItem.nextElementSibling !== profitWithdrawalsItem) {
+        systemResetItem.insertAdjacentElement('afterend', profitWithdrawalsItem);
+    }
+
+    if (originalSection) {
+        const hasAnyItems = originalSection.querySelector('.nav-item, li.nav-item');
+        if (!hasAnyItems) {
+            originalSection.remove();
+        }
     }
 }
 
@@ -163,11 +170,7 @@ function initializeTheme() {
 document.addEventListener('DOMContentLoaded', () => {
     ensureThemeManager();
     insertAgentSmsNavLink();
-    removeSystemResetSidebarLink();
-
-    // Catch late-rendered sidebars/templates.
-    setTimeout(removeSystemResetSidebarLink, 300);
-    setTimeout(removeSystemResetSidebarLink, 1200);
+    positionProfitWithdrawalsNavItem();
 });
 
 // Global theme functions for backward compatibility

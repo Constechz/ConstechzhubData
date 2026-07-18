@@ -113,6 +113,24 @@ function updateSmtpSetting($setting_name, $setting_value, $is_encrypted = false,
 }
 
 /**
+ * Normalize and encode HTML email body to prevent line splitting issues.
+ */
+function encodeEmailHtmlBody($body_html) {
+    $body = (string) $body_html;
+    $body = str_replace(["\r\n", "\r"], "\n", $body);
+    $body = str_replace("\n", "\r\n", $body);
+
+    if (function_exists('quoted_printable_encode')) {
+        $body = quoted_printable_encode($body);
+    }
+
+    // Dot-stuff lines starting with a dot to avoid premature SMTP termination.
+    $body = preg_replace('/^\./m', '..', $body);
+
+    return $body;
+}
+
+/**
  * Simple encryption for sensitive settings
  */
 function encryptSetting($value) {
@@ -347,10 +365,12 @@ function sendEmailFallback($to_email, $subject, $body_html, $body_text, $config,
         ini_set('smtp_port', $config['port']);
         ini_set('sendmail_from', $config['from_email']);
         
+        $encoded_body = encodeEmailHtmlBody($body_html);
         // Create headers
         $headers = [
             'MIME-Version: 1.0',
             'Content-Type: text/html; charset=UTF-8',
+            'Content-Transfer-Encoding: quoted-printable',
             'From: ' . $config['from_name'] . ' <' . $config['from_email'] . '>',
             'Reply-To: ' . $config['reply_to'],
             'Message-ID: ' . ($config['message_id'] ?? generateEmailMessageId($config['from_email'] ?? null)),
@@ -358,7 +378,7 @@ function sendEmailFallback($to_email, $subject, $body_html, $body_text, $config,
         ];
         
         // Send email using PHP's mail function
-        $success = @mail($to_email, $subject, $body_html, implode("\r\n", $headers));
+        $success = @mail($to_email, $subject, $encoded_body, implode("\r\n", $headers));
         
         if (!$success) {
             $last_error = error_get_last();
@@ -593,6 +613,7 @@ function sendSmtpEmail($to_email, $subject, $body_html, $body_text, $config) {
             throw new Exception('DATA command failed: ' . trim($response));
         }
         
+        $encoded_body = encodeEmailHtmlBody($body_html);
         // Compose message
         $message = "From: " . $config['from_name'] . " <" . $config['from_email'] . ">\r\n";
         $message .= "To: $to_email\r\n";
@@ -600,9 +621,13 @@ function sendSmtpEmail($to_email, $subject, $body_html, $body_text, $config) {
         $message .= "Subject: $subject\r\n";
         $message .= "MIME-Version: 1.0\r\n";
         $message .= "Content-Type: text/html; charset=UTF-8\r\n";
+        $message .= "Content-Transfer-Encoding: quoted-printable\r\n";
+        if (!empty($config['message_id'])) {
+            $message .= "Message-ID: " . $config['message_id'] . "\r\n";
+        }
         $message .= "X-Mailer: " . getSiteName() . "\r\n";
         $message .= "\r\n";
-        $message .= $body_html;
+        $message .= $encoded_body;
         $message .= "\r\n.\r\n";
         
         fputs($socket, $message);
@@ -810,15 +835,15 @@ function sendPasswordResetEmail($user_email, $user_name, $reset_token) {
         <meta charset="UTF-8">
         <title>Password Reset</title>
     </head>
-    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #2E294E;">
         <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-            <h2 style="color: #007bff;">Password Reset Request</h2>
+            <h2 style="color: #541388;">Password Reset Request</h2>
             <p>Hello ' . htmlspecialchars($user_name) . ',</p>
             <p>You have requested to reset your password for your ' . (function_exists('getSiteName') ? getSiteName() : 'Constechzhub') . ' account.</p>
             <p>Please click the link below to reset your password:</p>
             <p style="margin: 20px 0;">
                 <a href="' . $reset_link . '" 
-                   style="background-color: #007bff; color: white; padding: 10px 20px; 
+                   style="background-color: #541388; color: #F1E9DA; padding: 10px 20px; 
                           text-decoration: none; border-radius: 5px; display: inline-block;">
                     Reset My Password
                 </a>
@@ -864,19 +889,19 @@ function sendAdminPasswordResetEmail($user_email, $user_name, $temporary_passwor
         <meta charset="UTF-8">
         <title>Temporary Password</title>
     </head>
-    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #2E294E;">
         <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
-            <h2 style="color: #007bff;">Your Temporary Password</h2>
+            <h2 style="color: #541388;">Your Temporary Password</h2>
             <p>Hello ' . htmlspecialchars($user_name) . ',</p>
             <p>An administrator has reset the password for your ' . $site_name . ' account.</p>
             <p>Your temporary password is:</p>
-            <p style="margin: 16px 0; padding: 12px; background: #f3f4f6; border-radius: 6px; font-size: 18px; letter-spacing: 1px;">
+            <p style="margin: 16px 0; padding: 12px; background: #F1E9DA; border-radius: 6px; font-size: 18px; letter-spacing: 1px;">
                 <strong>' . htmlspecialchars($temporary_password) . '</strong>
             </p>
             <p>Please sign in using this password and change it immediately from your profile.</p>
             <p style="margin: 20px 0;">
                 <a href="' . $login_link . '"
-                   style="background-color: #007bff; color: white; padding: 10px 20px;
+                   style="background-color: #541388; color: #F1E9DA; padding: 10px 20px;
                           text-decoration: none; border-radius: 5px; display: inline-block;">
                     Sign In
                 </a>
@@ -902,40 +927,6 @@ function sendAdminPasswordResetEmail($user_email, $user_name, $temporary_passwor
  * Send order confirmation email
  */
 function sendOrderConfirmationEmail($customer_email, $customer_name, $order_data) {
-    $wallet_balance_html = '';
-    $wallet_balance_text = '';
-    
-    $user_id = function_exists('findUserIdByEmailOrPhone') ? findUserIdByEmailOrPhone($customer_email) : 0;
-    if ($user_id > 0 && function_exists('getWalletBalance')) {
-        $balance = getWalletBalance($user_id);
-        $currency_symbol = defined('CURRENCY') ? CURRENCY : 'GH₵';
-        $wallet_balance_html = '<p><strong>Remaining Wallet Balance:</strong> ' . $currency_symbol . ' ' . number_format($balance, 2) . '</p>';
-        $wallet_balance_text = "\n- Remaining Wallet Balance: " . $currency_symbol . ' ' . number_format($balance, 2);
-    }
-
-    $datetime_raw = $order_data['created_at'] ?? $order_data['date'] ?? date('Y-m-d H:i:s');
-    $datetime = strtotime($datetime_raw);
-    if (!$datetime) {
-        $datetime = time();
-    }
-    $formatted_date = date('d-M-Y', $datetime);
-    $formatted_time = date('h:i A', $datetime);
-
-    $status_clean = strtolower(trim($order_data['status'] ?? ''));
-    if (in_array($status_clean, ['delivered', 'completed', 'success'], true)) {
-        $email_header = 'Order Delivered!';
-        $email_message = 'Your data bundle purchase has been successfully delivered.';
-        $email_footer_message = 'Your data bundle has been delivered.';
-    } elseif (in_array($status_clean, ['failed', 'refunded'], true)) {
-        $email_header = 'Order Failed';
-        $email_message = 'Your data bundle purchase could not be completed and has been refunded.';
-        $email_footer_message = 'Please contact support if you have any questions.';
-    } else {
-        $email_header = 'Order Placed!';
-        $email_message = 'Your data bundle purchase has been successfully placed.';
-        $email_footer_message = 'Your data bundle will be delivered shortly.';
-    }
-
     $variables = [
         'customer_name' => $customer_name,
         'order_id' => $order_data['order_id'],
@@ -943,14 +934,7 @@ function sendOrderConfirmationEmail($customer_email, $customer_name, $order_data
         'package_name' => $order_data['package_name'],
         'phone_number' => $order_data['phone_number'],
         'amount' => number_format($order_data['amount'], 2),
-        'status' => $order_data['status'],
-        'email_header' => $email_header,
-        'email_message' => $email_message,
-        'email_footer_message' => $email_footer_message,
-        'wallet_balance_html' => $wallet_balance_html,
-        'wallet_balance_text' => $wallet_balance_text,
-        'order_date' => $formatted_date,
-        'order_time' => $formatted_time
+        'status' => $order_data['status']
     ];
     
     return sendTemplatedEmail($customer_email, 'order_confirmation', $variables);

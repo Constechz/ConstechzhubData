@@ -308,16 +308,12 @@ try {
                 $db->getConnection()->begin_transaction();
                 
                 try {
-                    $buyer_previous_balance = getWalletBalance($agent['agent_id']);
-                    $buyer_current_balance = $buyer_previous_balance;
-
                     // Deduct from agent wallet
                     $deduct_result = updateWalletBalance($agent['agent_id'], $package['agent_price'], 'debit', $txn_ref, 'API Bundle Purchase: ' . $package['name']);
                     
                     if (!$deduct_result) {
                         throw new Exception('Failed to deduct from wallet');
                     }
-                    $buyer_current_balance = getWalletBalance($agent['agent_id']);
                     
                     // Create bundle order
                     if ($bundle_orders_auto_increment) {
@@ -342,65 +338,22 @@ try {
                     // Process bundle purchase via API provider
                     $formatted_phone = formatPhone($phone_number);
                     $volume_gb = extractVolumeGB($package['data_size']);
-                    $endpoint_type = detectEndpointTypeForPackage(
-                        $package['name'] ?? '',
-                        $package['data_size'] ?? '',
-                        $package['package_type'] ?? ''
-                    );
+                    $endpoint_type = (strpos(strtolower($package['name']), 'bigtime') !== false ||
+                                     strpos(strtolower($package['name']), 'big time') !== false) ? 'bigtime' : 'regular';
                     $api_result = processBundlePurchase($order_id, $package['network_id'], $formatted_phone, $volume_gb, $endpoint_type);
                     
                     if ($api_result['success']) {
+                        // Update order status
+                        $update_stmt = $db->prepare("UPDATE bundle_orders SET status = 'success', api_response = ? WHERE id = ?");
                         $api_response_json = json_encode($api_result);
-                        $provider_ref = (string) ($api_result['reference'] ?? '');
-                        $provider_data = $api_result['provider'] ?? [];
-                        $provider_name = strtolower(trim((string) ($provider_data['provider_name'] ?? '')));
-                        $provider_slug = strtolower(trim((string) ($provider_data['provider_slug'] ?? '')));
-                        $normalized_response = strtolower((string) $api_response_json);
-                        $is_hubnet_order = $provider_name === 'hubnet console'
-                            || strpos($provider_slug, 'hubnet') !== false
-                            || strpos($normalized_response, '"provider_slug":"hubnet"') !== false
-                            || strpos($normalized_response, '"provider_name":"hubnet console"') !== false;
-                        $notification_status = 'success';
+                        $update_stmt->bind_param('si', $api_response_json, $order_id);
+                        $update_stmt->execute();
 
-                        if ($is_hubnet_order) {
-                            $hubnet_provider_status = strtolower(trim((string) (($api_result['response']['delivery_state'] ?? $api_result['response']['status'] ?? 'processing'))));
-                            if ($hubnet_provider_status === '') {
-                                $hubnet_provider_status = 'processing';
-                            }
-
-                            $update_stmt = $db->prepare("UPDATE bundle_orders SET status = 'processing', api_response = ?, provider_status = ?, provider_reference = ?, updated_at = NOW() WHERE id = ?");
-                            $update_stmt->bind_param('sssi', $api_response_json, $hubnet_provider_status, $provider_ref, $order_id);
-                            $update_stmt->execute();
-                            $notification_status = 'processing';
-                        } else {
-                            $update_stmt = $db->prepare("UPDATE bundle_orders SET status = 'success', api_response = ?, provider_reference = ?, updated_at = NOW() WHERE id = ?");
-                            $update_stmt->bind_param('ssi', $api_response_json, $provider_ref, $order_id);
-                            $update_stmt->execute();
-
-                            if (function_exists('applyMtnStatusPolicy')) {
-                                applyMtnStatusPolicy($order_id, 'success');
-                            }
+                        if (function_exists('applyMtnStatusPolicy')) {
+                            applyMtnStatusPolicy($order_id, 'success');
                         }
                         
                         $db->getConnection()->commit();
-
-                        sendUserOrderNotification([
-                            'order_type' => 'data',
-                            'order_reference' => $txn_ref,
-                            'order_id' => $order_id,
-                            'user_id' => (int) $agent['agent_id'],
-                            'customer_name' => $agent['full_name'] ?? '',
-                            'customer_role' => 'agent',
-                            'beneficiary_number' => $formatted_phone,
-                            'network_name' => $package['network_name'] ?? '',
-                            'package_name' => $package['name'] ?? ($package['data_size'] ?? ''),
-                            'amount' => (float) $package['agent_price'],
-                            'payment_method' => 'wallet',
-                            'status' => $notification_status,
-                            'previous_balance' => $buyer_previous_balance,
-                            'current_balance' => $buyer_current_balance,
-                            'source' => 'reseller_api'
-                        ]);
 
                         sendAdminDataOrderNotification([
                             'order_reference' => $txn_ref,
@@ -413,8 +366,6 @@ try {
                             'amount' => (float) $package['agent_price'],
                             'payment_method' => 'wallet',
                             'status' => 'success',
-                            'previous_balance' => $buyer_previous_balance,
-                            'current_balance' => $buyer_current_balance,
                             'agent_id' => (int) $agent['agent_id'],
                             'source' => 'reseller_api'
                         ]);
