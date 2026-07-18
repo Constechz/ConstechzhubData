@@ -845,14 +845,14 @@ if ($purchases_rs) {
             }
 
             .top-header {
-                flex-wrap: wrap;
+                flex-wrap: nowrap;
                 gap: 0.75rem;
             }
 
             .header-actions {
-                flex-wrap: wrap;
+                flex-wrap: nowrap;
                 justify-content: flex-end;
-                width: 100%;
+                width: auto;
             }
         }
 
