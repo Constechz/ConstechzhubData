@@ -776,17 +776,17 @@ if ($purchases_rs) {
         }
 
         [data-bs-theme="dark"] {
-            --page-bg: #2E294E;
-            --content-bg: #2E294E;
-            --card-bg: #2E294E;
-            --card-header-bg: #2E294E;
+            --page-bg: #201b3c;
+            --content-bg: #201b3c;
+            --card-bg: #2d2654;
+            --card-header-bg: #352c63;
             --text-main: #F1E9DA;
-            --text-muted: #F1E9DA;
-            --border-color: #2E294E;
-            --table-hover-bg: #2E294E;
-            --tab-active-bg: #2E294E;
-            --sidebar-bg: #2E294E;
-            --sidebar-hover: #2E294E;
+            --text-muted: rgba(241, 233, 218, 0.7);
+            --border-color: rgba(241, 233, 218, 0.08);
+            --table-hover-bg: rgba(241, 233, 218, 0.04);
+            --tab-active-bg: #2d2654;
+            --sidebar-bg: #151128;
+            --sidebar-hover: #2d2654;
             --brand-ink: #F1E9DA;
         }
 
@@ -946,6 +946,22 @@ if ($purchases_rs) {
             color: var(--brand-deep);
         }
 
+        /* Dark Mode High-Contrast Overrides */
+        [data-bs-theme="dark"] .stat-title-bece i,
+        [data-bs-theme="dark"] .stat-title-bece {
+            color: var(--brand-secondary) !important;
+        }
+
+        [data-bs-theme="dark"] .stat-title-wassce i,
+        [data-bs-theme="dark"] .stat-title-wassce {
+            color: #38bdf8 !important;
+        }
+
+        [data-bs-theme="dark"] .nav-tabs {
+            background: #1e1a3a !important; /* Visual container depth for tabs */
+            border: 1px solid rgba(241, 233, 218, 0.06);
+        }
+
         .card-header.bg-white {
             background: var(--card-header-bg) !important;
         }
@@ -970,6 +986,45 @@ if ($purchases_rs) {
 
         .sidebar::-webkit-scrollbar-thumb:hover {
             background: rgba(241, 233, 218, 0.3);
+        }
+
+        /* Premium Mobile Layout Tweaks */
+        @media (max-width: 767.98px) {
+            .nav-tabs {
+                display: flex !important;
+                flex-wrap: nowrap !important;
+                overflow-x: auto !important;
+                -webkit-overflow-scrolling: touch;
+                padding: 0.35rem !important;
+                gap: 0.35rem !important;
+                border-radius: 0.75rem !important;
+            }
+            .nav-tabs::-webkit-scrollbar {
+                display: none;
+            }
+            .nav-tabs {
+                -ms-overflow-style: none;
+                scrollbar-width: none;
+            }
+            .nav-tabs .nav-item {
+                flex: 0 0 auto !important;
+            }
+            .nav-tabs .nav-link {
+                padding: 0.5rem 0.85rem !important;
+                font-size: 0.85rem !important;
+                white-space: nowrap !important;
+            }
+            
+            /* Stats columns mobile stacking/wrapping logic to avoid squishing */
+            .stat-card .row.text-center > div {
+                padding: 0.25rem !important;
+            }
+            .stat-card h3 {
+                font-size: 1.35rem !important;
+            }
+            .stat-card small {
+                font-size: 0.725rem !important;
+            }
         }
     </style>
 </head>
